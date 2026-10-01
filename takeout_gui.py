@@ -26,7 +26,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.01-r"
+VERSION = "2026.10.01-s"
 STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}, "recent": [], "clean": {"state": "idle"}, "update": {"state": "idle", "files": []}, "phase": None, "kind": "fix", "cv": None, "cancel": False, "version": VERSION, "boot": time.time()}
 LOCK = threading.Lock()
 
@@ -210,8 +210,10 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
         if not dry_run and not shutil.which("exiftool"):
             raise ValueError("exiftool not found. In Terminal run: brew install exiftool")
         media, sidecars, mseen, sseen = [], [], set(), set()
+        noext = 0
         for p in resolved:
             m, sc = fx.scan(p)
+            noext += getattr(fx.scan, "noext", 0)
             media += [x for x in m if x.resolve() not in mseen and not mseen.add(x.resolve())]
             sidecars += [x for x in sc if x.resolve() not in sseen and not sseen.add(x.resolve())]
         idx = fx.build_index(sidecars)
@@ -297,6 +299,9 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
         pruned = fx.prune_empty_dirs(resolved) if (move and out_root and not dry_run) else 0
         sm = summarise(rows, sidecars, resolved, dry_run)
         sm["pruned"] = pruned
+        if noext:
+            sm["tips"].insert(0, "%d files with no file extension were skipped (Fix only works on files with a known type, such as .jpg or .heic). "
+                              "Open the Clean up tab, tick 'Fix files with no extension', then run Fix again." % noext)
         if pruned:
             sm["tips"].append("%d folders left empty by the move were removed. Google's .json files are left where they were; remove them with the Clean up tab, then use Empty folders to tidy the rest." % pruned)
         sm["dupe_bytes"] = getattr(args, "dupe_bytes", 0)
@@ -798,11 +803,11 @@ def run_cleanup(roots, dry_run, opts):
                      summary=None, scan=None, extra={}, recent=[], phase=None, kind="cleanup")
     try:
         folders = check_clean_folders(roots)
-        tasks = [t for t in ("json", "junk", "names", "empty") if opts.get(t)]
+        tasks = [t for t in ("ext", "json", "junk", "names", "empty") if opts.get(t)]
         if not tasks:
             raise ValueError("Tick at least one thing to clean")
         n = len(tasks)
-        titles = {"json": "Google .json files", "junk": "Junk and cache files", "names": "Tidy names", "empty": "Empty folders"}
+        titles = {"ext": "Files with no extension", "json": "Google .json files", "junk": "Junk and cache files", "names": "Tidy names", "empty": "Empty folders"}
         sections, rows, extra, recent, deleted = [], [], defaultdict(int), [], set()
 
         def disp(p):
@@ -853,7 +858,33 @@ def run_cleanup(roots, dry_run, opts):
         w = "would be " if dry_run else ""
         for i, task in enumerate(tasks):
             phase(i, 0, titles[task] + "...")
-            if task == "json":
+            if task == "ext":
+                def cbx(stage, done, total):
+                    phase(i, done / max(1, total) * (0.5 if stage == "detecting types" else 1.0), f"{stage} ({done:,}/{total:,})")
+                res = fx.fix_extensions(folders, dry_run, cbx, bool(opts["ext"].get("json", True)))
+                for r in res:
+                    rows.append({"task": "ext", "kind": "file", "path": r["path"], "new": r["new"], "action": r["action"], "detail": r["detail"]})
+                    if r["action"] in ("renamed", "would-rename"):
+                        extra["renamed"] += 1
+                    if r["action"] == "failed":
+                        extra["errors"] += 1
+                    feed(os.path.basename(r["path"]), r["action"])
+                ok = [r for r in res if r["action"] in ("renamed", "would-rename")]
+                bad = [r for r in res if r["action"] in ("unrecognised", "empty")]
+                dmg = [r for r in ok if r["detail"].startswith("may be damaged")]
+                bytype = defaultdict(int)
+                for r in ok:
+                    bytype[r["ext"]] += 1
+                sections.append({"task": task, "title": titles[task],
+                                 "tiles": [[len(res), "files with no extension found"], [len(ok), f"files {w}given an extension", "ok"],
+                                           [sum(r["json"] for r in ok), f"Google .json files {w}renamed to match"],
+                                           [len(dmg), "recognised but possibly damaged", "bad" if dmg else ""],
+                                           [len(bad), "not recognised (empty or damaged)", "bad" if bad else ""]],
+                                 "table": {"head": ["Detected type", "Files"], "rows": [[f".{k}", str(v)] for k, v in sorted(bytype.items(), key=lambda kv: -kv[1])]},
+                                 "note": ("Not recognised (first 20): " + "; ".join(f"{os.path.basename(r['path'])} ({fmt_bytes(r['size'])}, {r['action']})" for r in bad[:20]) +
+                                          ". These can't be repaired automatically: open one to check, or restore it from the original.") if bad else
+                                         ("Run this before the Fix metadata tab: Fix only looks at files with a known extension.")})
+            elif task == "json":
                 cats, files = find_json(folders, bool(opts.get("json_other")))
                 c, sz, fl = delete_items(i, [(p, s_, "json") for p, s_ in files], "json")
                 labels = {"photo": "Google info files for photos", "album": "Album / memory data files", "other": "Other .json files"}
@@ -1270,7 +1301,7 @@ class Handler(BaseHTTPRequestHandler):
             if busy:
                 return self._send(409, json.dumps({"error": "A job is already running"}))
             o = body.get("opts", {})
-            opts = {"json": bool(o.get("json")), "json_other": bool(o.get("json_other")), "junk": list(o.get("junk") or []),
+            opts = {"ext": o.get("ext") or None, "json": bool(o.get("json")), "json_other": bool(o.get("json_other")), "junk": list(o.get("junk") or []),
                     "names": o.get("names") or None, "empty": o.get("empty") or None}
             opts["junk"] = opts["junk"] or None
             threading.Thread(target=run_cleanup, daemon=True, args=(body.get("roots", []), bool(body.get("dry_run")), opts)).start()
@@ -1498,23 +1529,26 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 <div class="card"><small style="margin-top:0">Tick what you want tidied. The steps run in the order shown, so removing files first lets the last step catch the folders they leave empty. <b>Preview first</b>: it lists what would happen and changes nothing.</small>
 <div class="usef" style="margin-top:10px"><b>Folders to clean:</b> <span class="fnote"></span></div>
 
-<div class="opt"><input type="checkbox" id="cj"><div><b>1. Remove Google .json files</b><small>The small info files Google adds to each photo. They hold the only copy of the original date and location, so do this <b>after</b> you have fixed your photos. Off by default.</small>
+<div class="opt"><input type="checkbox" id="cx" checked><div><b>1. Fix files with no extension</b><small>Some photos and videos come out of Google Takeout with a name like <i>IMG_2438</i> and no <i>.jpg</i> or <i>.heic</i>, so Finder calls them "Document" and the Fix tab skips them. This reads the real type from inside each file and adds the right extension. Files that cannot be recognised (empty or damaged) are listed but not changed. Do this <b>before</b> Fix metadata.</small>
+<label class="sub"><input type="checkbox" id="cxj" checked> Also rename each file's Google .json to match, so Fix can still find it</label></div></div>
+
+<div class="opt"><input type="checkbox" id="cj"><div><b>2. Remove Google .json files</b><small>The small info files Google adds to each photo. They hold the only copy of the original date and location, so do this <b>after</b> you have fixed your photos. Off by default.</small>
 <label class="sub"><input type="checkbox" id="cother"> Also remove other .json files (every .json in the folders)</label></div></div>
 
-<div class="opt"><input type="checkbox" id="cjunk" checked><div><b>2. Remove junk and cache files</b><small>Files nothing needs. Choose which kinds:</small>
+<div class="opt"><input type="checkbox" id="cjunk" checked><div><b>3. Remove junk and cache files</b><small>Files nothing needs. Choose which kinds:</small>
 <label class="sub"><input type="checkbox" id="cjs" checked> System leftovers (.DS_Store, Thumbs.db, desktop.ini, ._ files)</label>
 <label class="sub"><input type="checkbox" id="cji" checked> iPod/iTunes thumbnail caches (.ithmb, such as T103.ithmb)</label>
 <label class="sub"><input type="checkbox" id="cjp" checked> Picasa.ini files</label>
 <label class="sub"><input type="checkbox" id="cjt"> Camera video thumbnails (.thm)</label></div></div>
 
-<div class="opt"><input type="checkbox" id="cn" checked><div><b>3. Tidy names</b><small>Fixes duplicate-style names such as <i>From Cris Drive - 2001(1)</i> to <i>From Cris Drive - 2001</i>. If a folder with the clean name already exists, the two are <b>merged</b>: identical files are kept once, and different files with the same name are both kept (the second becomes <i>name_1</i>). Real names such as <i>Summer (2019)</i> are never changed, and the folders you chose are not renamed.</small>
+<div class="opt"><input type="checkbox" id="cn" checked><div><b>4. Tidy names</b><small>Fixes duplicate-style names such as <i>From Cris Drive - 2001(1)</i> to <i>From Cris Drive - 2001</i>. If a folder with the clean name already exists, the two are <b>merged</b>: identical files are kept once, and different files with the same name are both kept (the second becomes <i>name_1</i>). Real names such as <i>Summer (2019)</i> are never changed, and the folders you chose are not renamed.</small>
 <label class="sub"><input type="checkbox" id="cnp" checked> Remove " (1)", " (2)" ... from names</label>
 <label class="sub"><input type="checkbox" id="cnc" checked> Remove " copy", " copy 2" from names</label>
 <label class="sub"><input type="checkbox" id="cns" checked> Trim and collapse extra spaces</label>
 <label class="sub"><input type="checkbox" id="cnf"> Also tidy file names (only when the clean name is free; the file's .json is renamed too. Best done after fixing your photos)</label>
 <label class="sub">Identical copies found while merging: <select id="cnd" class="sel"><option value="delete" selected>delete the extra copy</option><option value="aside">move it to a _duplicates folder</option></select></label></div></div>
 
-<div class="opt"><input type="checkbox" id="ce" checked><div><b>4. Remove empty folders</b><small>Removes every folder with no files in it at any depth, only after the steps above. Only folders are removed. Shortcuts, app/library bundles (such as .photoslibrary) and unreadable folders are never entered.</small>
+<div class="opt"><input type="checkbox" id="ce" checked><div><b>5. Remove empty folders</b><small>Removes every folder with no files in it at any depth, only after the steps above. Only folders are removed. Shortcuts, app/library bundles (such as .photoslibrary) and unreadable folders are never entered.</small>
 <label class="sub"><input type="checkbox" id="cejunk" checked> A folder holding only system leftovers counts as empty</label>
 <label class="sub"><input type="checkbox" id="cetop"> Also remove the folders you chose, if they end up empty</label></div></div>
 
@@ -1797,7 +1831,7 @@ function showConvert(s){
 function liveTiles(s,c,done,nj){
   if(!s.total)return '';const x=s.extra||{};const err=(x.errors?tile(x.errors,'files with errors','bad'):'');
   if(jobKind==='merge')return tile(s.total,'files found')+tile(x.placed||0,'brought in','ok')+tile(x.identical||0,'identical (kept once)')+tile(x.clashes||0,'name clashes')+(x.errors?tile(x.errors,'problems','bad'):'');
-  if(jobKind==='cleanup')return tile(x.json||0,'.json files')+tile(x.junk||0,'junk files')+tile(x.renamed||0,'folders renamed')+tile(x.merged||0,'folders merged')+tile(x.empty||0,'empty folders')+(x.errors?tile(x.errors,'errors','bad'):'');
+  if(jobKind==='cleanup')return tile(x.json||0,'.json files')+tile(x.junk||0,'junk files')+tile(x.renamed||0,'renamed')+tile(x.merged||0,'folders merged')+tile(x.empty||0,'empty folders')+(x.errors?tile(x.errors,'errors','bad'):'');
   if(jobKind==='convert')return tile(s.total,'videos found')+tile(done,'checked so far')+tile(x.converted||0,'converted','ok')+(x.bytes_before?tile(fmtBytes(Math.max(0,x.bytes_before-x.bytes_after))+' ('+Math.round(100*(1-x.bytes_after/x.bytes_before))+'%)','space saved so far','ok'):'')+tile(x.skipped_live||0,'Live Photo videos skipped')+(x.errors?tile(x.errors,'could not convert','bad'):'');
   if(jobKind==='sort')return tile(s.total,'files found')+tile(x.duplicates||0,'duplicates skipped')+tile(x.written||0,'files placed','ok')+tile(x.merged_from||0,'source folders')+tile(x.folders||0,'folders after merging')+(x.json_along?tile(x.json_along,'.json brought along'):'')+err;
   return tile(s.total,'media files')+tile(done-nj,'matched so far','ok')+tile(nj,'no JSON so far',nj?'bad':'')+tile(x.dates_changed||0,'dates changed')+tile(x.gps_changed||0,'locations changed')+tile(x.desc_changed||0,'captions changed')+tile(x.replaced_files||0,'files with info replaced')+tile(x.live_paired||0,'Live Photos paired')+tile(x.duplicates||0,'duplicates skipped')+tile(x.written||0,'files placed')+tile(x.folders||0,'output folders')+err+(s.scan?tile(s.scan.json,'JSON files found'):'')}
@@ -1806,13 +1840,13 @@ function liveTiles(s,c,done,nj){
 $('cgo').onclick=async()=>{
   if(!croots().length){alert('Add your folders in the bar at the top first');return}
   const kinds=[['system','cjs'],['ithmb','cji'],['picasa','cjp'],['thm','cjt']].filter(([k,id])=>$(id).checked).map(([k])=>k);
-  const o={json:$('cj').checked,json_other:$('cother').checked,junk:$('cjunk').checked?kinds:[],
+  const o={ext:$('cx').checked?{json:$('cxj').checked}:null,json:$('cj').checked,json_other:$('cother').checked,junk:$('cjunk').checked?kinds:[],
     names:$('cn').checked?{paren:$('cnp').checked,copy:$('cnc').checked,spaces:$('cns').checked,files:$('cnf').checked,dupes:$('cnd').value}:null,
     empty:$('ce').checked?{junk:$('cejunk').checked,top:$('cetop').checked}:null};
-  if(!o.json&&!o.junk.length&&!o.names&&!o.empty){alert('Tick at least one thing to clean');return}
+  if(!o.ext&&!o.json&&!o.junk.length&&!o.names&&!o.empty){alert('Tick at least one thing to clean');return}
   if(!$('cdry').checked){
     if(o.json||o.junk.length){const t=prompt('This permanently deletes files in:\n'+croots().join('\n')+'\nIt cannot be undone.\nType DELETE to confirm.');if(t!=='DELETE')return}
-    else if(!confirm('This will rename, merge and/or remove folders in:\n'+croots().join('\n')+'\nContinue?'))return}
+    else if(!confirm('This will rename, merge and/or remove files and folders in:\n'+croots().join('\n')+'\nContinue?'))return}
   $('sum').style.display='none';
   const r=await post('/api/cleanup_start',{roots:croots(),dry_run:$('cdry').checked,opts:o});
   if(r.error)alert(r.error);else{jobKind='cleanup';placeResults('cleanup');$('prog').style.display='block';poll()}};

@@ -105,10 +105,13 @@ def media_candidates(name):
 
 def scan(root):
     media, sidecars = [], []
+    scan.noext = 0
     for dirpath, _, files in os.walk(root):
         for f in files:
             p = Path(dirpath) / f
             ext = p.suffix.lower()
+            if "." not in f and not f.startswith("._"):
+                scan.noext += 1
             if ext == ".json":
                 sidecars.append(p)
             elif ext in MEDIA_EXT:
@@ -1140,6 +1143,103 @@ def find_empty_dirs(root, ignore_junk=True, extra_ignored=None):
             junk += [os.path.join(dirpath, f) for f in files]
     ordered = sorted(empty, key=lambda p: -len(Path(p).parts))
     return ordered, junk, len(order), len(content) + len([b for b in blocked if b])
+
+
+# ---------------------------------------------------------------- files with no (or a missing) extension
+EXT_MAP = {"m4v": "mp4", "jpe": "jpg", "jpeg": "jpg"}
+
+
+def find_extensionless(folders):
+    out = []
+    for f in folders:
+        for dp, dns, fns in os.walk(f, followlinks=False):
+            dns[:] = [d for d in dns if not (os.path.islink(os.path.join(dp, d)) or is_bundle(d))]
+            for n in fns:
+                if "." not in n and not n.startswith("._") and n.lower() not in JUNK_NAMES:
+                    out.append(Path(dp) / n)
+    return out
+
+
+def detect_types(paths, progress=None, chunk=400):
+    """Real file type from the file's contents. Returns {path: {"ext": 'jpg' or None, "warn": text or None}}."""
+    out, done = {}, 0
+    for i in range(0, len(paths), chunk):
+        part = paths[i:i + chunk]
+        fd, arg = tempfile.mkstemp(suffix=".args")
+        os.close(fd)
+        try:
+            Path(arg).write_text("\n".join(str(p) for p in part), encoding="utf-8")
+            r = subprocess.run(["exiftool", "-charset", "filename=utf8", "-j", "-FileTypeExtension", "-Warning", "-@", arg],
+                               capture_output=True, text=True)
+            try:
+                for item in json.loads(r.stdout or "[]"):
+                    out[item["SourceFile"]] = {"ext": item.get("FileTypeExtension"), "warn": item.get("Warning")}
+            except ValueError:
+                pass
+        finally:
+            Path(arg).unlink(missing_ok=True)
+        done += len(part)
+        if progress:
+            progress("detecting types", done, len(paths))
+    return out
+
+
+def _companions(path):
+    """Google info files that belong to a media file with this exact name (name.json, name.supplemental-metadata.json...)."""
+    name, d = path.name, path.parent
+    found = []
+    try:
+        for f in os.listdir(d):
+            if f.endswith(".json") and f.startswith(name) and json_key(Path(f)) == name.lower():
+                found.append((f, f[len(name):]))
+    except OSError:
+        pass
+    return found
+
+
+def fix_extensions(folders, dry_run, progress=None, rename_json=True):
+    """Give files that have no extension the right one, detected from their contents; keep their .json attached."""
+    cands = find_extensionless(folders)
+    det = detect_types(cands, progress)
+    rows = []
+    for k, p in enumerate(cands, 1):
+        info = det.get(str(p), {})
+        ext = info.get("ext")
+        row = {"path": str(p), "new": "", "ext": "", "action": "", "detail": "", "json": 0, "size": 0}
+        try:
+            row["size"] = p.stat().st_size
+        except OSError:
+            pass
+        if not ext:
+            row["action"] = "empty" if row["size"] == 0 else "unrecognised"
+            row["detail"] = "the file is empty" if row["size"] == 0 else "contents are not a known file type (possibly damaged)"
+        else:
+            ext = EXT_MAP.get(ext, ext)
+            row["ext"] = ext
+            target = p.with_name(p.name + "." + ext)
+            if target.exists():
+                target = Path(_free_name(str(target)))
+            row["new"] = str(target)
+            comps = _companions(p) if rename_json else []
+            row["json"] = len(comps)
+            if info.get("warn"):
+                row["detail"] = "may be damaged: " + str(info["warn"])[:80]
+            if dry_run:
+                row["action"] = "would-rename"
+            else:
+                try:
+                    os.rename(p, target)
+                    row["action"] = "renamed"
+                    for f, rest in comps:
+                        newj = p.parent / (target.name + rest)
+                        if not newj.exists():
+                            os.rename(p.parent / f, newj)
+                except OSError as e:
+                    row["action"], row["detail"] = "failed", str(e)
+        rows.append(row)
+        if progress and (k % 50 == 0 or k == len(cands)):
+            progress("renaming", k, len(cands))
+    return rows
 
 
 JUNK_KINDS = {
