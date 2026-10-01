@@ -144,7 +144,8 @@ def find_sidecar(m, idx):
             return by_folder[(folder, k)][0], "folder"
     for k in cands:
         if by_key.get(k):
-            return by_key[k][0], "tree"
+            found = by_key[k]
+            return (found[0], "tree") if len(found) == 1 else (found, "tree-ambiguous")
     stem = norm(os.path.splitext(m.name)[0])
     if by_stem.get((folder, stem)):
         return by_stem[(folder, stem)][0], "stem"
@@ -251,6 +252,80 @@ def unique_dest(dest):
         i += 1
 
 
+
+def read_existing(path, is_video=False):
+    """Existing date / GPS / description in a file, for before-and-after counting."""
+    r = subprocess.run(["exiftool", "-j", "-n", "-api", "QuickTimeUTC=1", "-DateTimeOriginal",
+                        "-QuickTime:CreateDate", "-GPSLatitude", "-GPSLongitude", "-Keys:GPSCoordinates",
+                        "-ImageDescription", "-XMP-dc:Description", str(path)],
+                       capture_output=True, text=True)
+    try:
+        d = json.loads(r.stdout)[0]
+    except (ValueError, IndexError):
+        return {}
+    lat, lon = d.get("GPSLatitude"), d.get("GPSLongitude")
+    kc = d.get("Keys:GPSCoordinates") or d.get("GPSCoordinates")
+    if isinstance(kc, str):
+        parts = kc.replace(",", " ").split()
+        if len(parts) >= 2:
+            try:
+                lat, lon = float(parts[0]), float(parts[1])
+            except ValueError:
+                pass
+    first, second = ("CreateDate", "DateTimeOriginal") if is_video else ("DateTimeOriginal", "CreateDate")
+    date = str(d.get(first) or d.get(second) or "")
+    desc = str(d.get("ImageDescription") or d.get("Description") or "").strip()
+    return {"date": date, "lat": lat, "lon": lon, "desc": desc}
+
+
+def classify(d, ext, ex, overwrite):
+    """Per-field outcome: none / added / same / replaced / kept."""
+    differ = "replaced" if overwrite else "kept"
+    out = {}
+    taken = ts(d, "photoTakenTime") or ts(d, "creationTime")
+    if not taken:
+        out["date"] = "none"
+    else:
+        dt = datetime.fromtimestamp(taken, timezone.utc).strftime("%Y:%m:%d %H:%M:%S")
+        e = ex.get("date", "")
+        out["date"] = "added" if (not e or e.startswith("0000")) else ("same" if e[:19] == dt else differ)
+    geo = d.get("geoData") or {}
+    if not (geo.get("latitude") or geo.get("longitude")):
+        geo = d.get("geoDataExif") or {}
+    lat, lon = geo.get("latitude"), geo.get("longitude")
+    if not (lat or lon):
+        out["gps"] = "none"
+    elif ex.get("lat") is None or ex.get("lon") is None:
+        out["gps"] = "added"
+    else:
+        near = abs(ex["lat"] - lat) < 5e-4 and abs(ex["lon"] - lon) < 5e-4
+        out["gps"] = "same" if near else differ
+    desc = (d.get("description") or "").strip()
+    if not desc:
+        out["desc"] = "none"
+    else:
+        e = ex.get("desc", "")
+        out["desc"] = "added" if not e else ("same" if e == desc else differ)
+    return out
+
+
+
+def pick_closest(m, candidates):
+    """Several sidecars share this filename (numbering restarts): choose the one nearest the file's own date."""
+    ex = read_existing(m, m.suffix.lower() in VIDEO_EXT).get("date", "")
+    try:
+        ref = datetime.strptime(ex[:19], "%Y:%m:%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        ref = m.stat().st_mtime
+    best, gap = candidates[0], None
+    for c in candidates:
+        d = load_json(c)
+        t = d and (ts(d, "photoTakenTime") or ts(d, "creationTime"))
+        if t and (gap is None or abs(t - ref) < gap):
+            best, gap = c, abs(t - ref)
+    return best
+
+
 STILL_EXT = {".heic", ".heif", ".jpg", ".jpeg"}
 
 
@@ -280,8 +355,10 @@ def pair_live(target, cid):
 
 def process(m, idx, args, out_root):
     sc, how = find_sidecar(m, idx)
+    if how == "tree-ambiguous":
+        sc = pick_closest(m, sc)
     row = {"file": str(m), "sidecar": str(sc) if sc else "", "match": how or "", "status": "",
-           "detail": "", "live": ""}
+           "detail": "", "live": "", "date": "", "gps": "", "desc": ""}
     cid = None
     if getattr(args, "pair_live", False) and m.suffix.lower() in (".mp4", ".mov"):
         cid, why = live_id(m)
@@ -295,6 +372,8 @@ def process(m, idx, args, out_root):
         return row
     ext = m.suffix.lower()
     exif_args, taken = build_args(d, ext, args.overwrite)
+    if ext not in NO_WRITE_EXT:
+        row.update(classify(d, ext, read_existing(m, ext in VIDEO_EXT), args.overwrite))
     if args.dry_run:
         row["status"] = "would-update"
         row["detail"] = " ".join(exif_args)[:200]
@@ -356,7 +435,7 @@ def main():
                 print(f"  {i}/{len(media)}")
 
     with open(args.report, "w", newline="", encoding="utf-8") as fh:
-        w = csv.DictWriter(fh, fieldnames=["file", "sidecar", "match", "status", "detail", "live"])
+        w = csv.DictWriter(fh, fieldnames=["file", "sidecar", "match", "status", "detail", "live", "date", "gps", "desc"])
         w.writeheader()
         w.writerows(rows)
 

@@ -22,7 +22,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None}
+STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}}
 LOCK = threading.Lock()
 
 
@@ -73,6 +73,14 @@ def summarise(rows, sidecars, roots, dry_run):
         batch[batch_of(r["file"])][0 if ok else 1] += 1
         if not ok:
             album_nj[Path(r["file"]).parent.name] += 1
+    fields = {k: defaultdict(int) for k in ("date", "gps", "desc")}
+    for r in rows:
+        if r["status"] in ("updated", "would-update"):
+            for k in fields:
+                if r.get(k):
+                    fields[k][r[k]] += 1
+    replaced_files = sum(1 for r in rows if r["status"] in ("updated", "would-update")
+                         and "replaced" in (r.get("date"), r.get("gps"), r.get("desc")))
     live = defaultdict(int)
     for r in rows:
         if r.get("live"):
@@ -89,6 +97,10 @@ def summarise(rows, sidecars, roots, dry_run):
                     "mismatch; check the no-json list." % (len(orphans), nj))
     if not nj:
         tips.append("Every file found a JSON sidecar.")
+    kept = sum(fields[k].get("kept", 0) for k in fields)
+    if kept:
+        tips.append("%d existing date/location/description values differ from Google's but were left alone. "
+                    "Tick 'Overwrite existing EXIF values' to replace them." % kept)
     if live.get("no-id") or live.get("no-still"):
         tips.append("Live Photos: %d videos had a still but no Apple ID to copy, %d had no matching still; those stay as separate videos."
                     % (live.get("no-id", 0), live.get("no-still", 0)))
@@ -103,7 +115,7 @@ def summarise(rows, sidecars, roots, dry_run):
         "ext": sorted(([k, v[0], v[1]] for k, v in ext.items()), key=lambda x: -(x[1] + x[2])),
         "batch": sorted(([k, v[0], v[1]] for k, v in batch.items()),
                         key=lambda x: int(re.sub(r"\D", "", x[0]) or 0)),
-        "album_no_json": top(album_nj), "live": dict(live), "tips": tips, "roots": [str(r) for r in roots], "dry_run": dry_run,
+        "album_no_json": top(album_nj), "live": dict(live), "fields": {k: dict(v) for k, v in fields.items()}, "replaced_files": replaced_files, "tips": tips, "roots": [str(r) for r in roots], "dry_run": dry_run,
     }
 
 
@@ -116,6 +128,10 @@ def write_text_summary(path, sm):
     L += ["", "By file type (with JSON / no JSON):"] + [f"  {e or '(none)'}: {a} / {b}" for e, a, b in sm["ext"]]
     L += ["", "By Takeout batch (with JSON / no JSON):"] + [f"  {e}: {a} / {b}" for e, a, b in sm["batch"]]
     L += ["", "Albums with most no-JSON files:"] + [f"  {k}: {v}" for k, v in sm["album_no_json"]]
+    L += ["", f"Files with at least one value replaced: {sm['replaced_files']}", "EXIF fields (added / replaced / kept / same / none):"]
+    for k, label in (("date", "Date taken"), ("gps", "Location"), ("desc", "Description")):
+        f = sm["fields"].get(k, {})
+        L.append(f"  {label}: " + " / ".join(str(f.get(x, 0)) for x in ("added", "replaced", "kept", "same", "none")))
     if sm.get("live"):
         L += ["", "Live Photo pairing:"] + [f"  {k}: {v}" for k, v in sm["live"].items()]
     L += [""] + sm["tips"]
@@ -125,7 +141,7 @@ def write_text_summary(path, sm):
 def run_job(roots, out, dry_run, overwrite, pair_live=False):
     with LOCK:
         STATE.update(state="scanning", total=0, done=0, counts={}, message="Scanning folders...",
-                     report="", summary=None, scan=None)
+                     report="", summary=None, scan=None, extra={})
     try:
         resolved, seen = [], set()
         for r in roots:
@@ -154,19 +170,26 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False):
                          message=f"{len(media)} media files, {len(sidecars)} json files")
         args = argparse.Namespace(dry_run=dry_run, overwrite=overwrite, pair_live=pair_live)
         out_root = Path(out) if out else None
-        rows, counts = [], defaultdict(int)
+        rows, counts, extra = [], defaultdict(int), defaultdict(int)
         with ThreadPoolExecutor(max_workers=4) as ex:
             for row in ex.map(lambda m: fx.process(m, idx, args, out_root), media):
                 rows.append(row)
                 counts[row["status"]] += 1
+                if row["status"] in ("updated", "would-update"):
+                    if "replaced" in (row["date"], row["gps"], row["desc"]):
+                        extra["replaced_files"] += 1
+                    extra["fields_replaced"] += [row["date"], row["gps"], row["desc"]].count("replaced")
+                if row["live"] == "paired":
+                    extra["live_paired"] += 1
                 with LOCK:
                     STATE["done"] = len(rows)
                     STATE["counts"] = dict(counts)
+                    STATE["extra"] = dict(extra)
         report_dir = out_root or Path.home() / "Desktop"
         report_dir.mkdir(parents=True, exist_ok=True)
         tag = "dryrun" if dry_run else "report"
         report = report_dir / f"takeout_{tag}.csv"
-        fields = ["file", "sidecar", "match", "status", "detail", "live"]
+        fields = ["file", "sidecar", "match", "status", "detail", "live", "date", "gps", "desc"]
         with open(report, "w", newline="", encoding="utf-8") as fh:
             w = csv.DictWriter(fh, fieldnames=fields)
             w.writeheader()
@@ -309,8 +332,10 @@ function bars(rows){const m=Math.max(1,...rows.map(r=>r[2]));return rows.map(r=>
 function showSummary(s){
   let h=`<div class="tiles">${tile(s.total,'media files')}${tile(s.matched,'matched ('+s.pct_matched+'%)','ok')}${tile(s.no_json,'no JSON found',s.no_json?'bad':'ok')}${tile(s.orphans,'JSON with no photo')}</div>`;
   h+=s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
+  h+=`<div class="tiles">${tile(s.replaced_files,'files with a value replaced')}${tile((s.live||{}).paired||0,'Live Photos paired')}</div>`;
+  h+='<h2>EXIF values</h2>'+tbl(['Field','Added','Replaced','Kept (not overwritten)','Already correct'],[['date','Date taken'],['gps','Location'],['desc','Description']].map(([k,l])=>{const f=s.fields[k]||{};return [l,(f.added||0).toLocaleString(),(f.replaced||0).toLocaleString(),(f.kept||0).toLocaleString(),(f.same||0).toLocaleString()]}));
   h+='<h2>Result</h2>'+tbl(['Status','Files'],Object.entries(s.status).map(([k,v])=>[k,v.toLocaleString()]));
-  h+='<h2>How files were matched</h2>'+tbl(['Match type','Files'],Object.entries(s.match).map(([k,v])=>[({folder:'Same album folder',tree:'Another folder / batch',stem:'Same name, other extension (RAW+JPG, live photo)'})[k]||k,v.toLocaleString()]));
+  h+='<h2>How files were matched</h2>'+tbl(['Match type','Files'],Object.entries(s.match).map(([k,v])=>[({folder:'Same album folder',tree:'Another folder / batch','tree-ambiguous':'Another folder, several candidates (closest date chosen)',stem:'Same name, other extension (RAW+JPG, live photo)'})[k]||k,v.toLocaleString()]));
   h+='<h2>By file type</h2>'+tbl(['Type','With JSON','No JSON'],bars(s.ext));
   h+='<h2>By Takeout batch</h2>'+tbl(['Batch','With JSON','No JSON'],bars(s.batch));
   if(s.live&&Object.keys(s.live).length)h+='<h2>Live Photo pairing</h2>'+tbl(['Result','Videos'],Object.entries(s.live).map(([k,v])=>[({paired:'Paired with its still','no-id':'Still has no Apple ID','no-still':'No matching still','pair-error':'Error'})[k]||k,v.toLocaleString()]));
@@ -323,7 +348,7 @@ let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   const pct=s.total?Math.round(100*s.done/s.total):0;$('fill').style.width=pct+'%';
   $('msg').innerHTML=s.state==='error'?'<span class="err">'+esc(s.message)+'</span>':s.state==='done'?'<span class="ok">Finished.</span>':esc(s.message)+(s.total?` (${s.done.toLocaleString()} / ${s.total.toLocaleString()})`:'');
   const c=s.counts||{},done=s.done||0,nj=c['no-json']||0;
-  $('tiles').innerHTML=s.total?tile(s.total,'media files')+tile(done-nj,'matched so far','ok')+tile(nj,'no JSON so far',nj?'bad':'')+(s.scan?tile(s.scan.json,'JSON files found'):''):'';
+  $('tiles').innerHTML=s.total?tile(s.total,'media files')+tile(done-nj,'matched so far','ok')+tile(nj,'no JSON so far',nj?'bad':'')+tile((s.extra||{}).replaced_files||0,'files with EXIF replaced')+tile((s.extra||{}).live_paired||0,'Live Photos paired')+(s.scan?tile(s.scan.json,'JSON files found'):''):'';
   if(s.state==='done'&&s.summary)showSummary(s.summary);
   if(['done','error','idle'].includes(s.state))clearInterval(timer);
 },500)}
