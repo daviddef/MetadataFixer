@@ -1149,13 +1149,19 @@ def find_empty_dirs(root, ignore_junk=True, extra_ignored=None):
 EXT_MAP = {"m4v": "mp4", "jpe": "jpg", "jpeg": "jpg"}
 
 
+def bogus_ext(n):
+    """True for names like 'IMG_1.fullsizerender': a long made-up 'extension' that is not a real file type."""
+    suf = n.rsplit(".", 1)[-1] if "." in n else ""
+    return len(suf) >= 8 and suf.isalpha()
+
+
 def find_extensionless(folders):
     out = []
     for f in folders:
         for dp, dns, fns in os.walk(f, followlinks=False):
             dns[:] = [d for d in dns if not (os.path.islink(os.path.join(dp, d)) or is_bundle(d) or d == "_unrecognised")]
             for n in fns:
-                if "." not in n and not n.startswith("._") and n.lower() not in JUNK_NAMES:
+                if ("." not in n or bogus_ext(n)) and not n.startswith("._") and n.lower() not in JUNK_NAMES:
                     out.append(Path(dp) / n)
     return out
 
@@ -1258,6 +1264,9 @@ def fix_extensions(folders, dry_run, progress=None, rename_json=True, aside=Fals
             ext = probe_container_ext(p)          # second opinion for containers exiftool does not know
             if ext:
                 row["detail"] = "identified by ffprobe"
+        bogus = bogus_ext(p.name)
+        if not ext and bogus and row["size"] > 0:
+            continue                               # an odd name we cannot identify: leave it where it is
         if not ext:
             row["action"] = "empty" if row["size"] == 0 else "unrecognised"
             row["detail"] = diagnose_unknown(p)
@@ -1277,7 +1286,7 @@ def fix_extensions(folders, dry_run, progress=None, rename_json=True, aside=Fals
         else:
             ext = EXT_MAP.get(ext, ext)
             row["ext"] = ext
-            target = p.with_name(p.name + "." + ext)
+            target = p.with_name((p.name.rsplit(".", 1)[0] if bogus else p.name) + "." + ext)
             if target.exists():
                 target = Path(_free_name(str(target)))
             row["new"] = str(target)
