@@ -26,7 +26,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.01-z"
+VERSION = "2026.10.01-z2"
 class Cancelled(Exception):
     pass
 
@@ -1732,6 +1732,34 @@ function setBar(barId,fillId,pctId,pct,indet){
   pct=Math.max(0,Math.min(100,pct));fill.style.width=pct+'%';lab.textContent=Math.floor(pct)+'%';
   if(pct>=12){lab.className='';lab.style.left='calc('+pct+'% - 44px)'}else{lab.className='out';lab.style.left='calc('+pct+'% + 8px)'}}
 
+(async function(){
+  let boot=null;
+  const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+  async function st(){try{const j=await (await fetch('/api/status')).json();if(j&&j.version)$('ver').textContent='Version '+j.version;return j}catch(e){return null}}
+  async function checkNow(manual){
+    if(manual)$('vermsg').textContent='Checking...';
+    try{await post('/api/update_check')}catch(e){}
+    for(let i=0;i<12;i++){
+      await sleep(800);const s=await st();if(!s)continue;boot=s.boot;const u=s.update||{};
+      if(u.state==='available'){
+        $('updmsg').textContent='Updated files: '+u.files.join(', ')+'. Your settings are not affected.';$('upd').style.display='block';
+        $('vermsg').innerHTML='<span class="ok">Update available</span>';return}
+      if(u.state==='current'){$('vermsg').innerHTML=manual?'<span class="ok">&#10003; Up to date</span>':'';return}
+      if(u.state==='unknown'){$('vermsg').innerHTML=manual?'<span class="err">Could not check (offline?)</span>':'';return}
+    }
+    if(manual)$('vermsg').textContent='';
+  }
+  $('vercheck').onclick=e=>{e.preventDefault();checkNow(true)};
+  checkNow(false);setInterval(()=>checkNow(false),30*60*1000);
+  $('updno').onclick=()=>{$('upd').style.display='none'};
+  $('updgo').onclick=async()=>{
+    $('updgo').disabled=true;$('updmsg').textContent='Updating...';
+    const r=await post('/api/update');
+    if(r.error){$('updmsg').innerHTML='<span class="err">'+esc(r.error)+'</span>';$('updgo').disabled=false;return}
+    $('updmsg').textContent='Updated. Restarting...';
+    for(let i=0;i<30;i++){await new Promise(x=>setTimeout(x,1000));const s=await st();if(s&&s.boot!==boot){location.reload();return}}
+    $('updmsg').textContent='Updated. If the page does not reload, restart the app in Terminal.'}
+})();
 const TABS=['fix','merge','clean','convert'];const tabOf=k=>({cleanup:'clean',sort:'merge'}[k]||k);let jobKind='fix';
 function showTab(t){if(!TABS.includes(t))t='fix';
   TABS.forEach(x=>{$('pane-'+x).style.display=x===t?'block':'none';document.querySelector('.tab[data-tab="'+x+'"]').classList.toggle('on',x===t)});
