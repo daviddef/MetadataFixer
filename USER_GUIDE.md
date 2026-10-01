@@ -43,7 +43,7 @@ Or download `takeout_fix_metadata.py` and `takeout_gui.py` from the repo into on
 
 ## Layout
 
-The app has five tabs: **1 Fix metadata**, **2 Sort**, **3 Clean up** (remove `.json` files), **4 Convert videos** and **5 Empty folders**. A bar with a moving percentage stays at the top of the window on every tab, showing whatever job is running; if you switch to another tab, a **View results** link takes you back. Only one job runs at a time.
+The app has four tabs: **1 Fix metadata**, **2 Sort**, **3 Clean up** (`.json` files, junk, names and empty folders) and **4 Convert videos**. A bar with a moving percentage stays at the top of the window on every tab, showing whatever job is running; if you switch to another tab, a **View results** link takes you back. Only one job runs at a time.
 
 ## Choosing your folders (once, for every tab)
 
@@ -218,35 +218,24 @@ How it works:
 
 Suggested order: run Part 1 (it creates the Live Photo `.MOV` files), then Part 4 for your other videos.
 
-## Part 5: Remove empty folders
+## Clean up (tab 3)
 
-The **Empty folders** tab checks a whole folder tree and removes every folder that is **properly empty**, however deep. Handy after sorting or moving, which leave lots of empty folders behind.
+One tab, four optional tasks. Tick what you want; they always run in this order, so earlier steps leave work for later ones (for example, deleting cache files leaves folders empty, which the last step removes). Use **Preview only** first: it lists everything that would happen and changes nothing.
 
-1. Add the folders to check. Leave **Preview only** ticked and press **Start**: you see how many folders would be removed and a list of the top-level ones (each with the number of empty folders inside it).
-2. Untick Preview and press **Start** again; confirm the prompt.
-
-What counts as empty:
-- A folder is empty only if it contains **no files at all** and **every folder inside it is empty too**. A folder with one file in it, or a subfolder (at any depth) with one file, is kept. Chains such as `a/b/c/d` are removed from the bottom up.
-- **System leftovers** (`.DS_Store`, `Thumbs.db`, `desktop.ini`, `._something`) are ignored by default, so a folder holding only those counts as empty and they are deleted with it. Untick **Treat system leftovers as empty** to keep such folders.
-- Any other hidden file counts as a real file.
+1. **Remove Google `.json` files** (off by default). The info files Google adds to each photo. They hold the only copy of the original dates and locations, so do this only **after** you have fixed your photos. Option: also remove other `.json` files.
+2. **Remove junk and cache files.** System leftovers (`.DS_Store`, `Thumbs.db`, `desktop.ini`, `._` files), iPod/iTunes thumbnail caches (`.ithmb`, such as `T103.ithmb` inside an *iPod Photo Cache* folder), `Picasa.ini`, and optionally camera video thumbnails (`.thm`). Each kind has its own tick box.
+3. **Tidy names.** Fixes duplicate-style names such as `From Cris Drive - 2001(1)` to `From Cris Drive - 2001`:
+   - Removes ` (1)`, ` (2)` and so on (small numbers only, so real names such as `Summer (2019)` are never changed), ` copy` / ` copy 2`, and extra spaces.
+   - If a folder with the clean name already exists, the two are **merged**. Identical files are kept once (the extra copy is deleted, or moved to a `_duplicates` folder if you choose). Different files with the same name are both kept: the second becomes `name_1`. Folders inside are merged the same way.
+   - Names are tidied from the innermost folder outwards, and the folders you chose are not renamed themselves.
+   - Optionally tidy **file** names too. A file is only renamed when the clean name is free, and its `.json` is renamed with it. Best done after fixing your photos, since the fixer matches photos to JSON by name.
+4. **Remove empty folders.** Removes every folder with **no files at all**, however deep: a folder counts only if everything inside it is empty too. Chains such as `a/b/c/d` go from the bottom up. A folder holding only system leftovers counts as empty (tick box). Shortcuts, app/library bundles (such as `.photoslibrary`) and unreadable folders are never entered. The folders you chose are kept unless you tick the option to remove them if they end up empty.
 
 Safety:
-- Only folders are removed, using a delete that refuses if anything is inside. No photo or other file is ever deleted.
-- The folders you choose are always kept, even if everything inside them goes (tick the third option to remove them too if they end up empty).
-- Shortcuts and aliases (symbolic links), app and library bundles (such as `.photoslibrary` and `.app`) and unreadable folders are never entered or removed.
+- Before a real run that deletes files, you must type `DELETE`; the prompt lists the folders it will act on. Deleting is permanent (no Trash).
 - Very broad folders such as `/` or your home folder are refused.
-- Removal is permanent (no Trash). A CSV of every folder is saved to your Desktop.
-
-## Cleaning up the .json files
-
-The output folder contains only photos and videos; the fixer **does not copy the `.json` files**. Your Takeout folders keep theirs. When you are happy with the result, use the **Clean up** panel at the bottom of the app to delete the leftover `.json` files (for example in the Takeout folders, or in your output folder if you moved files).
-
-1. Click **Add folders...** and choose the folders to clean (very broad folders such as `/` or your home folder are refused).
-2. Click **Scan**. You see how many files of each kind would be deleted and their size: Google Photos sidecars, album/memory data files (`metadata.json` and similar), and other `.json` files.
-3. By default only the first two kinds are removed. Tick **Also remove other .json files** to remove every `.json` in those folders.
-4. Click **Delete .json files** and type `DELETE` to confirm. Progress is shown live.
-
-Deletion is permanent (no Trash). The `.json` files are the only source of the original dates and locations, so run the fix and check your photos first. Photos and videos are never touched by the cleanup.
+- The summary shows each step separately (counts, space freed, a before and after list of renames, the top-level empty folders), and a CSV of every change is saved to your Desktop.
+- In a preview, files that would be deleted by earlier steps are treated as gone when counting empty folders, but folders emptied by a name merge are not counted until you run it.
 
 ## Command line
 

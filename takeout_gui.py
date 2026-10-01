@@ -26,7 +26,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.01-h"
+VERSION = "2026.10.01-i"
 STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}, "recent": [], "clean": {"state": "idle"}, "update": {"state": "idle", "files": []}, "phase": None, "kind": "fix", "version": VERSION, "boot": time.time()}
 LOCK = threading.Lock()
 
@@ -603,6 +603,168 @@ def run_empty(roots, dry_run, ignore_junk, remove_top):
             STATE.update(state="error", message=str(e))
 
 
+def run_cleanup(roots, dry_run, opts):
+    """One Clean up job: .json files, junk files, name tidying, empty folders, always in that safe order."""
+    with LOCK:
+        STATE.update(state="scanning", total=0, done=0, counts={}, message="Preparing...", report="",
+                     summary=None, scan=None, extra={}, recent=[], phase=None, kind="cleanup")
+    try:
+        folders = check_clean_folders(roots)
+        tasks = [t for t in ("json", "junk", "names", "empty") if opts.get(t)]
+        if not tasks:
+            raise ValueError("Tick at least one thing to clean")
+        n = len(tasks)
+        titles = {"json": "Google .json files", "junk": "Junk and cache files", "names": "Tidy names", "empty": "Empty folders"}
+        sections, rows, extra, recent, deleted = [], [], defaultdict(int), [], set()
+
+        def disp(p):
+            for f in folders:
+                try:
+                    return str(Path(f).name / Path(p).relative_to(f))
+                except ValueError:
+                    continue
+            return str(p)
+
+        def phase(i, frac, msg=None):
+            with LOCK:
+                STATE["state"] = "running"
+                STATE["phase"] = {"stage": "pct", "done": 100 * (i + max(0.0, min(1.0, frac))) / n, "total": 100}
+                if msg:
+                    STATE["message"] = f"Step {i + 1} of {n}: {msg}"
+                STATE["extra"] = dict(extra)
+                STATE["recent"] = list(recent)
+
+        def feed(name, status):
+            recent.append({"name": name, "status": status, "to": "", "live": ""})
+            del recent[:-12]
+
+        def delete_items(i, items, label):
+            count = size = failed = 0
+            for k, (p, sz, _) in enumerate(items, 1):
+                ok = True
+                if not dry_run:
+                    try:
+                        os.remove(p)
+                    except OSError as e:
+                        ok = False
+                        failed += 1
+                        rows.append({"task": label, "kind": "file", "path": p, "new": "", "action": "failed", "detail": str(e)})
+                if ok:
+                    count += 1
+                    size += sz
+                    deleted.add(str(p))
+                    rows.append({"task": label, "kind": "file", "path": p, "new": "",
+                                 "action": "would-delete" if dry_run else "deleted", "detail": ""})
+                    extra[label] += 1
+                if k % 40 == 0 or k == len(items):
+                    feed(os.path.basename(p), "would-delete" if dry_run else "deleted")
+                    phase(i, k / max(1, len(items)), f"{'checking' if dry_run else 'deleting'} {label} files ({k:,}/{len(items):,})")
+            extra["errors"] += failed
+            return count, size, failed
+
+        w = "would be " if dry_run else ""
+        for i, task in enumerate(tasks):
+            phase(i, 0, titles[task] + "...")
+            if task == "json":
+                cats, files = find_json(folders, bool(opts.get("json_other")))
+                c, sz, fl = delete_items(i, [(p, s_, "json") for p, s_ in files], "json")
+                labels = {"photo": "Google info files for photos", "album": "Album / memory data files", "other": "Other .json files"}
+                sections.append({"task": task, "title": titles[task],
+                                 "tiles": [[c, f".json files {w}deleted", "ok"], [fmt_bytes(sz), "space freed"], [fl, "could not delete", "bad" if fl else ""]],
+                                 "table": {"head": ["Kind found", "Files"], "rows": [[labels.get(k, k), str(v["files"])] for k, v in cats.items()]},
+                                 "note": "" if opts.get("json_other") else "Other .json files were left alone."})
+            elif task == "junk":
+                items = fx.find_junk(folders, opts["junk"])
+                c, sz, fl = delete_items(i, items, "junk")
+                by = defaultdict(lambda: [0, 0])
+                for _, s_, k in items:
+                    by[k][0] += 1
+                    by[k][1] += s_
+                names = {"system": "System leftovers (.DS_Store, Thumbs.db, ...)", "ithmb": "iPod/iTunes thumbnail caches (.ithmb)",
+                         "picasa": "Picasa.ini", "thm": "Camera video thumbnails (.thm)"}
+                sections.append({"task": task, "title": titles[task],
+                                 "tiles": [[c, f"junk files {w}deleted", "ok"], [fmt_bytes(sz), "space freed"], [fl, "could not delete", "bad" if fl else ""]],
+                                 "table": {"head": ["Kind", "Files", "Size"], "rows": [[names.get(k, k), str(v[0]), fmt_bytes(v[1])] for k, v in by.items()]}, "note": ""})
+            elif task == "names":
+                def cb(stage, done, total):
+                    phase(i, done / max(1, total), f"tidying {stage} ({done:,}/{total:,})")
+                res = fx.tidy_names(folders, opts["names"], dry_run, cb)
+                for r in res:
+                    rows.append({"task": "names", "kind": r["kind"], "path": r["old"], "new": r["new"], "action": r["action"],
+                                 "detail": r["detail"] or (f"{r['moved']} moved, {r['dupes']} identical, {r['conflicts']} renamed _1" if r["action"] in ("merged", "would-merge") else "")})
+                    if r["action"] in ("renamed", "would-rename") and r["kind"] == "folder":
+                        extra["renamed"] += 1
+                    if r["action"] in ("merged", "would-merge"):
+                        extra["merged"] += 1
+                    if r["action"] == "failed":
+                        extra["errors"] += 1
+                    feed(os.path.basename(r["old"]), r["action"])
+                ren = sum(1 for r in res if r["kind"] == "folder" and r["action"] in ("renamed", "would-rename"))
+                mer = [r for r in res if r["action"] in ("merged", "would-merge")]
+                fren = sum(1 for r in res if r["kind"] == "file" and r["action"] in ("renamed", "would-rename"))
+                skp = sum(1 for r in res if r["action"] == "skipped")
+                fail = sum(1 for r in res if r["action"] == "failed")
+                sections.append({"task": task, "title": titles[task],
+                                 "tiles": [[ren, f"folders {w}renamed", "ok"], [len(mer), f"folders {w}merged into an existing one"],
+                                           [sum(r["moved"] for r in mer), "files moved in merges"],
+                                           [sum(r["dupes"] for r in mer), "identical copies " + ("found" if dry_run else ("deleted" if opts["names"].get("dupes") == "delete" else "moved aside"))],
+                                           [sum(r["conflicts"] for r in mer), "different files given a _1 name"],
+                                           [fren, f"files {w}renamed"], [skp, "skipped (clean name taken)"], [fail, "failed", "bad" if fail else ""]],
+                                 "table": {"head": ["Before", "After"], "rows": [[disp(r["old"]), os.path.basename(r["new"]) + ("  (merge)" if r["action"] in ("merged", "would-merge") else "")]
+                                                                               for r in res if r["action"] not in ("skipped", "failed")][:100]},
+                                 "note": ("Showing the first 100 changes. " if len(res) > 100 else "") + ("Years in brackets, such as (2019), are never changed." if opts["names"].get("paren") else "")})
+            elif task == "empty":
+                eo = opts["empty"]
+                found, scanned, skipped = [], 0, 0
+                for f in folders:
+                    e, _, nscan, k = fx.find_empty_dirs(f, bool(eo.get("junk")), deleted if dry_run else None)
+                    found += [p for p in e if eo.get("top") or p != str(f)]
+                    scanned += nscan
+                    skipped += k
+                found.sort(key=lambda p: -len(Path(p).parts))
+                removed = failed = 0
+                for k, p in enumerate(found, 1):
+                    ok, err = (True, "") if dry_run else fx.remove_empty_dir(p, bool(eo.get("junk")))
+                    removed += 1 if ok else 0
+                    failed += 0 if ok else 1
+                    rows.append({"task": "empty", "kind": "folder", "path": p, "new": "", "action": ("would-remove" if dry_run else "removed") if ok else "failed", "detail": err})
+                    extra["empty"] += 1 if ok else 0
+                    extra["errors"] += 0 if ok else 1
+                    if k % 20 == 0 or k == len(found):
+                        feed(os.path.basename(p), "would-remove" if dry_run else "removed")
+                        phase(i, k / max(1, len(found)), f"{'checking' if dry_run else 'removing'} empty folders ({k:,}/{len(found):,})")
+                fs_ = set(found)
+                groups = [p for p in sorted(found) if str(Path(p).parent) not in fs_]
+                sections.append({"task": task, "title": titles[task],
+                                 "tiles": [[removed, f"empty folders {w}removed", "ok"], [scanned - len(found), "folders kept (hold files)"],
+                                           [skipped, "left alone (links, bundles)"], [failed, "could not remove", "bad" if failed else ""]],
+                                 "table": {"head": ["Top-level empty folder"], "rows": [[disp(p)] for p in groups[:100]]},
+                                 "note": ("Showing the first 100 of %d. " % len(groups) if len(groups) > 100 else "") +
+                                         ("In a preview, files that would be deleted in the earlier steps are treated as gone, but folders emptied by name merges are not counted." if dry_run and n > 1 else "")})
+        report_dir = Path.home() / "Desktop"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        report = report_dir / ("takeout_cleanup_preview.csv" if dry_run else "takeout_cleanup_report.csv")
+        with open(report, "w", newline="", encoding="utf-8") as fh:
+            w_ = csv.DictWriter(fh, fieldnames=["task", "kind", "path", "new", "action", "detail"])
+            w_.writeheader()
+            w_.writerows(rows)
+        tips = []
+        if dry_run:
+            tips.append("This was a preview: nothing was deleted, renamed, merged or removed. Untick Preview only to do it.")
+        else:
+            tips.append("Done. A CSV listing every change is on your Desktop.")
+        with LOCK:
+            STATE.update(state="done", report=str(report), message="Finished", phase=None,
+                         summary={"kind": "cleanup", "dry_run": dry_run, "sections": sections, "tips": tips})
+    except Exception as e:
+        with LOCK:
+            STATE.update(state="error", message=str(e))
+
+
+def fmt_bytes(b):
+    return f"{b / 1e9:.2f} GB" if b > 1e9 else f"{b / 1e6:.1f} MB" if b > 1e6 else f"{round(b / 1e3)} KB"
+
+
 AUX_JSON = {"metadata.json", "print-subscriptions.json", "shared_album_comments.json",
             "user-generated-memory-titles.json"}
 
@@ -786,6 +948,17 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, "{}")
         elif self.path == "/api/update":
             self._send(200, json.dumps(apply_update()))
+        elif self.path == "/api/cleanup_start":
+            with LOCK:
+                busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
+            if busy:
+                return self._send(409, json.dumps({"error": "A job is already running"}))
+            o = body.get("opts", {})
+            opts = {"json": bool(o.get("json")), "json_other": bool(o.get("json_other")), "junk": list(o.get("junk") or []),
+                    "names": o.get("names") or None, "empty": o.get("empty") or None}
+            opts["junk"] = opts["junk"] or None
+            threading.Thread(target=run_cleanup, daemon=True, args=(body.get("roots", []), bool(body.get("dry_run")), opts)).start()
+            self._send(200, "{}")
         elif self.path == "/api/empty_start":
             with LOCK:
                 busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
@@ -896,6 +1069,7 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 .sm2{display:none}@media(max-width:560px){.lg{display:none}.sm2{display:inline}.fhead{gap:6px}button.sm{padding:3px 8px;font-size:12px}#frame{padding-top:8px}.hero{padding:14px 14px 12px}.hero .logo{width:44px;height:44px}}
 .frow{display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap;font-size:13px}.frow .flabel{white-space:nowrap}
 .frow .fchips{flex:1 1 160px;margin-top:0;min-width:0}.frow:not(:first-child) input[type=text]{flex:1 1 160px;min-width:0;padding:5px 8px;font-size:12px}
+.sub{display:block;margin-top:7px;font-size:13px;color:var(--ink);line-height:1.4}.sub input{margin-right:6px}
 </style></head><body><main>
 <div id="upd" style="display:none" class="card"><b>A newer version is available.</b> <span id="updmsg"></span>
 <div style="margin-top:8px"><button class="p" id="updgo">Update now</button> <button id="updno">Not now</button></div></div>
@@ -924,7 +1098,6 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
     <button class="tab" data-tab="sort" role="tab"><b>2</b> Sort</button>
     <button class="tab" data-tab="clean" role="tab"><b>3</b> Clean up</button>
     <button class="tab" data-tab="convert" role="tab"><b>4</b> Convert videos</button>
-    <button class="tab" data-tab="empty" role="tab"><b>5</b> Empty folders</button>
   </nav>
   <div class="fbar" id="fbar">
     <div class="frow" id="frs"><span class="flabel">&#128193; Source <b id="fsum"></b></span><div class="fchips" id="fchips"></div><button id="fadd" class="sm">Add folders...</button><button id="fedit" class="sm">Edit list</button></div>
@@ -979,24 +1152,31 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 </section>
 <section class="pane" id="pane-clean">
 <h2 class="ph">Clean up</h2>
-<div class="card"><label class="t">Remove the leftover .json files (do this last)</label>
-<small style="margin-top:0">Once you're happy with the fixed photos, delete the leftover Google .json files. They are no longer needed, but they are the only source of the date and location data, so run the fix first. Deleted files do not go to the Trash.</small>
-<div class="usef" style="margin-top:8px"><b>Folders to clean:</b> <span class="fnote"></span></div>
-<div class="row" style="margin-top:8px"><button id="cscan">Scan</button></div>
-<div class="opt"><input type="checkbox" id="cother"><div>Also remove other .json files<small>Off = only Google Photos sidecars and album/memory data files. On = every .json in the folders.</small></div></div>
-<div class="bar" id="cbar" style="display:none"><i id="cfill"></i><span id="cpct">0%</span></div>
-<div id="cres" style="margin-top:8px"></div>
-<button id="cdel" disabled style="margin-top:8px;border-color:var(--bad);color:var(--bad)">Delete .json files</button></div>
-</section>
-<section class="pane" id="pane-empty">
-<h2 class="ph">Remove empty folders</h2>
-<div class="card"><small style="margin-top:0">Checks the whole folder tree and removes every folder that is <b>properly empty</b>, however deep: a folder only counts if it holds no files at all, and every folder inside it is empty too. A folder with even one file in it, or a subfolder with one file, is kept. Only folders are removed; <b>no file is ever deleted</b>, apart from invisible system leftovers (below) if you leave that option on.</small>
-<div class="usef" style="margin-top:12px"><b>Folders to check:</b> <span class="fnote"></span></div>
-<div class="opt"><input type="checkbox" id="edry" checked><div>Preview only<small>On by default. Lists the empty folders it would remove and removes nothing.</small></div></div>
-<div class="opt"><input type="checkbox" id="ejunk" checked><div>Treat system leftovers as empty<small>Finder and Windows leave invisible files such as <i>.DS_Store</i>, <i>Thumbs.db</i>, <i>desktop.ini</i> and <i>._something</i>. A folder holding only those still counts as empty, and those files are deleted with it. Off = such a folder is kept.</small></div></div>
-<div class="opt"><input type="checkbox" id="etop"><div>Also remove the folders you chose, if they end up empty<small>Off by default: the folders you add are always kept, even if everything inside them is removed.</small></div></div>
-<small>Never entered or removed: shortcuts/aliases (symbolic links), app and library bundles (such as <i>.photoslibrary</i> and <i>.app</i>), and folders it is not allowed to read.</small>
-<button class="p" id="ego" style="margin-top:10px">Start</button></div>
+<div class="card"><small style="margin-top:0">Tick what you want tidied. The steps run in the order shown, so removing files first lets the last step catch the folders they leave empty. <b>Preview first</b>: it lists what would happen and changes nothing.</small>
+<div class="usef" style="margin-top:10px"><b>Folders to clean:</b> <span class="fnote"></span></div>
+
+<div class="opt"><input type="checkbox" id="cj"><div><b>1. Remove Google .json files</b><small>The small info files Google adds to each photo. They hold the only copy of the original date and location, so do this <b>after</b> you have fixed your photos. Off by default.</small>
+<label class="sub"><input type="checkbox" id="cother"> Also remove other .json files (every .json in the folders)</label></div></div>
+
+<div class="opt"><input type="checkbox" id="cjunk" checked><div><b>2. Remove junk and cache files</b><small>Files nothing needs. Choose which kinds:</small>
+<label class="sub"><input type="checkbox" id="cjs" checked> System leftovers (.DS_Store, Thumbs.db, desktop.ini, ._ files)</label>
+<label class="sub"><input type="checkbox" id="cji" checked> iPod/iTunes thumbnail caches (.ithmb, such as T103.ithmb)</label>
+<label class="sub"><input type="checkbox" id="cjp" checked> Picasa.ini files</label>
+<label class="sub"><input type="checkbox" id="cjt"> Camera video thumbnails (.thm)</label></div></div>
+
+<div class="opt"><input type="checkbox" id="cn" checked><div><b>3. Tidy names</b><small>Fixes duplicate-style names such as <i>From Cris Drive - 2001(1)</i> to <i>From Cris Drive - 2001</i>. If a folder with the clean name already exists, the two are <b>merged</b>: identical files are kept once, and different files with the same name are both kept (the second becomes <i>name_1</i>). Real names such as <i>Summer (2019)</i> are never changed, and the folders you chose are not renamed.</small>
+<label class="sub"><input type="checkbox" id="cnp" checked> Remove " (1)", " (2)" ... from names</label>
+<label class="sub"><input type="checkbox" id="cnc" checked> Remove " copy", " copy 2" from names</label>
+<label class="sub"><input type="checkbox" id="cns" checked> Trim and collapse extra spaces</label>
+<label class="sub"><input type="checkbox" id="cnf"> Also tidy file names (only when the clean name is free; the file's .json is renamed too. Best done after fixing your photos)</label>
+<label class="sub">Identical copies found while merging: <select id="cnd" class="sel"><option value="delete" selected>delete the extra copy</option><option value="aside">move it to a _duplicates folder</option></select></label></div></div>
+
+<div class="opt"><input type="checkbox" id="ce" checked><div><b>4. Remove empty folders</b><small>Removes every folder with no files in it at any depth, only after the steps above. Only folders are removed. Shortcuts, app/library bundles (such as .photoslibrary) and unreadable folders are never entered.</small>
+<label class="sub"><input type="checkbox" id="cejunk" checked> A folder holding only system leftovers counts as empty</label>
+<label class="sub"><input type="checkbox" id="cetop"> Also remove the folders you chose, if they end up empty</label></div></div>
+
+<div class="opt"><input type="checkbox" id="cdry" checked><div>Preview only<small>On by default. Lists what would be deleted, renamed, merged or removed, and changes nothing.</small></div></div>
+<button class="p" id="cgo" style="margin-top:6px">Start</button></div>
 </section>
 <section class="pane" id="pane-convert">
 <h2 class="ph">Convert old videos to MP4</h2>
@@ -1071,7 +1251,7 @@ const tile=(n,l,c)=>`<div class="tile ${c||''}"><b>${n.toLocaleString()}</b><spa
 function tbl(head,rows){return `<table><tr>${head.map((h,i)=>`<th class="${i?'n':''}">${h}</th>`).join('')}</tr>${rows.map(r=>`<tr>${r.map((c,i)=>`<td class="${i?'n':''}">${c}</td>`).join('')}</tr>`).join('')}</table>`}
 function bars(rows){const m=Math.max(1,...rows.map(r=>r[2]));return rows.map(r=>[esc(r[0]||'(none)'),r[1].toLocaleString(),r[2].toLocaleString()+`<span class="mini" style="width:${Math.round(60*r[2]/m)}px"></span>`])}
 function showSummary(s){
-  if(s.kind==='empty'){showEmpty(s);return}
+  if(s.kind==='cleanup'){showCleanup(s);return}
   if(s.kind==='convert'){showConvert(s);return}
   if(s.kind==='sort'){showSort(s);return}
   let h=`<div class="tiles">${tile(s.total,'media files')}${tile(s.duplicates,'exact duplicates skipped')}${tile(s.matched,'unique files matched ('+s.pct_matched+'%)','ok')}${tile(s.no_json,'no JSON found',s.no_json?'bad':'ok')}${tile(s.orphans,'JSON with no photo')}</div>`;
@@ -1093,26 +1273,6 @@ function showSummary(s){
   h+='<small>Saved: full report CSV (with before/after values per file), a changes-only CSV, a CSV of just the no-JSON files, and a text summary.</small>';
   $('sumbody').innerHTML=h;$('sum').style.display='block'}
 const fmtBytes=b=>b>1e9?(b/1e9).toFixed(2)+' GB':b>1e6?(b/1e6).toFixed(1)+' MB':Math.round(b/1e3)+' KB';
-$('cscan').onclick=async()=>{
-  $('cdel').disabled=true;$('cres').textContent='Scanning...';
-  const r=await post('/api/clean_scan',{folders:croots(),include_other:$('cother').checked});
-  if(r.error){$('cres').innerHTML='<span class="err">'+esc(r.error)+'</span>';return}
-  const L={photo:'Google info files for photos',album:'Album / memory data files',other:'Other .json files'};
-  $('cres').innerHTML=tbl(['Kind','Files','Size'],Object.entries(r.cats).map(([k,v])=>[L[k]||k,v.files.toLocaleString(),fmtBytes(v.bytes)]))+`<div style="margin-top:6px"><b>${r.will_delete.toLocaleString()}</b> files (${fmtBytes(r.bytes)}) would be deleted.</div>`;
-  $('cdel').disabled=!r.will_delete;$('cdel').dataset.n=r.will_delete};
-$('cdel').onclick=async()=>{
-  const n=$('cdel').dataset.n;
-  const t=prompt(`This permanently deletes ${n} .json files in:\n${croots().join('\n')}\nIt cannot be undone.\nType DELETE to confirm.`);
-  if(t!=='DELETE')return;
-  const r=await post('/api/clean_run',{folders:croots(),include_other:$('cother').checked});
-  if(r.error){alert(r.error);return}
-  $('cdel').disabled=true;
-  const tm=setInterval(async()=>{const s=(await (await fetch('/api/status')).json()).clean;
-    jobKind='clean';$('msg').innerHTML='<b>Part 3 Clean up</b> &middot; '+(s.state==='done'?'Finished':s.state==='error'?esc(s.message):'Deleting .json files...');setBar('bar','fill','pct',s.state==='done'?100:(s.total?100*s.done/s.total:0),s.state==='running'&&!s.total);
-    $('cbar').style.display=s.state==='error'?'none':'block';setBar('cbar','cfill','cpct',s.state==='done'?100:(s.total?100*s.done/s.total:0),s.state==='running'&&!s.total);
-    $('cres').innerHTML=s.state==='error'?'<span class="err">'+esc(s.message)+'</span>':`${s.state==='done'?'<span class="ok">Finished.</span> ':''}Deleted ${s.deleted.toLocaleString()} of ${s.total.toLocaleString()} (${fmtBytes(s.bytes)})${s.errors?`, <span class="err">${s.errors} errors</span>`:''}`;
-    if(s.state!=='running')clearInterval(tm)},500)};
-
 $('sgo').onclick=async()=>{
   if(!sroots().length){alert('Add your folders in the bar at the top first');return}
   const inPlace=!dest();
@@ -1165,7 +1325,7 @@ function setBar(barId,fillId,pctId,pct,indet){
   pct=Math.max(0,Math.min(100,pct));fill.style.width=pct+'%';lab.textContent=Math.floor(pct)+'%';
   if(pct>=12){lab.className='';lab.style.left='calc('+pct+'% - 44px)'}else{lab.className='out';lab.style.left='calc('+pct+'% + 8px)'}}
 
-const TABS=['fix','sort','clean','convert','empty'];let jobKind='fix';
+const TABS=['fix','sort','clean','convert'];const tabOf=k=>({cleanup:'clean'}[k]||k);let jobKind='fix';
 function showTab(t){if(!TABS.includes(t))t='fix';
   TABS.forEach(x=>{$('pane-'+x).style.display=x===t?'block':'none';document.querySelector('.tab[data-tab="'+x+'"]').classList.toggle('on',x===t)});
   try{localStorage.setItem('tab',t)}catch(e){}
@@ -1173,10 +1333,10 @@ function showTab(t){if(!TABS.includes(t))t='fix';
   updGoto()}
 function updGoto(){const a=$('goto');const cur=TABS.find(x=>$('pane-'+x).style.display==='block');
   const has=$('prog').style.display!=='none'||$('sum').style.display!=='none';
-  a.style.display=(has&&cur!==jobKind&&jobKind!=='clean')?'inline':'none'}
-$('goto').onclick=e=>{e.preventDefault();showTab(jobKind);$('results').scrollIntoView({behavior:'smooth'})};
+  a.style.display=(has&&cur!==tabOf(jobKind)&&jobKind!=='clean')?'inline':'none'}
+$('goto').onclick=e=>{e.preventDefault();showTab(tabOf(jobKind));$('results').scrollIntoView({behavior:'smooth'})};
 document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
-function placeResults(kind){const pane=$('pane-'+(kind==='clean'?'fix':kind));if(pane&&$('results').parentNode!==pane)pane.appendChild($('results'))}
+function placeResults(kind){const pane=$('pane-'+(kind==='clean'?'fix':tabOf(kind)));if(pane&&$('results').parentNode!==pane)pane.appendChild($('results'))}
 let startTab='fix';try{startTab=location.hash.slice(1)||localStorage.getItem('tab')||'fix'}catch(e){}
 showTab(startTab);
 
@@ -1201,24 +1361,31 @@ function showConvert(s){
 
 function liveTiles(s,c,done,nj){
   if(!s.total)return '';const x=s.extra||{};const err=(x.errors?tile(x.errors,'files with errors','bad'):'');
-  if(jobKind==='empty')return tile(s.total,'empty folders found')+tile(done,'processed so far','ok')+((s.extra||{}).errors?tile(s.extra.errors,'could not remove','bad'):'');
+  if(jobKind==='cleanup')return tile(x.json||0,'.json files')+tile(x.junk||0,'junk files')+tile(x.renamed||0,'folders renamed')+tile(x.merged||0,'folders merged')+tile(x.empty||0,'empty folders')+(x.errors?tile(x.errors,'errors','bad'):'');
   if(jobKind==='convert')return tile(s.total,'videos found')+tile(done,'checked so far')+tile(x.converted||0,'converted','ok')+tile(x.skipped_live||0,'Live Photo videos skipped')+(x.errors?tile(x.errors,'could not convert','bad'):'');
   if(jobKind==='sort')return tile(s.total,'files found')+tile(x.duplicates||0,'duplicates skipped')+tile(x.written||0,'files placed','ok')+tile(x.merged_from||0,'source folders')+tile(x.folders||0,'folders after merging')+(x.json_along?tile(x.json_along,'.json brought along'):'')+err;
   return tile(s.total,'media files')+tile(done-nj,'matched so far','ok')+tile(nj,'no JSON so far',nj?'bad':'')+tile(x.dates_changed||0,'dates changed')+tile(x.gps_changed||0,'locations changed')+tile(x.desc_changed||0,'captions changed')+tile(x.replaced_files||0,'files with info replaced')+tile(x.live_paired||0,'Live Photos paired')+tile(x.duplicates||0,'duplicates skipped')+tile(x.written||0,'files placed')+tile(x.folders||0,'output folders')+err+(s.scan?tile(s.scan.json,'JSON files found'):'')}
 
-// ---- Part 5: remove empty folders
-$('ego').onclick=async()=>{
-  if(!eroots().length){alert('Add your folders in the bar at the top first');return}
-  if(!$('edry').checked&&!confirm('This will permanently remove every folder that is completely empty (no files inside, at any depth). No files are deleted. Continue?'))return;
+// ---- Clean up (one job: .json, junk, names, empty folders)
+$('cgo').onclick=async()=>{
+  if(!croots().length){alert('Add your folders in the bar at the top first');return}
+  const kinds=[['system','cjs'],['ithmb','cji'],['picasa','cjp'],['thm','cjt']].filter(([k,id])=>$(id).checked).map(([k])=>k);
+  const o={json:$('cj').checked,json_other:$('cother').checked,junk:$('cjunk').checked?kinds:[],
+    names:$('cn').checked?{paren:$('cnp').checked,copy:$('cnc').checked,spaces:$('cns').checked,files:$('cnf').checked,dupes:$('cnd').value}:null,
+    empty:$('ce').checked?{junk:$('cejunk').checked,top:$('cetop').checked}:null};
+  if(!o.json&&!o.junk.length&&!o.names&&!o.empty){alert('Tick at least one thing to clean');return}
+  if(!$('cdry').checked){
+    if(o.json||o.junk.length){const t=prompt('This permanently deletes files in:\n'+croots().join('\n')+'\nIt cannot be undone.\nType DELETE to confirm.');if(t!=='DELETE')return}
+    else if(!confirm('This will rename, merge and/or remove folders in:\n'+croots().join('\n')+'\nContinue?'))return}
   $('sum').style.display='none';
-  const r=await post('/api/empty_start',{roots:eroots(),dry_run:$('edry').checked,ignore_junk:$('ejunk').checked,remove_top:$('etop').checked});
-  if(r.error)alert(r.error);else{jobKind='empty';placeResults('empty');$('prog').style.display='block';poll()}};
-function showEmpty(s){
-  const w=s.dry_run?'would be ':'';
-  let h=`<div class="tiles">${tile(s.scanned,'folders checked')}${tile(s.dry_run?s.empty:s.removed,'empty folders '+w+'removed','ok')}${tile(s.kept,'folders kept (have files)')}${tile(s.junk,'system leftovers '+w+'deleted')}${tile(s.skipped,'left alone (links, bundles)')}${tile(s.failed,'could not remove',s.failed?'bad':'')}</div>`;
+  const r=await post('/api/cleanup_start',{roots:croots(),dry_run:$('cdry').checked,opts:o});
+  if(r.error)alert(r.error);else{jobKind='cleanup';placeResults('cleanup');$('prog').style.display='block';poll()}};
+function showCleanup(s){
+  let h=s.sections.map(sec=>`<h2>${esc(sec.title)}</h2><div class="tiles">${sec.tiles.map(t=>tile(t[0],t[1],t[2]||'')).join('')}</div>`
+    +(sec.note?`<small>${esc(sec.note)}</small>`:'')
+    +((sec.table&&sec.table.rows.length)?tbl(sec.table.head,sec.table.rows.map(r=>r.map(c=>esc(c)))):'')).join('');
   h+=s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
-  if((s.groups||[]).length)h+=`<h2>Empty folders ${s.dry_run?'that would be':'that were'} removed (${s.group_count.toLocaleString()} top-level, each with everything inside it)</h2>`+tbl(['Folder','Folders inside'],s.groups.map(g=>[esc(g.root+'/'+g.path),g.nested.toLocaleString()]))+(s.group_count>s.groups.length?'<small>Showing '+s.groups.length+' of '+s.group_count+'. See the CSV for all.</small>':'');
-  h+='<small>Saved: a CSV listing every folder (on your Desktop).</small>';
+  h+='<small>Saved: a CSV listing every change (on your Desktop).</small>';
   $('sumbody').innerHTML=h;$('sum').style.display='block'}
 
 let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
@@ -1227,12 +1394,12 @@ let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   jobKind=s.kind||'fix';placeResults(jobKind);
   let pct=0,indet=false;
   if(s.state==='done'){pct=100}
-  else if(s.phase&&s.phase.stage==='convert'&&s.phase.total){pct=100*s.phase.done/s.phase.total}
+  else if(s.phase&&(s.phase.stage==='convert'||s.phase.stage==='pct')&&s.phase.total){pct=100*s.phase.done/s.phase.total}
   else if(s.done>0&&s.total){pct=100*s.done/s.total}
   else if(s.phase&&s.phase.total){pct=100*s.phase.done/s.phase.total}
   else if(s.state==='scanning'||s.state==='running'){indet=true}
   setBar('bar','fill','pct',pct,indet);
-  const LBL={fix:'Part 1 Fix',sort:'Part 2 Sort',convert:'Part 4 Convert',empty:'Part 5 Empty folders'}[jobKind]||'';
+  const LBL={fix:'Part 1 Fix',sort:'Part 2 Sort',convert:'Part 4 Convert',cleanup:'Part 3 Clean up'}[jobKind]||'';
   $('msg').innerHTML=(LBL?'<b>'+LBL+'</b> &middot; ':'')+(s.state==='error'?'<span class="err">'+esc(s.message)+'</span>':s.state==='done'?'<span class="ok">Finished.</span>':esc(s.message)+(s.done?` (${s.done.toLocaleString()} / ${s.total.toLocaleString()})`:''));
   const c=s.counts||{},done=s.done||0,nj=c['no-json']||0;
   $('tiles').innerHTML=liveTiles(s,c,done,nj);

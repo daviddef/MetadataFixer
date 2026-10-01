@@ -1018,7 +1018,7 @@ def is_bundle(name):
     return name.lower().endswith(BUNDLE_SUFFIXES)
 
 
-def find_empty_dirs(root, ignore_junk=True):
+def find_empty_dirs(root, ignore_junk=True, extra_ignored=None):
     """Folders below root that hold no files at all, however deep (a folder is empty only if everything in it is).
 
     Symbolic links, app/library bundles and unreadable folders count as content and are never entered.
@@ -1039,13 +1039,42 @@ def find_empty_dirs(root, ignore_junk=True):
         order.append((dirpath, all_dirs, files))
     empty, junk = set(), []
     for dirpath, all_dirs, files in reversed(order):
-        if any(not is_junk(f, ignore_junk) for f in files):
+        extra = extra_ignored or ()
+        if any(not is_junk(f, ignore_junk) and os.path.join(dirpath, f) not in extra for f in files):
             continue
         if all(os.path.join(dirpath, d) in empty for d in all_dirs):
             empty.add(dirpath)
             junk += [os.path.join(dirpath, f) for f in files]
     ordered = sorted(empty, key=lambda p: -len(Path(p).parts))
     return ordered, junk, len(order), len(content) + len([b for b in blocked if b])
+
+
+JUNK_KINDS = {
+    "system": lambda n: is_junk(n, True),
+    "ithmb": lambda n: n.lower().endswith(".ithmb"),                  # iPod / iTunes photo thumbnail caches
+    "picasa": lambda n: n.lower() in (".picasa.ini", "picasa.ini"),
+    "thm": lambda n: n.lower().endswith(".thm"),                      # camera video thumbnails
+}
+
+
+def find_junk(folders, kinds):
+    """Files that nothing needs (system leftovers, thumbnail caches). Returns [(path, size, kind)]."""
+    items = []
+    for f in folders:
+        for dp, dns, fns in os.walk(f, followlinks=False):
+            dns[:] = [d for d in dns if not (os.path.islink(os.path.join(dp, d)) or is_bundle(d))]
+            for n in fns:
+                for k in kinds:
+                    test = JUNK_KINDS.get(k)
+                    if test and test(n):
+                        p = os.path.join(dp, n)
+                        try:
+                            size = os.path.getsize(p)
+                        except OSError:
+                            size = 0
+                        items.append((p, size, k))
+                        break
+    return items
 
 
 def remove_empty_dir(path, ignore_junk=True):
@@ -1058,6 +1087,185 @@ def remove_empty_dir(path, ignore_junk=True):
         return True, ""
     except OSError as e:
         return False, str(e)
+
+
+# ---------------------------------------------------------------- Part 3b: tidy names
+PAREN_RE = re.compile(r"\s*\(\d{1,2}\)$")
+COPY_RE = re.compile(r"\s+(?:-\s*)?copy(?:\s+\d{1,2}|\s*\(\d{1,2}\))?$", re.I)
+
+
+def clean_name(name, opts, is_file):
+    """Remove duplicate-copy markers like ' (1)' or ' copy 2' and stray spaces. Years such as '(2019)' are kept."""
+    stem, ext = os.path.splitext(name) if is_file else (name, "")
+    for _ in range(3):
+        before = stem
+        if opts.get("paren"):
+            stem = PAREN_RE.sub("", stem)
+        if opts.get("copy"):
+            stem = COPY_RE.sub("", stem)
+        if stem == before:
+            break
+    if opts.get("spaces"):
+        stem = re.sub(r"\s{2,}", " ", stem).strip()
+    return stem + ext if stem.strip() else name
+
+
+def _sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _same_content(a, b):
+    try:
+        return os.path.getsize(a) == os.path.getsize(b) and _sha256(a) == _sha256(b)
+    except OSError:
+        return False
+
+
+def _free_name(path):
+    p = Path(path)
+    i = 1
+    while True:
+        cand = p.with_name(f"{p.stem}_{i}{p.suffix}")
+        if not cand.exists():
+            return str(cand)
+        i += 1
+
+
+def merge_dir(src, dst, dupes_action, stats):
+    """Move everything from src into the existing folder dst; never overwrites. Identical files are duplicates."""
+    for dp, dns, fns in os.walk(src, topdown=True, followlinks=False):
+        dns[:] = [d for d in dns if not os.path.islink(os.path.join(dp, d))]
+        rel = os.path.relpath(dp, src)
+        tdir = dst if rel == "." else os.path.join(dst, rel)
+        os.makedirs(tdir, exist_ok=True)
+        for f in fns:
+            sp, tp = os.path.join(dp, f), os.path.join(tdir, f)
+            if is_junk(f, True):
+                os.remove(sp)
+                continue
+            if not os.path.exists(tp):
+                shutil.move(sp, tp)
+                stats["moved"] += 1
+            elif _same_content(sp, tp):
+                stats["dupes"] += 1
+                if dupes_action == "delete":
+                    os.remove(sp)
+                else:
+                    aside = os.path.join(os.path.dirname(dst), "_duplicates", os.path.basename(dst), rel if rel != "." else "")
+                    os.makedirs(aside, exist_ok=True)
+                    shutil.move(sp, _free_name(os.path.join(aside, f)) if os.path.exists(os.path.join(aside, f)) else os.path.join(aside, f))
+            else:
+                shutil.move(sp, _free_name(tp))
+                stats["moved"] += 1
+                stats["conflicts"] += 1
+    for dp, _, _ in os.walk(src, topdown=False):
+        try:
+            os.rmdir(dp)
+        except OSError:
+            pass
+
+
+def _preview_merge(src, dst, stats):
+    for dp, dns, fns in os.walk(src, topdown=True, followlinks=False):
+        rel = os.path.relpath(dp, src)
+        tdir = dst if rel == "." else os.path.join(dst, rel)
+        for f in fns:
+            if is_junk(f, True):
+                continue
+            sp, tp = os.path.join(dp, f), os.path.join(tdir, f)
+            if not os.path.exists(tp):
+                stats["moved"] += 1
+            elif _same_content(sp, tp):
+                stats["dupes"] += 1
+            else:
+                stats["moved"] += 1
+                stats["conflicts"] += 1
+
+
+def tidy_names(roots, opts, dry_run, progress=None):
+    """Rename (and, when the clean name already exists, merge) folders; optionally files. Roots themselves are kept."""
+    rows = []
+    dirs = []
+    for root in roots:
+        for dp, dns, _ in os.walk(root, topdown=True, followlinks=False):
+            keep = []
+            for d in dns:
+                p = os.path.join(dp, d)
+                if os.path.islink(p) or is_bundle(d) or d.startswith("."):
+                    continue
+                keep.append(d)
+                dirs.append(p)
+            dns[:] = keep
+    dirs.sort(key=lambda p: -len(Path(p).parts))  # innermost first, so parents are renamed after their contents
+    todo = [(p, clean_name(os.path.basename(p), opts, False)) for p in dirs]
+    todo = [(p, n) for p, n in todo if n != os.path.basename(p)]
+    claimed = set()
+    total = len(todo)
+    for i, (p, new) in enumerate(todo, 1):
+        target = os.path.join(os.path.dirname(p), new)
+        row = {"kind": "folder", "old": p, "new": target, "action": "", "moved": 0, "dupes": 0, "conflicts": 0, "detail": ""}
+        try:
+            same = os.path.exists(target) and os.path.samefile(p, target)
+            if (not os.path.exists(target) and target not in claimed) or same:
+                row["action"] = "would-rename" if dry_run else "renamed"
+                if dry_run:
+                    claimed.add(target)
+                else:
+                    os.rename(p, target)
+            elif os.path.isdir(target) or target in claimed:
+                stats = {"moved": 0, "dupes": 0, "conflicts": 0}
+                row["action"] = "would-merge" if dry_run else "merged"
+                if dry_run:
+                    if os.path.isdir(target):
+                        _preview_merge(p, target, stats)
+                    else:  # target will itself be created by an earlier rename in this run
+                        stats["moved"] = sum(len(f) for _, _, f in os.walk(p))
+                else:
+                    merge_dir(p, target, opts.get("dupes", "delete"), stats)
+                row.update(stats)
+            else:
+                row["action"], row["detail"] = "skipped", "a file with that name already exists"
+        except OSError as e:
+            row["action"], row["detail"] = "failed", str(e)
+        rows.append(row)
+        if progress:
+            progress("folders", i, total)
+    if opts.get("files"):
+        files = []
+        for root in roots:
+            for dp, dns, fns in os.walk(root, topdown=True, followlinks=False):
+                dns[:] = [d for d in dns if not (os.path.islink(os.path.join(dp, d)) or is_bundle(d) or d.startswith("."))]
+                for f in fns:
+                    if f.startswith(".") or f.lower().endswith(".json"):
+                        continue
+                    new = clean_name(f, opts, True)
+                    if new != f:
+                        files.append((os.path.join(dp, f), os.path.join(dp, new)))
+        total2 = len(files)
+        for i, (old, new) in enumerate(files, 1):
+            row = {"kind": "file", "old": old, "new": new, "action": "", "moved": 0, "dupes": 0, "conflicts": 0, "detail": ""}
+            try:
+                if os.path.exists(new) or new in claimed:
+                    row["action"], row["detail"] = "skipped", "a file with the clean name already exists"
+                elif dry_run:
+                    row["action"] = "would-rename"
+                    claimed.add(new)
+                else:
+                    os.rename(old, new)
+                    row["action"] = "renamed"
+                    oj, nj = old + ".json", new + ".json"
+                    if os.path.exists(oj) and not os.path.exists(nj):
+                        os.rename(oj, nj)
+            except OSError as e:
+                row["action"], row["detail"] = "failed", str(e)
+            rows.append(row)
+            if progress:
+                progress("files", i, total2)
+    return rows
 
 
 def main():
