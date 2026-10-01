@@ -47,12 +47,13 @@ The app has five tabs: **1 Fix metadata**, **2 Sort**, **3 Clean up** (remove `.
 
 ## Choosing your folders (once, for every tab)
 
-The **Folders bar** at the top of the window holds the folders every tab works on, so you only choose them once.
+The frozen header holds two blocks that every tab uses, so you only choose them once:
 
-- Press **Add folders...** (hold Cmd in the Finder dialog to pick several), or press **Edit list** and type or paste one path per line, or drag folders onto the bar. Each folder appears as a chip; press the **x** on a chip to remove it.
-- Your list is remembered in your browser, so it is still there next time you open the app.
-- Each tab shows which folders it is using. Output folders (where the fixed or sorted copies go) are still chosen on their own tab.
-- **Order matters in one place:** when you sort in place (Move with no output folder), everything merges into the **first** folder in the list. Use **Edit list** to reorder.
+- **Source:** the folders to work on. Press **Add folders...** (hold Cmd in the Finder dialog to pick several), or **Edit list** to type or paste one path per line, or drag folders onto the header. Each folder shows as a chip; press the **x** on a chip to remove it.
+- **Destination:** where the fixed or sorted copies go. Type or paste a path, or press **Choose...**. Fix metadata and Sort use it; the other tabs ignore it. Leave it empty to fix files in place (Fix), or, with Move ticked, to merge everything into the first source folder (Sort).
+- Both are remembered in your browser. The **up arrow** at the end of the Destination row folds the two blocks into one line ("2 sources -> Destination") to save space; **Show** brings them back.
+- Each tab shows which folders and destination it is using.
+- **Order matters in one place:** when you sort in place, everything merges into the **first** source folder. Use **Edit list** to reorder.
 - Because the same list is used everywhere, check it before a destructive step: the Clean-up tab and the confirmation prompts list the folders they will act on.
 
 ## Using the app (recommended)
@@ -67,8 +68,8 @@ A page opens at `http://127.0.0.1:8765`. It runs only on your computer. Leave Te
 ### 1. Add your Takeout folders
 Use the **Folders bar** at the top (see above). Add **every** Takeout batch. A photo in one batch can find its `.json` in another, so the more batches you include, the fewer files are left unmatched. Dropping folders from Finder onto the box works only if your browser passes the path; otherwise use the button.
 
-### 2. Choose an output folder
-Pick a new empty folder. Fixed copies and reports are saved there, and your Takeout originals are not touched. If you leave it empty, files are edited in place (you are asked to confirm). Live Photo repair needs an output folder.
+### 2. Choose a destination
+Set the **Destination** in the header (a new empty folder is best). Fixed copies and reports are saved there, and your Takeout originals are not touched. If you leave it empty, files are edited in place (you are asked to confirm). Live Photo repair needs an output folder.
 
 ### 3. Pick options
 | Option | Default | What it does |

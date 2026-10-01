@@ -26,7 +26,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.01-f"
+VERSION = "2026.10.01-g"
 STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}, "recent": [], "clean": {"state": "idle"}, "update": {"state": "idle", "files": []}, "phase": None, "kind": "fix", "version": VERSION, "boot": time.time()}
 LOCK = threading.Lock()
 
@@ -892,6 +892,8 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 .usef{padding:10px 12px;border:1px dashed var(--line);border-radius:10px;color:var(--mute);font-size:13px;margin-bottom:12px;background:var(--bg)}.usef b{color:var(--ink)}
 #fall{min-height:80px}
 .sm2{display:none}@media(max-width:560px){.lg{display:none}.sm2{display:inline}.fhead{gap:6px}button.sm{padding:3px 8px;font-size:12px}#frame{padding-top:8px}.hero{padding:14px 14px 12px}.hero .logo{width:44px;height:44px}}
+.frow{display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap;font-size:13px}.frow .flabel{white-space:nowrap}
+.frow .fchips{flex:1 1 160px;margin-top:0;min-width:0}.frow:not(:first-child) input[type=text]{flex:1 1 160px;min-width:0;padding:5px 8px;font-size:12px}
 </style></head><body><main>
 <div id="upd" style="display:none" class="card"><b>A newer version is available.</b> <span id="updmsg"></span>
 <div style="margin-top:8px"><button class="p" id="updgo">Update now</button> <button id="updno">Not now</button></div></div>
@@ -923,9 +925,10 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
     <button class="tab" data-tab="empty" role="tab"><b>5</b> Empty folders</button>
   </nav>
   <div class="fbar" id="fbar">
-    <div class="fhead"><span class="flabel">&#128193; <span class="lg">Folders for every tab: </span><span class="sm2">Folders: </span><b id="fsum"></b></span><button id="fadd" class="sm">Add folders...</button><button id="fedit" class="sm">Edit list</button></div>
-    <div class="fchips" id="fchips"></div>
+    <div class="frow" id="frs"><span class="flabel">&#128193; Source <b id="fsum"></b></span><div class="fchips" id="fchips"></div><button id="fadd" class="sm">Add folders...</button><button id="fedit" class="sm">Edit list</button></div>
     <div id="fpanel" style="display:none"><textarea id="fall" placeholder="One folder path per line (drag folders here too)" spellcheck="false"></textarea><div class="row" style="margin-top:6px"><button id="fdone" class="p sm">Done</button><button id="fclear" class="sm">Clear all</button></div></div>
+    <div class="frow" id="frd"><span class="flabel">&#127919; Destination</span><input type="text" id="fdest" placeholder="Where fixed or sorted copies go (optional when moving)" spellcheck="false"><button id="fdbtn" class="sm">Choose...</button><button id="fdclr" class="sm">Clear</button><button id="fcollapse" class="sm" title="Hide the folder boxes">&#9650;</button></div>
+    <div class="frow" id="fcol" style="display:none"><span class="flabel" id="fcolt"></span><button id="fexpand" class="sm" title="Show the folder boxes">&#9660; Show</button></div>
   </div>
   <div class="status"><div class="srow"><span id="msg">Ready. Choose a tab, set it up and press Start.</span><a href="#" id="goto" style="display:none">View results &rarr;</a></div>
   <div class="bar" id="bar"><i id="fill"></i><span id="pct">0%</span></div></div>
@@ -934,9 +937,7 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 <h2 class="ph">Fix dates, locations and captions</h2>
 <div class="card usefcard"><b>1. Takeout folders</b><div class="usef" style="margin:8px 0 0"><span class="fnote"></span>. Add every Takeout batch: a photo in one batch finds its JSON in another.</div></div>
 
-<div class="card"><label class="t">2. Where to put the fixed copies</label>
-<div class="row"><input type="text" id="out" placeholder="Leave empty to fix files in place"><button id="b2">Choose folder</button></div>
-<small>Recommended: a new folder, so originals stay untouched. Reports are saved here too (or on your Desktop if empty).</small></div>
+<div class="card usefcard"><b>2. Where the fixed copies go</b><div class="usef" style="margin:8px 0 0"><b>Destination:</b> <span class="dnote" data-empty="none chosen, so files are fixed in place (the originals are changed)"></span><br><small style="display:inline">Recommended: a new folder, so originals stay untouched. Reports are saved there too (or on your Desktop if none).</small></div></div>
 
 <div class="card"><label class="t">3. Options</label>
 <div class="opt"><input type="checkbox" id="dry" checked><div>Preview only<small>On by default. Works out what it would do and reports the numbers, but changes nothing. Untick to do it for real.</small></div></div>
@@ -965,9 +966,8 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 <h2 class="ph">Sort only: merge folders, remove duplicates</h2>
 <div class="card"><small style="margin-top:0">Tidies the folder structure and nothing else: no dates, locations or captions are touched. All the same-named folders (every <i>Photos from 2012</i>) are merged into one, and identical duplicate photos are skipped. Use it on its own, or before Part 1.</small>
 <div class="usef" style="margin-top:12px"><b>Folders to sort:</b> <span class="fnote"></span> (the first one in the list is where everything merges when you sort in place)</div>
-<label class="t" style="margin-top:12px">Output folder <span style="font-weight:400;color:var(--mute)">(optional when moving)</span></label>
-<div class="row"><input type="text" id="sout" placeholder="Where the sorted library goes"><button id="sb2">Choose folder</button></div>
-<small>When you tick <b>Move</b> you can leave this empty: everything is then merged into the <b>first folder in the list above</b>, so you can sort in place. Folders with the same path (for example <i>2014/08</i> in two different folders, or every <i>Photos from 2012</i>) are merged into one; <i>Takeout N / Google Photos</i> wrappers are ignored.</small>
+<div class="usef" style="margin-top:12px"><b>Destination:</b> <span class="dnote" data-empty="none chosen: with Move, everything merges into the first source folder"></span></div>
+<small>When you tick <b>Move</b> you can leave this empty: everything is then merged into the <b>first source folder in the header</b>, so you can sort in place. Folders with the same path (for example <i>2014/08</i> in two different folders, or every <i>Photos from 2012</i>) are merged into one; <i>Takeout N / Google Photos</i> wrappers are ignored.</small>
 <div class="opt"><input type="checkbox" id="sdry" checked><div>Preview only<small>On by default. Reports what would happen; copies and moves nothing.</small></div></div>
 <div class="opt"><input type="checkbox" id="sdedupe" checked><div>Skip exact duplicate photos<small>Compares file contents, so the same photo repeated in several folders, Takeouts or albums is kept once. Different photos that share a name are both kept (the second becomes <i>name_1</i>).</small></div></div>
 <div class="opt"><input type="checkbox" id="sjson" checked><div>Bring the .json info files along<small>Puts each photo&#39;s .json file next to it, so you can still run Part 1 afterwards. Untick if you only want photos.</small></div></div>
@@ -1025,7 +1025,7 @@ function renderFolders(){
   $('fsum').textContent=FOLDERS.length?FOLDERS.length+(FOLDERS.length===1?' folder':' folders'):'none chosen yet';
   const note=FOLDERS.length?'using the '+(FOLDERS.length===1?'folder':FOLDERS.length+' folders')+' chosen at the top':'none chosen yet. Add folders in the bar at the top';
   document.querySelectorAll('.fnote').forEach(e=>{e.textContent=note});
-  $('fall').value=FOLDERS.join('\n')}
+  $('fall').value=FOLDERS.join('\n');if(typeof renderDest==='function')renderDest()}
 function saveFolders(){try{localStorage.setItem('folders',JSON.stringify(FOLDERS))}catch(e){};renderFolders()}
 function addFolders(list){list.forEach(p=>{p=(p||'').trim().replace(/\/+$/,'');if(p&&!FOLDERS.includes(p))FOLDERS.push(p)});saveFolders()}
 $('fadd').onclick=async()=>{const r=await post('/api/choose',{prompt:'Choose one or more folders (hold Cmd to select several)'});if(r.paths)addFolders(r.paths)};
@@ -1038,14 +1038,30 @@ fbar.ondrop=e=>{e.preventDefault();fbar.classList.remove('over');
   const t=(e.dataTransfer.getData('text/uri-list')||e.dataTransfer.getData('text/plain')||'').split(/\r?\n/).filter(Boolean);
   const paths=t.filter(x=>x.startsWith('file://')||x.startsWith('/')).map(x=>x.startsWith('file://')?decodeURIComponent(x.replace(/^file:\/\/[^\/]*/,'')):x);
   if(paths.length)addFolders(paths);else alert('Your browser did not share the folder path. Use "Add folders..." or paste the paths into Edit list.')};
+// ---- shared destination + collapse (header)
+let DEST='';try{DEST=localStorage.getItem('dest')||''}catch(e){}
+const dest=()=>$('fdest').value.trim().replace(/\/+$/,'');
+function renderDest(){
+  document.querySelectorAll('.dnote').forEach(e=>{e.textContent=dest()||e.dataset.empty||'none chosen'});
+  const nm=p=>p.split('/').filter(Boolean).pop()||p;
+  $('fcolt').textContent='\u{1F4C1} '+(FOLDERS.length||'no')+(FOLDERS.length===1?' source':' sources')+'  \u2192  \u{1F3AF} '+(dest()?nm(dest()):'no destination')}
+function saveDest(){try{localStorage.setItem('dest',dest())}catch(e){};renderDest()}
+$('fdest').value=DEST;
+$('fdest').oninput=saveDest;
+$('fdbtn').onclick=async()=>{const r=await post('/api/choose',{prompt:'Choose the destination folder'});if(r.paths&&r.paths[0]){$('fdest').value=r.paths[0].replace(/\/+$/,'');saveDest()}};
+$('fdclr').onclick=()=>{$('fdest').value='';saveDest()};
+function setCollapsed(c){['frs','frd'].forEach(i=>$(i).style.display=c?'none':'flex');$('fcol').style.display=c?'flex':'none';if(c)$('fpanel').style.display='none';try{localStorage.setItem('fcollapsed',c?'1':'')}catch(e){}}
+$('fcollapse').onclick=()=>setCollapsed(true);$('fexpand').onclick=()=>setCollapsed(false);
+let col=false;try{col=!!localStorage.getItem('fcollapsed')}catch(e){}
+renderDest();setCollapsed(col);
 renderFolders();
-$('b2').onclick=async()=>{const r=await post('/api/choose',{prompt:'Choose where to save the fixed files'});if(r.paths&&r.paths[0])$('out').value=r.paths[0]};
+
 $('go').onclick=async()=>{
   if(!roots().length){alert('Add your folders in the bar at the top first');return}
-  if(!$('dry').checked&&!$('out').value.trim()&&!confirm('No output folder: files will be edited IN PLACE. Continue?'))return;
+  if(!$('dry').checked&&!dest()&&!confirm('No output folder: files will be edited IN PLACE. Continue?'))return;
   if($('move').checked&&!$('dry').checked&&!confirm('MOVE will take files out of your Takeout folders. Make sure you have another backup. Continue?'))return;
   $('sum').style.display='none';
-  const r=await post('/api/start',{roots:roots(),out:$('out').value.trim(),dry_run:$('dry').checked,overwrite:$('ow').checked,pair_live:$('live').checked,dedupe:$('dedupe').checked,move:$('move').checked,date_policy:$('datepol').value});
+  const r=await post('/api/start',{roots:roots(),out:dest(),dry_run:$('dry').checked,overwrite:$('ow').checked,pair_live:$('live').checked,dedupe:$('dedupe').checked,move:$('move').checked,date_policy:$('datepol').value});
   if(r.error)alert(r.error);else poll();
 };
 $('rev').onclick=()=>post('/api/reveal');
@@ -1095,14 +1111,13 @@ $('cdel').onclick=async()=>{
     $('cres').innerHTML=s.state==='error'?'<span class="err">'+esc(s.message)+'</span>':`${s.state==='done'?'<span class="ok">Finished.</span> ':''}Deleted ${s.deleted.toLocaleString()} of ${s.total.toLocaleString()} (${fmtBytes(s.bytes)})${s.errors?`, <span class="err">${s.errors} errors</span>`:''}`;
     if(s.state!=='running')clearInterval(tm)},500)};
 
-$('sb2').onclick=async()=>{const r=await post('/api/choose',{prompt:'Choose where the sorted library goes'});if(r.paths&&r.paths[0])$('sout').value=r.paths[0]};
 $('sgo').onclick=async()=>{
   if(!sroots().length){alert('Add your folders in the bar at the top first');return}
-  const inPlace=!$('sout').value.trim();
+  const inPlace=!dest();
   if(inPlace&&!$('smove').checked){alert('Choose an output folder, or tick "Move" to merge everything into the first folder in the list');return}
   if($('smove').checked&&!$('sdry').checked&&!confirm(inPlace?'MOVE will merge everything into '+sroots()[0]+' and take files out of the other folders. Make sure you have another backup. Continue?':'MOVE takes files out of your source folders. Make sure you have another backup. Continue?'))return;
   $('sum').style.display='none';
-  const r=await post('/api/sort_start',{roots:sroots(),out:$('sout').value.trim(),dry_run:$('sdry').checked,dedupe:$('sdedupe').checked,bring_json:$('sjson').checked,move:$('smove').checked});
+  const r=await post('/api/sort_start',{roots:sroots(),out:dest(),dry_run:$('sdry').checked,dedupe:$('sdedupe').checked,bring_json:$('sjson').checked,move:$('smove').checked});
   if(r.error)alert(r.error);else{$('prog').style.display='block';$('prog').scrollIntoView({behavior:'smooth'});poll()}};
 function showSort(s){
   const w=s.dry_run?'would be ':'';
