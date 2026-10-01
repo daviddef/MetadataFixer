@@ -215,6 +215,7 @@ How it works:
 - A video that cannot be read, or whose conversion fails the check, is left untouched and listed in the report.
 - An interrupted run can be repeated: finished conversions are recognised and skipped.
 - Progress is shown by video length, so the percentage moves smoothly through long conversions.
+- **Sizes:** a preview shows how many videos (and how much space) would be re-wrapped versus re-encoded, and the largest ones; the exact saving can only be known after converting. During a real run a **space saved so far** tile updates as each video finishes. The final summary shows total size **before, after and saved** (with a percentage), a breakdown by method (re-wrapped vs re-encoded) and by file type, and a **Biggest savings** table. Re-wrapped videos stay about the same size; re-encoded ones usually shrink a lot. The saving is real free space only if the originals are deleted; if you keep them or move them to `_original_videos`, they still use disk space until you delete them.
 
 Suggested order: run Part 1 (it creates the Live Photo `.MOV` files), then Part 4 for your other videos.
 

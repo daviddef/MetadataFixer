@@ -26,7 +26,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.01-i"
+VERSION = "2026.10.01-j"
 STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}, "recent": [], "clean": {"state": "idle"}, "update": {"state": "idle", "files": []}, "phase": None, "kind": "fix", "version": VERSION, "boot": time.time()}
 LOCK = threading.Lock()
 
@@ -480,6 +480,8 @@ def run_convert(roots, dry_run, exts, include_live, quality, action):
             counts[row["status"]] += 1
             if row["status"] in ("converted", "already-converted"):
                 extra["converted"] += 1
+                extra["bytes_before"] += int(row["size_before"] or 0)
+                extra["bytes_after"] += int(row["size_after"] or 0)
             if row["status"] in ("failed", "unreadable"):
                 extra["errors"] += 1
             if row["status"] == "skipped-live":
@@ -511,6 +513,18 @@ def run_convert(roots, dry_run, exts, include_live, quality, action):
               "bytes_after": sum(int(r["size_after"] or 0) for r in done_rows),
               "failures": [{"file": Path(r["file"]).name, "status": r["status"], "detail": r["detail"]}
                            for r in rows if r["status"] in ("failed", "unreadable")][:30], "tips": []}
+        sized = done_rows if done_rows else todo_rows
+        by_mode, by_ext = {}, {}
+        for r in sized:
+            for table, key in ((by_mode, r["mode"]), (by_ext, Path(r["file"]).suffix.lower())):
+                d = table.setdefault(key, {"n": 0, "before": 0, "after": 0})
+                d["n"] += 1
+                d["before"] += int(r["size_before"] or 0)
+                d["after"] += int(r["size_after"] or 0)
+        sm["by_mode"], sm["by_ext"] = by_mode, by_ext
+        sm["top"] = [{"file": Path(r["file"]).name, "mode": r["mode"], "before": int(r["size_before"] or 0), "after": int(r["size_after"] or 0)}
+                     for r in sorted(sized, key=lambda r: -(int(r["size_before"] or 0) - int(r["size_after"] or 0)) if done_rows
+                                     else -int(r["size_before"] or 0))[:15]]
         if sm["skipped_live"]:
             sm["tips"].append("%d Live Photo videos were left as .MOV so Apple Photos keeps them paired with their stills. "
                               "Tick 'Also convert Live Photo videos' only if you do not need that." % sm["skipped_live"])
@@ -1352,17 +1366,34 @@ $('vgo').onclick=async()=>{
   if(r.error)alert(r.error);else{jobKind='convert';placeResults('convert');$('prog').style.display='block';poll()}};
 function showConvert(s){
   const w=s.dry_run?'would be ':'';
+  const pc=(b,a)=>b?Math.round(100*(1-a/b)):0;
   let h=`<div class="tiles">${tile(s.total,'videos found')}${tile(s.dry_run?s.would:s.converted,'videos '+w+'converted','ok')}${tile(s.remux,'re-wrapped (lossless)')}${tile(s.encode,'re-encoded')}${tile(s.skipped_live,'Live Photo videos skipped')}${tile(s.failed,'could not convert',s.failed?'bad':'')}</div>`;
-  if(!s.dry_run&&s.converted)h+=`<div class="tip" style="border-color:var(--acc)">${fmtBytes(s.bytes_before)} became ${fmtBytes(s.bytes_after)} (${s.bytes_before?Math.round(100*(1-s.bytes_after/s.bytes_before)):0}% smaller). Originals: ${({move:'moved to _original_videos',keep:'kept in place',delete:'deleted'})[s.action]}.</div>`;
+  if(!s.dry_run&&s.converted){
+    const saved=s.bytes_before-s.bytes_after;
+    h+=`<h2>Size before and after</h2><div class="tiles">${tile(fmtBytes(s.bytes_before),'before')}${tile(fmtBytes(s.bytes_after),'after')}${tile((saved>=0?'':'+')+fmtBytes(Math.abs(saved))+' ('+(saved>=0?'':'+')+Math.abs(pc(s.bytes_before,s.bytes_after))+'%)',saved>=0?'space saved':'space used','ok')}</div>`;
+    const rows=[];const M={remux:'Re-wrapped (lossless)',encode:'Re-encoded'};
+    Object.entries(s.by_mode||{}).forEach(([k,v])=>rows.push([M[k]||k,v.n.toLocaleString(),fmtBytes(v.before),fmtBytes(v.after),pc(v.before,v.after)+'%']));
+    Object.entries(s.by_ext||{}).forEach(([k,v])=>rows.push([k+' files',v.n.toLocaleString(),fmtBytes(v.before),fmtBytes(v.after),pc(v.before,v.after)+'%']));
+    h+=tbl(['','Videos','Before','After','Saved'],rows);
+    if((s.top||[]).length)h+='<h2>Biggest savings</h2>'+tbl(['Video','How','Before','After','Saved'],s.top.map(t=>[esc(t.file),M[t.mode]||t.mode,fmtBytes(t.before),fmtBytes(t.after),fmtBytes(Math.max(0,t.before-t.after))+' ('+pc(t.before,t.after)+'%)']));
+    h+=`<div class="tip" style="border-color:var(--acc)">Originals: ${({move:'moved to _original_videos (still using disk space until you delete that folder)',keep:'kept in place (still using disk space)',delete:'deleted, so the saving above is real free space'})[s.action]}.</div>`;
+  } else if(s.dry_run){
+    h+=`<h2>Size of what would be converted</h2><div class="tiles">${tile(fmtBytes(s.bytes_before),'total size now')}</div>`;
+    const M={remux:'Re-wrapped: stays about the same size, no quality loss',encode:'Re-encoded: usually much smaller; the exact saving is shown after converting'};
+    const rows=Object.entries(s.by_mode||{}).map(([k,v])=>[M[k]||k,v.n.toLocaleString(),fmtBytes(v.before)]);
+    Object.entries(s.by_ext||{}).forEach(([k,v])=>rows.push([k+' files',v.n.toLocaleString(),fmtBytes(v.before)]));
+    h+=tbl(['','Videos','Size now'],rows);
+    if((s.top||[]).length)h+='<h2>Largest videos to convert</h2>'+tbl(['Video','How','Size now'],s.top.map(t=>[esc(t.file),t.mode==='remux'?'Re-wrap':'Re-encode',fmtBytes(t.before)]));
+  }
   h+=s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
   if((s.failures||[]).length)h+='<h2>Problems</h2>'+tbl(['File','Result','Detail'],s.failures.map(f=>[esc(f.file),esc(f.status),esc(f.detail)]));
-  h+='<small>Saved: a CSV with the result for every video (on your Desktop).</small>';
+  h+='<small>Saved: a CSV with the before and after size of every video (on your Desktop).</small>';
   $('sumbody').innerHTML=h;$('sum').style.display='block'}
 
 function liveTiles(s,c,done,nj){
   if(!s.total)return '';const x=s.extra||{};const err=(x.errors?tile(x.errors,'files with errors','bad'):'');
   if(jobKind==='cleanup')return tile(x.json||0,'.json files')+tile(x.junk||0,'junk files')+tile(x.renamed||0,'folders renamed')+tile(x.merged||0,'folders merged')+tile(x.empty||0,'empty folders')+(x.errors?tile(x.errors,'errors','bad'):'');
-  if(jobKind==='convert')return tile(s.total,'videos found')+tile(done,'checked so far')+tile(x.converted||0,'converted','ok')+tile(x.skipped_live||0,'Live Photo videos skipped')+(x.errors?tile(x.errors,'could not convert','bad'):'');
+  if(jobKind==='convert')return tile(s.total,'videos found')+tile(done,'checked so far')+tile(x.converted||0,'converted','ok')+(x.bytes_before?tile(fmtBytes(Math.max(0,x.bytes_before-x.bytes_after))+' ('+Math.round(100*(1-x.bytes_after/x.bytes_before))+'%)','space saved so far','ok'):'')+tile(x.skipped_live||0,'Live Photo videos skipped')+(x.errors?tile(x.errors,'could not convert','bad'):'');
   if(jobKind==='sort')return tile(s.total,'files found')+tile(x.duplicates||0,'duplicates skipped')+tile(x.written||0,'files placed','ok')+tile(x.merged_from||0,'source folders')+tile(x.folders||0,'folders after merging')+(x.json_along?tile(x.json_along,'.json brought along'):'')+err;
   return tile(s.total,'media files')+tile(done-nj,'matched so far','ok')+tile(nj,'no JSON so far',nj?'bad':'')+tile(x.dates_changed||0,'dates changed')+tile(x.gps_changed||0,'locations changed')+tile(x.desc_changed||0,'captions changed')+tile(x.replaced_files||0,'files with info replaced')+tile(x.live_paired||0,'Live Photos paired')+tile(x.duplicates||0,'duplicates skipped')+tile(x.written||0,'files placed')+tile(x.folders||0,'output folders')+err+(s.scan?tile(s.scan.json,'JSON files found'):'')}
 
