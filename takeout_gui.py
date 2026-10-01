@@ -26,7 +26,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.01-e"
+VERSION = "2026.10.01-f"
 STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}, "recent": [], "clean": {"state": "idle"}, "update": {"state": "idle", "files": []}, "phase": None, "kind": "fix", "version": VERSION, "boot": time.time()}
 LOCK = threading.Lock()
 
@@ -294,7 +294,11 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
             w.writeheader()
             w.writerows(changed)
         fx.close_all()
+        pruned = fx.prune_empty_dirs(resolved) if (move and out_root and not dry_run) else 0
         sm = summarise(rows, sidecars, resolved, dry_run)
+        sm["pruned"] = pruned
+        if pruned:
+            sm["tips"].append("%d folders left empty by the move were removed. Google's .json files are left where they were; remove them with the Clean up tab, then use Empty folders to tidy the rest." % pruned)
         sm["dupe_bytes"] = getattr(args, "dupe_bytes", 0)
         sm["samples"] = [{"file": Path(r["file"]).name, "date": [r["date"], r["date_before"], r["date_google"], r.get("date_note", "")],
                           "gps": [r["gps"], r["gps_before"], r["gps_google"]],

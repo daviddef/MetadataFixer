@@ -744,16 +744,22 @@ def process(m, idx, args, out_root):
     exif_args, taken = build_args(d, ext, args.overwrite, skip) if d else ([], None)
     if final_taken:
         taken = final_taken  # file times follow the date that actually won
-    dest = None
+    dest, at_dest = None, False
     if out_root:
-        dest = claim_dest(dest_dir_for(m, taken, args, out_root) / m.name, args)
+        first = dest_dir_for(m, taken, args, out_root) / m.name
+        if str(first) == str(m):  # already where it belongs (output folder is one of the sources): fix it in place
+            dest, at_dest = m, True
+            with args.lock:
+                args.claimed.add(str(m))
+        else:
+            dest = claim_dest(first, args)
         row["output"] = str(dest)
     if args.dry_run:
         row["status"] = "would-update" if d else status0
         row["detail"] = " ".join(exif_args)[:200] if d else ""
         return row
     target = m
-    if out_root:
+    if out_root and not at_dest:
         dest.parent.mkdir(parents=True, exist_ok=True)
         place_file(m, dest, getattr(args, "move", False))
         target = dest
