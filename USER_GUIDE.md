@@ -69,7 +69,7 @@ A page opens at `http://127.0.0.1:8765`. It runs only on your computer. Leave Te
 Use the **Folders bar** at the top (see above). Add **every** Takeout batch. A photo in one batch can find its `.json` in another, so the more batches you include, the fewer files are left unmatched. Dropping folders from Finder onto the box works only if your browser passes the path; otherwise use the button.
 
 ### 2. Choose a destination
-Set the **Destination** in the header (a new empty folder is best). Fixed copies and reports are saved there, and your Takeout originals are not touched. If you leave it empty, files are edited in place (you are asked to confirm). Live Photo repair needs an output folder.
+Set the **Destination** in the header (a new empty folder is best). Fixed copies and reports are saved there, and your Takeout originals are not touched. If you leave it empty, files are edited in place (you are asked to confirm).
 
 ### 3. Pick options
 | Option | Default | What it does |
