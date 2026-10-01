@@ -158,14 +158,15 @@ Takeout splits a Live Photo into a still (`IMG_1234.HEIC`) and a video (`IMG_123
 
 The **Sort only** panel does just the tidying, with no dates, locations or captions touched, so you can sort your library without the metadata work. It is independent of Part 1, and you can run it before or after.
 
-1. Add the folders to sort, and choose an output folder.
+1. Add the folders to sort, and choose an output folder. **If you tick Move you can leave the output empty**: everything is then merged into the **first folder in your list** (sorting in place), and any folders left empty by the move are removed.
 2. Leave **Preview only** ticked and press **Start sorting** to see what would happen: how many folders would merge into how many, and how many duplicates would be skipped.
 3. Untick Preview to do it for real.
 
 What it does:
-- **Merges same-named folders.** Every `Photos from 2012` across all your Takeouts becomes one `Photos from 2012`. Album folders stay as albums. No date folders are created.
+- **Merges folders with the same path.** The folder path below each folder you chose decides where a file goes, so `2014/08` in two different folders becomes one `2014/08`, and every `Photos from 2012` across your Takeouts becomes one `Photos from 2012` (the `Takeout N / Google Photos` wrapper folders are ignored). Your own folder structure is kept; nothing is flattened, and no date folders are created.
 - **Skips exact duplicates** (optional, ticked by default). It compares file contents, so the same photo repeated across Takeouts or albums is kept once, preferring the copy in `Photos from YYYY`. Two *different* photos that share a name are both kept; the second becomes `name_1`.
 - **Brings the `.json` files along** (optional, ticked by default), placing each beside its photo, so Part 1 still works on the sorted folder. Untick it if you only want photos.
+- **Duplicates when moving:** an exact duplicate is not moved; it stays behind in its original folder, so you can review and delete it.
 - **Copy or move.** Copy leaves the source untouched and needs about as much free space again. Move needs no extra space but empties the source folders (duplicates and `.json` files stay behind; remove the `.json` files later with the clean-up panel). Back up first if you choose Move.
 
 You get live counts while it runs, then a summary: files found, duplicates skipped (and the space they take), files placed, and "N folders merged into M", plus a table of the resulting folders and a CSV of where every file went. A preview saves its CSV to your Desktop and leaves the output folder untouched.

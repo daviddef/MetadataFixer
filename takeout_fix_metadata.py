@@ -639,9 +639,52 @@ def claim_dest(dest, args):
         return cand
 
 
+_TAKEOUT_WRAP = re.compile(r"^(takeout( \d+)?|google photos)$", re.I)
+
+
+def rel_parent(m, roots):
+    """Folder path of m below whichever chosen root contains it, ignoring Takeout's wrapper folders."""
+    best = None
+    for r in roots:
+        try:
+            rel = m.parent.relative_to(r)
+        except ValueError:
+            continue
+        if best is None or len(Path(r).parts) > len(Path(best[0]).parts):
+            best = (r, rel)
+    if best is None:
+        return Path(m.parent.name)
+    parts = list(best[1].parts)
+    while parts and _TAKEOUT_WRAP.match(parts[0]):
+        parts.pop(0)
+    return Path(*parts) if parts else Path()
+
+
 def dest_dir_for(m, taken, args, out_root):
-    """Keep Google's folder names; same-named folders from different Takeouts merge into one."""
+    """Folders with the same path (below the chosen folders, Takeout wrappers ignored) merge into one."""
+    roots = getattr(args, "roots", None)
+    if roots:
+        return out_root / rel_parent(m, roots)
     return out_root / m.parent.name
+
+
+def prune_empty_dirs(roots):
+    """After moving files out, remove folders left empty (a lone .DS_Store counts as empty)."""
+    removed = 0
+    for root in roots:
+        for dirpath, _, _ in os.walk(root, topdown=False):
+            if Path(dirpath) == Path(root):
+                continue
+            try:
+                names = os.listdir(dirpath)
+                if all(n in (".DS_Store", "Thumbs.db") for n in names):
+                    for n in names:
+                        os.remove(os.path.join(dirpath, n))
+                    os.rmdir(dirpath)
+                    removed += 1
+            except OSError:
+                pass
+    return removed
 
 
 def process(m, idx, args, out_root):
@@ -719,6 +762,9 @@ def sort_one(m, idx, args, out_root):
         row["status"], row["output"] = "already-done", prev
         return row
     first = dest_dir_for(m, None, args, out_root) / m.name
+    if str(first) == str(m):  # sorting in place and this file is already where it belongs
+        row["status"], row["output"] = "already-done", str(m)
+        return row
     try:
         if first.exists() and first.stat().st_size == m.stat().st_size and file_hash(first) == file_hash(m):
             row["status"], row["output"] = "already-done", str(first)
@@ -935,8 +981,10 @@ def main():
     ap.add_argument("--report", type=Path, default=Path("takeout_report.csv"))
     args = ap.parse_args()
 
-    if args.sort_only and not args.out:
-        sys.exit("--sort-only needs --out")
+    if args.sort_only and not args.out and not args.move:
+        sys.exit("--sort-only needs --out (or --move to merge into the folder you gave)")
+    if args.sort_only and args.move and not args.out:
+        args.out = args.root
     if not args.dry_run and not args.sort_only and not shutil.which("exiftool"):
         sys.exit("exiftool not found. macOS: brew install exiftool | Windows: https://exiftool.org")
     if args.pair_live and not (args.out or args.dry_run):
@@ -952,6 +1000,7 @@ def main():
     idx = build_index(sidecars)
     args.bring_json = not args.no_json
     args.out_root = args.out
+    args.roots = [args.root]
     prepare(args, media)
     if args.dedupe:
         print(f"  {len(args.dupes)} exact duplicates will be skipped ({args.dupe_bytes / 1e9:.1f} GB)")

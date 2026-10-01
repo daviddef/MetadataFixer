@@ -214,7 +214,7 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
                          scan={"media": len(media), "json": len(sidecars), "folders": len(resolved)},
                          message=f"{len(media)} media files, {len(sidecars)} json files")
         args = argparse.Namespace(dry_run=dry_run, overwrite=overwrite, pair_live=pair_live,
-                                  dedupe=dedupe, move=move, out_root=out or None)
+                                  dedupe=dedupe, move=move, out_root=out or None, roots=resolved)
         with LOCK:
             STATE["message"] = "Finding exact duplicates..." if dedupe else "Preparing..."
 
@@ -318,8 +318,11 @@ def run_sort(roots, out, dry_run, dedupe, move, bring_json):
                 resolved.append(p)
         if not resolved:
             raise ValueError("Add at least one folder")
+        in_place = False
         if not out:
-            raise ValueError("Choose an output folder")
+            if not move:
+                raise ValueError("Choose an output folder, or tick Move to merge everything into the first folder in the list")
+            out, in_place = str(resolved[0]), True
         media, sidecars, mseen, sseen = [], [], set(), set()
         for p in resolved:
             m, sc = fx.scan(p)
@@ -327,7 +330,7 @@ def run_sort(roots, out, dry_run, dedupe, move, bring_json):
             sidecars += [x for x in sc if x.resolve() not in sseen and not sseen.add(x.resolve())]
         idx = fx.build_index(sidecars) if bring_json else None
         args = argparse.Namespace(dry_run=dry_run, dedupe=dedupe, move=move, bring_json=bring_json,
-                                  pair_live=False, overwrite=False, out_root=out)
+                                  pair_live=False, overwrite=False, out_root=out, roots=resolved)
         with LOCK:
             STATE.update(state="running", total=len(media), scan={"media": len(media), "json": len(sidecars), "folders": len(resolved)},
                          message=f"Checking {len(media):,} files for exact duplicates..." if dedupe else "Preparing...")
@@ -368,6 +371,7 @@ def run_sort(roots, out, dry_run, dedupe, move, bring_json):
                     STATE["recent"] = [{"name": Path(r["file"]).name, "status": r["status"],
                                         "to": (Path(r["output"]).parent.name + "/" if r["output"] else ""),
                                         "live": ""} for r in recent]
+        pruned = fx.prune_empty_dirs(resolved) if (move and not dry_run) else 0
         report_dir = (Path.home() / "Desktop") if dry_run else out_root
         report_dir.mkdir(parents=True, exist_ok=True)
         tag = "sort_preview" if dry_run else "sort_report"
@@ -384,7 +388,7 @@ def run_sort(roots, out, dry_run, dedupe, move, bring_json):
         sm = {"kind": "sort", "dry_run": dry_run, "move": move, "total": len(rows),
               "duplicates": counts.get("duplicate", 0), "dupe_bytes": getattr(args, "dupe_bytes", 0),
               "placed": extra.get("written", 0), "folders_in": len(src_dirs), "folders_out": len(out_dirs),
-              "json_along": extra.get("json_along", 0),
+              "json_along": extra.get("json_along", 0), "in_place": in_place, "pruned": pruned, "dest": str(out_root),
               "out_folders": sorted([os.path.relpath(k, base) if k != base else ".", v] for k, v in folders.items()),
               "tips": []}
         errs = counts.get("copy-error", 0) + counts.get("error", 0)
@@ -399,6 +403,10 @@ def run_sort(roots, out, dry_run, dedupe, move, bring_json):
         if sm["duplicates"]:
             sm["tips"].append("%d identical copies were skipped (%.1f GB), keeping the copy in the 'Photos from YYYY' "
                               "folder. Album copies of the same photo are not repeated." % (sm["duplicates"], sm["dupe_bytes"] / 1e9))
+        if in_place:
+            sm["tips"].append("Sorted in place: everything was merged into %s (the first folder in your list)." % out)
+        if pruned:
+            sm["tips"].append("%d folders left empty by the move were removed." % pruned)
         if move and not dry_run:
             sm["tips"].append("Files were moved; duplicate copies and any .json files stay behind in the source folders "
                               "(use the clean-up panel to remove .json files).")
@@ -852,10 +860,11 @@ code{background:var(--bg);padding:1px 5px;border-radius:5px;font-size:12px}
 <label class="t" style="margin-top:12px">Folders to sort (one per line)</label>
 <textarea id="sroots" placeholder="/Volumes/Drive/Takeouts" spellcheck="false" style="width:100%"></textarea>
 <div class="row" style="margin-top:8px"><button id="sb1">Add folders...</button></div>
-<label class="t" style="margin-top:12px">Output folder</label>
+<label class="t" style="margin-top:12px">Output folder <span style="font-weight:400;color:var(--mute)">(optional when moving)</span></label>
 <div class="row"><input type="text" id="sout" placeholder="Where the sorted library goes"><button id="sb2">Choose folder</button></div>
+<small>When you tick <b>Move</b> you can leave this empty: everything is then merged into the <b>first folder in the list above</b>, so you can sort in place. Folders with the same path (for example <i>2014/08</i> in two different folders, or every <i>Photos from 2012</i>) are merged into one; <i>Takeout N / Google Photos</i> wrappers are ignored.</small>
 <div class="opt"><input type="checkbox" id="sdry" checked><div>Preview only<small>On by default. Reports what would happen; copies and moves nothing.</small></div></div>
-<div class="opt"><input type="checkbox" id="sdedupe" checked><div>Skip exact duplicate photos<small>Compares file contents, so the same photo repeated in several Takeouts or albums is kept once. Different photos that share a name are both kept (the second becomes <i>name_1</i>).</small></div></div>
+<div class="opt"><input type="checkbox" id="sdedupe" checked><div>Skip exact duplicate photos<small>Compares file contents, so the same photo repeated in several folders, Takeouts or albums is kept once. Different photos that share a name are both kept (the second becomes <i>name_1</i>).</small></div></div>
 <div class="opt"><input type="checkbox" id="sjson" checked><div>Bring the .json info files along<small>Puts each photo&#39;s .json file next to it, so you can still run Part 1 afterwards. Untick if you only want photos.</small></div></div>
 <div class="opt"><input type="checkbox" id="smove"><div>Move instead of copy<small>Saves disk space but empties the source folders as it goes. Off = copy (needs about as much free space again).</small></div></div>
 <button class="p" id="sgo" style="margin-top:6px">Start sorting</button></div>
@@ -963,8 +972,9 @@ $('sb1').onclick=async()=>{const r=await post('/api/choose',{prompt:'Choose the 
 $('sb2').onclick=async()=>{const r=await post('/api/choose',{prompt:'Choose where the sorted library goes'});if(r.paths&&r.paths[0])$('sout').value=r.paths[0]};
 $('sgo').onclick=async()=>{
   if(!sroots().length){alert('Add the folders to sort first');return}
-  if(!$('sout').value.trim()){alert('Choose an output folder');return}
-  if($('smove').checked&&!$('sdry').checked&&!confirm('MOVE takes files out of your source folders. Make sure you have another backup. Continue?'))return;
+  const inPlace=!$('sout').value.trim();
+  if(inPlace&&!$('smove').checked){alert('Choose an output folder, or tick "Move" to merge everything into the first folder in the list');return}
+  if($('smove').checked&&!$('sdry').checked&&!confirm(inPlace?'MOVE will merge everything into '+sroots()[0]+' and take files out of the other folders. Make sure you have another backup. Continue?':'MOVE takes files out of your source folders. Make sure you have another backup. Continue?'))return;
   $('sum').style.display='none';
   const r=await post('/api/sort_start',{roots:sroots(),out:$('sout').value.trim(),dry_run:$('sdry').checked,dedupe:$('sdedupe').checked,bring_json:$('sjson').checked,move:$('smove').checked});
   if(r.error)alert(r.error);else{$('prog').style.display='block';$('prog').scrollIntoView({behavior:'smooth'});poll()}};
