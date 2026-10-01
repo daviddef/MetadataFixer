@@ -26,7 +26,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.01-u"
+VERSION = "2026.10.01-v"
 STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}, "recent": [], "clean": {"state": "idle"}, "update": {"state": "idle", "files": []}, "phase": None, "kind": "fix", "cv": None, "cancel": False, "version": VERSION, "boot": time.time()}
 LOCK = threading.Lock()
 
@@ -1434,6 +1434,11 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 .cvrecent{font-size:13px;margin-top:10px}.cvrecent>div{padding:2px 0;display:flex;gap:8px;flex-wrap:wrap}
 .hero .fbar{margin-top:14px;padding-top:10px;border-top:1px solid var(--line)}
 .opt>div{min-width:0}.sel{max-width:100%}
+.info{display:inline-grid;place-items:center;width:17px;height:17px;margin-left:7px;border-radius:50%;border:1px solid var(--mute);color:var(--mute);font:700 11px/1 system-ui,sans-serif;cursor:help;background:transparent;padding:0;vertical-align:middle;flex:none}
+.info:hover,.info:focus-visible{background:var(--acc);border-color:var(--acc);color:#fff;outline:none}
+#tip{position:fixed;z-index:200;max-width:min(380px,calc(100vw - 20px));background:var(--ink);color:var(--bg);padding:10px 12px;border-radius:10px;font-size:13px;line-height:1.45;box-shadow:0 8px 28px rgba(0,0,0,.28);display:none;pointer-events:none}
+.warn{color:var(--warn);font-size:13px}.subline{margin:-6px 0 12px;color:var(--mute);font-size:14px}
+.opt>div{line-height:1.35}
 </style></head><body><main>
 <div id="upd" style="display:none" class="card"><b>A newer version is available.</b> <span id="updmsg"></span>
 <div style="margin-top:8px"><button class="p" id="updgo">Update now</button> <button id="updno">Not now</button></div></div>
@@ -1472,7 +1477,7 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
   <div class="bar" id="bar"><i id="fill"></i><span id="pct">0%</span></div></div>
 </div>
 <section class="pane" id="pane-fix">
-<h2 class="ph">Fix dates, locations and captions</h2>
+<h2 class="ph" data-tip="Reads the .json file Google added to each photo and writes the real date taken, location, caption and tagged people back into the photo. The picture itself is never changed.">Fix dates, locations and captions</h2>
 <div class="card usefcard"><b>1. Takeout folders</b><div class="usef" style="margin:8px 0 0"><span class="fnote"></span>. Add every Takeout batch: a photo in one batch finds its JSON in another.</div></div>
 
 <div class="card usefcard"><b>2. Where the fixed copies go</b><div class="usef" style="margin:8px 0 0"><b>Destination:</b> <span class="dnote" data-empty="none chosen, so files are fixed in place (the originals are changed)"></span><br><small style="display:inline">Recommended: a new folder, so originals stay untouched. Reports are saved there too (or on your Desktop if none).</small></div></div>
@@ -1480,7 +1485,7 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 <div class="card"><label class="t">3. Options</label>
 <div class="opt"><input type="checkbox" id="dry" checked><div>Preview only<small>On by default. Works out what it would do and reports the numbers, but changes nothing. Untick to do it for real.</small></div></div>
 <div class="opt"><input type="checkbox" id="dedupe" checked><div>Remove exact duplicates<small>Skips byte-identical copies (the same photo repeated across Takeouts or albums). Keeps the copy in 'Photos from YYYY'. Needs an extra read pass over files that share a size.</small></div></div>
-<div class="opt"><input type="checkbox" id="move"><div>Move files instead of copying<small>Saves disk space but empties your Takeout folders as it goes. Off = safe copy (needs roughly as much free space again).</small></div></div>
+<div class="opt"><input type="checkbox" id="move"><div>Move files instead of copying <span class="warn">(empties the source folders)</span><small>Saves disk space but empties your Takeout folders as it goes. Off = safe copy (needs roughly as much free space again).</small></div></div>
 <div class="opt"><input type="checkbox" id="live" checked><div>Re-pair Live Photos<small>Copies each still's Apple ID onto its video and saves the video as .MOV so Photos can treat them as one Live Photo. Works in place too: the video is renamed to .MOV beside its photo.</small></div></div>
 <div class="opt"><div style="flex:1"><label for="datepol" style="font-weight:600">When a photo already has a date and Google&#39;s is different</label>
 <select id="datepol" class="sel"><option value="earlier" selected>Keep the earlier date (recommended)</option><option value="photo">Keep the photo&#39;s own date</option><option value="google">Use Google&#39;s date</option></select>
@@ -1510,7 +1515,7 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 <div class="opt"><input type="checkbox" id="sdry" checked><div>Preview only<small>On by default. Reports what would happen; copies and moves nothing.</small></div></div>
 <div class="opt"><input type="checkbox" id="sdedupe" checked><div>Skip exact duplicate photos<small>Compares file contents, so the same photo repeated in several folders, Takeouts or albums is kept once. Different photos that share a name are both kept (the second becomes <i>name_1</i>).</small></div></div>
 <div class="opt"><input type="checkbox" id="sjson" checked><div>Bring the .json info files along<small>Puts each photo&#39;s .json file next to it, so you can still run Part 1 afterwards. Untick if you only want photos.</small></div></div>
-<div class="opt"><input type="checkbox" id="smove"><div>Move instead of copy<small>Saves disk space but empties the source folders as it goes. Off = copy (needs about as much free space again).</small></div></div>
+<div class="opt"><input type="checkbox" id="smove"><div>Move instead of copy <span class="warn">(empties the source folders)</span><small>Saves disk space but empties the source folders as it goes. Off = copy (needs about as much free space again).</small></div></div>
 <button class="p" id="sgo" style="margin-top:6px">Start sorting</button></div>
 
 </section>
@@ -1520,7 +1525,7 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 <div class="usef" style="margin-top:10px"><b>Folders to merge (the Source list):</b> <span class="fnote"></span></div>
 <div class="usef"><b>Merge into (the Destination):</b> <span class="dnote" data-empty="none chosen: with Move ticked, everything is merged into the first source folder"></span></div>
 <div class="opt"><input type="checkbox" id="mgdry" checked><div>Preview only<small>On by default. Shows which folders would merge, how many files, identical copies and name clashes, and changes nothing.</small></div></div>
-<div class="opt"><input type="checkbox" id="mgmove"><div>Move instead of copy<small>Takes the files out of the source folders and empties them (needs no extra space). With no destination chosen, everything is merged into the <b>first</b> source folder. Off = copy into the Destination, leaving your sources untouched (needs about as much free space again).</small></div></div>
+<div class="opt"><input type="checkbox" id="mgmove"><div>Move instead of copy <span class="warn">(empties the source folders)</span><small>Takes the files out of the source folders and empties them (needs no extra space). With no destination chosen, everything is merged into the <b>first</b> source folder. Off = copy into the Destination, leaving your sources untouched (needs about as much free space again).</small></div></div>
 <div class="opt"><div style="flex:1"><label for="mgconf" style="font-weight:600">When two different files have the same name in the same folder</label>
 <select id="mgconf" class="sel"><option value="both" selected>Keep both (the second is named name_1)</option><option value="newer">The newer file keeps the name</option><option value="larger">The larger file keeps the name</option><option value="first">The file from the first source folder keeps the name</option></select>
 <small>With the last three, the other file is not deleted: it is set aside in a <i>_merge_conflicts</i> folder inside the destination so you can review it.</small></div></div>
@@ -1538,30 +1543,30 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 <div class="usef" style="margin-top:10px"><b>Folders to clean:</b> <span class="fnote"></span></div>
 
 <div class="opt"><input type="checkbox" id="cx" checked><div><b>1. Fix files with no extension</b><small>Some photos and videos come out of Google Takeout with a name like <i>IMG_2438</i> and no <i>.jpg</i> or <i>.heic</i>, so Finder calls them "Document" and the Fix tab skips them. This reads the real type from inside each file and adds the right extension. Files that cannot be recognised (empty or damaged) are listed but not changed. Do this <b>before</b> Fix metadata.</small>
-<label class="sub"><input type="checkbox" id="cxj" checked> Also rename each file's Google .json to match, so Fix can still find it</label>
-<label class="sub"><input type="checkbox" id="cxu"> Move files that cannot be recognised into an <i>_unrecognised</i> folder (inside each folder you chose) so you can review or delete them</label></div></div>
+<label class="sub" data-tip="So the Fix tab can still match each photo to its Google info file."><input type="checkbox" id="cxj" checked> Also rename each file's Google .json to match</label>
+<label class="sub" data-tip="Files that are empty or damaged are moved into an <i>_unrecognised</i> folder inside each folder you chose, so you can review or delete them. Otherwise they are only listed."><input type="checkbox" id="cxu"> Move unrecognised files into an <i>_unrecognised</i> folder</label></div></div>
 
 <div class="opt"><input type="checkbox" id="cj"><div><b>2. Remove Google .json files</b><small>The small info files Google adds to each photo. They hold the only copy of the original date and location, so do this <b>after</b> you have fixed your photos. Off by default.</small>
-<label class="sub"><input type="checkbox" id="cother"> Also remove other .json files (every .json in the folders)</label></div></div>
+<label class="sub" data-tip="Off: only Google's photo info files and album/memory data files are removed. On: every .json file in the folders."><input type="checkbox" id="cother"> Also remove other .json files</label></div></div>
 
 <div class="opt"><input type="checkbox" id="cjunk" checked><div><b>3. Remove junk and cache files</b><small>Files nothing needs. Choose which kinds:</small>
-<label class="sub"><input type="checkbox" id="cjs" checked> System leftovers (.DS_Store, Thumbs.db, desktop.ini, ._ files)</label>
-<label class="sub"><input type="checkbox" id="cji" checked> iPod/iTunes thumbnail caches (.ithmb, such as T103.ithmb)</label>
+<label class="sub" data-tip="Invisible files Finder and Windows leave behind: .DS_Store, Thumbs.db, desktop.ini and ._ files."><input type="checkbox" id="cjs" checked> System leftovers</label>
+<label class="sub" data-tip="Thumbnail caches from iPod/iTunes photo syncing, such as T103.ithmb inside an <i>iPod Photo Cache</i> folder."><input type="checkbox" id="cji" checked> iPod/iTunes thumbnail caches (.ithmb)</label>
 <label class="sub"><input type="checkbox" id="cjp" checked> Picasa.ini files</label>
 <label class="sub"><input type="checkbox" id="cjt"> Camera video thumbnails (.thm)</label>
-<label class="sub"><input type="checkbox" id="cjb" checked> Empty temporary files left by macOS when saving (names ending in <i>.sb-12345678-AbCdEf</i>, 0 bytes). Ones that still contain data are never deleted</label>
-<label class="sub"><input type="checkbox" id="cje" checked> Other empty files (0 bytes, any name): nothing is stored in them</label></div></div>
+<label class="sub" data-tip="Names ending in <i>.sb-12345678-AbCdEf</i> and exactly 0 bytes: macOS makes these while saving a file and sometimes leaves them behind. A leftover that still contains data is never deleted, only reported."><input type="checkbox" id="cjb" checked> Empty temporary files left by macOS saving</label>
+<label class="sub" data-tip="Zero-byte files of any name: nothing is stored in them."><input type="checkbox" id="cje" checked> Other empty files (0 bytes)</label></div></div>
 
 <div class="opt"><input type="checkbox" id="cn" checked><div><b>4. Tidy names</b><small>Fixes duplicate-style names such as <i>From Cris Drive - 2001(1)</i> to <i>From Cris Drive - 2001</i>. If a folder with the clean name already exists, the two are <b>merged</b>: identical files are kept once, and different files with the same name are both kept (the second becomes <i>name_1</i>). Real names such as <i>Summer (2019)</i> are never changed, and the folders you chose are not renamed.</small>
 <label class="sub"><input type="checkbox" id="cnp" checked> Remove " (1)", " (2)" ... from names</label>
 <label class="sub"><input type="checkbox" id="cnc" checked> Remove " copy", " copy 2" from names</label>
 <label class="sub"><input type="checkbox" id="cns" checked> Trim and collapse extra spaces</label>
-<label class="sub"><input type="checkbox" id="cnf"> Also tidy file names (only when the clean name is free; the file's .json is renamed too. Best done after fixing your photos)</label>
-<label class="sub">Identical copies found while merging: <select id="cnd" class="sel"><option value="delete" selected>delete the extra copy</option><option value="aside">move it to a _duplicates folder</option></select></label></div></div>
+<label class="sub" data-tip="A file is only renamed when the clean name is free, and its .json is renamed with it. Best done after you have fixed your photos, because Fix matches photos to JSON by name."><input type="checkbox" id="cnf"> Also tidy file names</label>
+<label class="sub" data-tip="Used when a renamed folder is merged into one that already exists and both hold the same file.">Identical copies found while merging: <select id="cnd" class="sel"><option value="delete" selected>delete the extra copy</option><option value="aside">move it to a _duplicates folder</option></select></label></div></div>
 
 <div class="opt"><input type="checkbox" id="ce" checked><div><b>5. Remove empty folders</b><small>Removes every folder with no files in it at any depth, only after the steps above. Only folders are removed. Shortcuts, app/library bundles (such as .photoslibrary) and unreadable folders are never entered.</small>
-<label class="sub"><input type="checkbox" id="cejunk" checked> A folder holding only system leftovers counts as empty</label>
-<label class="sub"><input type="checkbox" id="cetop"> Also remove the folders you chose, if they end up empty</label></div></div>
+<label class="sub" data-tip="So a folder containing only .DS_Store or Thumbs.db files is still removed."><input type="checkbox" id="cejunk" checked> Folders holding only system leftovers count as empty</label>
+<label class="sub" data-tip="Off by default: the folders you add at the top are always kept, even if everything inside them is removed."><input type="checkbox" id="cetop"> Also remove my chosen folders if they end up empty</label></div></div>
 
 <div class="opt"><input type="checkbox" id="cdry" checked><div>Preview only<small>On by default. Lists what would be deleted, renamed, merged or removed, and changes nothing.</small></div></div>
 <button class="p" id="cgo" style="margin-top:6px">Start</button></div>
@@ -1587,6 +1592,33 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 <script>
 const $=id=>document.getElementById(id), esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 async function post(u,b){const r=await fetch(u,{method:'POST',body:JSON.stringify(b||{})});return r.json()}
+
+// ---- info buttons: long explanations live in hover / tap tooltips
+const tipEl=document.createElement('div');tipEl.id='tip';tipEl.setAttribute('role','tooltip');document.body.appendChild(tipEl);
+function showTip(icon){tipEl.innerHTML=icon._tip;tipEl.style.display='block';const r=icon.getBoundingClientRect(),w=tipEl.offsetWidth,h=tipEl.offsetHeight;
+  let x=Math.min(Math.max(10,r.left+r.width/2-w/2),window.innerWidth-w-10),y=r.bottom+8;if(y+h>window.innerHeight-10)y=Math.max(10,r.top-h-8);tipEl.style.left=x+'px';tipEl.style.top=y+'px';tipEl._owner=icon}
+function hideTip(){tipEl.style.display='none';tipEl._owner=null}
+function makeIcon(html){const b=document.createElement('button');b.type='button';b.className='info';b.textContent='i';b.setAttribute('aria-label','More information');b._tip=html;b._pt='mouse';
+  b.onpointerdown=e=>{b._pt=e.pointerType||'mouse'};
+  b.onpointerenter=e=>{if(e.pointerType==='mouse')showTip(b)};b.onpointerleave=e=>{if(e.pointerType==='mouse')hideTip()};
+  b.onfocus=()=>{if(b.matches(':focus-visible'))showTip(b)};b.onblur=hideTip;
+  b.onclick=e=>{e.preventDefault();e.stopPropagation();if(b._pt==='mouse'){showTip(b);return}tipEl._owner===b?hideTip():showTip(b)};return b}
+document.addEventListener('click',hideTip);window.addEventListener('scroll',hideTip,{passive:true});
+const PANE_SUB={fix:'Put the real date, location and caption back into your photos.',sort:'Merge same-named folders and skip exact duplicates.',merge:'Bring two or more folders together into one.',clean:'Tidy up leftovers once you are done.',convert:'Turn older video formats into MP4.'};
+function decorate(){
+  document.querySelectorAll('.opt').forEach(o=>{
+    const box=o.querySelector(':scope > div');if(!box)return;
+    const smalls=[...box.children].filter(c=>c.tagName==='SMALL');if(!smalls.length)return;
+    const html=smalls.map(s=>s.innerHTML).join('<br><br>');smalls.forEach(s=>s.remove());
+    const icon=makeIcon(html),t=box.querySelector(':scope > b, :scope > label:not(.sub)'),wn=box.querySelector(':scope > .warn');
+    if(wn)wn.after(icon);else if(t)t.after(icon);else{const tn=[...box.childNodes].find(n=>n.nodeType===3&&n.textContent.trim());if(tn){const w=document.createElement('span');w.className='ttl';tn.replaceWith(w);w.appendChild(tn);w.after(icon)}else box.prepend(icon)}});
+  document.querySelectorAll('.pane').forEach(p=>{
+    const id=p.id.replace('pane-',''),h=p.querySelector('h2.ph');if(!h)return;
+    const intro=p.querySelector('.card > small:first-child');
+    if(intro){h.dataset.tip=intro.innerHTML;intro.remove()}
+    if(PANE_SUB[id]&&!p.querySelector('.subline')){const sl=document.createElement('p');sl.className='subline';sl.textContent=PANE_SUB[id];h.after(sl)}});
+  document.querySelectorAll('[data-tip]').forEach(el=>{if(!el.querySelector(':scope > .info'))el.appendChild(makeIcon(el.dataset.tip))})}
+decorate();
 
 // ---- shared folder list (header bar, applies to every tab)
 let FOLDERS=[];try{FOLDERS=JSON.parse(localStorage.getItem('folders')||'[]').filter(x=>typeof x==='string')}catch(e){}

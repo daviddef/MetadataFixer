@@ -41,6 +41,10 @@ git clone https://github.com/daviddef/MetadataFixer ~/MetadataFixer
 
 Or download `takeout_fix_metadata.py` and `takeout_gui.py` from the repo into one folder. The two files must be from the same version.
 
+## Reading the screen
+
+To keep each tab uncluttered, the longer explanations sit behind small **i** buttons. Hover over one (or tap it on a phone or tablet, tap again to close) to read it. Each tab also has a one-line description under its title, and the full introduction behind the **i** next to the title. Warnings that matter, such as "(empties the source folders)", stay visible in the option's own label.
+
 ## Layout
 
 The app has five tabs: **1 Fix metadata**, **2 Sort**, **3 Merge folders**, **4 Clean up** (`.json` files, junk, names, empty folders) and **5 Convert videos**.
