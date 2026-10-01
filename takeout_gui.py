@@ -26,7 +26,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.01-v"
+VERSION = "2026.10.01-w"
 STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}, "recent": [], "clean": {"state": "idle"}, "update": {"state": "idle", "files": []}, "phase": None, "kind": "fix", "cv": None, "cancel": False, "version": VERSION, "boot": time.time()}
 LOCK = threading.Lock()
 
@@ -1033,6 +1033,8 @@ def run_merge(roots, dest, opts, dry_run):
                 extra["identical"] += 1
             if row["status"] == "failed":
                 extra["errors"] += 1
+            if row.get("json"):
+                extra["json_along"] += 1
             recent.append({"name": os.path.basename(row["src"]), "status": row["status"],
                            "to": (Path(row["dest"]).parent.name + "/") if row["dest"] else "", "live": ""})
             del recent[:-12]
@@ -1045,7 +1047,7 @@ def run_merge(roots, dest, opts, dry_run):
         report_dir.mkdir(parents=True, exist_ok=True)
         report = report_dir / ("takeout_merge_preview.csv" if dry_run else "takeout_merge_report.csv")
         with open(report, "w", newline="", encoding="utf-8") as fh:
-            w = csv.DictWriter(fh, fieldnames=["root", "src", "dest", "status", "detail"])
+            w = csv.DictWriter(fh, fieldnames=["root", "src", "dest", "status", "detail"], extrasaction="ignore")
             w.writeheader()
             w.writerows(rows)
         st = defaultdict(int)
@@ -1056,7 +1058,7 @@ def run_merge(roots, dest, opts, dry_run):
               "total": len(rows), "brought": st["placed"] + st["kept-both"] + st["replaced"] + st["kept-existing"],
               "in_place_files": st["in-place"] + st["already-done"], "identical": st["identical"],
               "clashes": st["kept-both"] + st["replaced"] + st["kept-existing"], "failed": st["failed"],
-              "merged_dirs": len(merged),
+              "merged_dirs": len(merged), "json_along": sum(r.get("json", 0) for r in rows),
               "per_root": per_root,
               "merged": [[os.path.relpath(d, base) if d != base else ".", len(v)] for d, v in sorted(merged.items())][:60],
               "clash_rows": [{"file": os.path.relpath(r["src"], r["root"]), "status": r["status"], "detail": r["detail"]}
@@ -1293,7 +1295,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(409, json.dumps({"error": "A job is already running"}))
             o = body.get("opts", {})
             opts = {"move": bool(o.get("move")), "conflict": o.get("conflict", "both"), "dupes": o.get("dupes", "delete"),
-                    "tidy": bool(o.get("tidy")), "nocase": bool(o.get("nocase", True)), "prune": True}
+                    "tidy": bool(o.get("tidy")), "takeout": bool(o.get("takeout")), "global_dedupe": bool(o.get("global_dedupe")), "nocase": bool(o.get("nocase", True)), "prune": True}
             threading.Thread(target=run_merge, daemon=True, args=(
                 body.get("roots", []), body.get("dest", ""), opts, bool(body.get("dry_run")))).start()
             self._send(200, "{}")
@@ -1468,10 +1470,9 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 <div id="frame">
   <nav class="tabs" role="tablist">
     <button class="tab" data-tab="fix" role="tab"><b>1</b> Fix metadata</button>
-    <button class="tab" data-tab="sort" role="tab"><b>2</b> Sort</button>
-    <button class="tab" data-tab="merge" role="tab"><b>3</b> Merge folders</button>
-    <button class="tab" data-tab="clean" role="tab"><b>4</b> Clean up</button>
-    <button class="tab" data-tab="convert" role="tab"><b>5</b> Convert videos</button>
+    <button class="tab" data-tab="merge" role="tab"><b>2</b> Merge folders</button>
+    <button class="tab" data-tab="clean" role="tab"><b>3</b> Clean up</button>
+    <button class="tab" data-tab="convert" role="tab"><b>4</b> Convert videos</button>
   </nav>
   <div class="status"><div class="srow"><span id="msg">Ready. Choose a tab, set it up and press Start.</span><a href="#" id="goto" style="display:none">View results &rarr;</a></div>
   <div class="bar" id="bar"><i id="fill"></i><span id="pct">0%</span></div></div>
@@ -1506,22 +1507,9 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 
 </div>
 </section>
-<section class="pane" id="pane-sort">
-<h2 class="ph">Sort only: merge folders, remove duplicates</h2>
-<div class="card"><small style="margin-top:0">Tidies the folder structure and nothing else: no dates, locations or captions are touched. All the same-named folders (every <i>Photos from 2012</i>) are merged into one, and identical duplicate photos are skipped. Use it on its own, or before Part 1. To merge ordinary folders and decide what happens to name clashes, use the <b>Merge folders</b> tab.</small>
-<div class="usef" style="margin-top:12px"><b>Folders to sort:</b> <span class="fnote"></span> (the first one in the list is where everything merges when you sort in place)</div>
-<div class="usef" style="margin-top:12px"><b>Destination:</b> <span class="dnote" data-empty="none chosen: with Move, everything merges into the first source folder"></span></div>
-<small>When you tick <b>Move</b> you can leave this empty: everything is then merged into the <b>first source folder in the header</b>, so you can sort in place. Folders with the same path (for example <i>2014/08</i> in two different folders, or every <i>Photos from 2012</i>) are merged into one; <i>Takeout N / Google Photos</i> wrappers are ignored.</small>
-<div class="opt"><input type="checkbox" id="sdry" checked><div>Preview only<small>On by default. Reports what would happen; copies and moves nothing.</small></div></div>
-<div class="opt"><input type="checkbox" id="sdedupe" checked><div>Skip exact duplicate photos<small>Compares file contents, so the same photo repeated in several folders, Takeouts or albums is kept once. Different photos that share a name are both kept (the second becomes <i>name_1</i>).</small></div></div>
-<div class="opt"><input type="checkbox" id="sjson" checked><div>Bring the .json info files along<small>Puts each photo&#39;s .json file next to it, so you can still run Part 1 afterwards. Untick if you only want photos.</small></div></div>
-<div class="opt"><input type="checkbox" id="smove"><div>Move instead of copy <span class="warn">(empties the source folders)</span><small>Saves disk space but empties the source folders as it goes. Off = copy (needs about as much free space again).</small></div></div>
-<button class="p" id="sgo" style="margin-top:6px">Start sorting</button></div>
-
-</section>
 <section class="pane" id="pane-merge">
 <h2 class="ph">Merge folders</h2>
-<div class="card"><small style="margin-top:0">Brings two or more folders together into one. Folders with the same name at any depth are merged, their files are combined, identical files are kept once, and different files with the same name are handled the way you choose below. Unlike <i>Sort</i> (which is built around Google Takeout), this works on any folders and gives you control over name clashes.</small>
+<div class="card"><small style="margin-top:0">Brings two or more folders together into one. Folders with the same name at any depth are merged, their files are combined, identical files are kept once, and different files with the same name are handled the way you choose below. Works on any folders, including Google Takeout exports, and gives you control over name clashes.</small>
 <div class="usef" style="margin-top:10px"><b>Folders to merge (the Source list):</b> <span class="fnote"></span></div>
 <div class="usef"><b>Merge into (the Destination):</b> <span class="dnote" data-empty="none chosen: with Move ticked, everything is merged into the first source folder"></span></div>
 <div class="opt"><input type="checkbox" id="mgdry" checked><div>Preview only<small>On by default. Shows which folders would merge, how many files, identical copies and name clashes, and changes nothing.</small></div></div>
@@ -1534,6 +1522,8 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 <small>Files are compared by their content, not just their names. When copying, identical files are simply not copied twice.</small></div></div>
 <div class="opt"><input type="checkbox" id="mgtidy" checked><div>Treat <i>Folder (1)</i>, <i>Folder copy</i> and extra spaces as the same folder as <i>Folder</i><small>Real names such as <i>Summer (2019)</i> are not changed. Applies to folder names only.</small></div></div>
 <div class="opt"><input type="checkbox" id="mgcase" checked><div>Ignore upper and lower case in folder names<small>So <i>photos</i> and <i>Photos</i> become one folder (the first spelling found is used).</small></div></div>
+<div class="opt"><input type="checkbox" id="mgtk"><div>These are Google Takeout folders<small>Ignores the <i>Takeout N / Google Photos</i> wrappers so every <i>Photos from 2012</i> becomes one folder, and brings each photo&#39;s .json info file along with it (named after the placed photo), so Part 1 still works afterwards.</small></div></div>
+<div class="opt"><input type="checkbox" id="mgdd"><div>Find identical photos anywhere, not just in the same folder<small>Compares file contents across all folders, so the same photo repeated in several albums or Takeouts is kept once. Slower on big libraries.</small></div></div>
 <small>Not touched: shortcuts. App and library bundles (such as <i>.photoslibrary</i>) are moved as a single item. Invisible system files (.DS_Store and the like) are left out.</small>
 <button class="p" id="mgo" style="margin-top:10px">Start</button></div>
 </section>
@@ -1604,7 +1594,7 @@ function makeIcon(html){const b=document.createElement('button');b.type='button'
   b.onfocus=()=>{if(b.matches(':focus-visible'))showTip(b)};b.onblur=hideTip;
   b.onclick=e=>{e.preventDefault();e.stopPropagation();if(b._pt==='mouse'){showTip(b);return}tipEl._owner===b?hideTip():showTip(b)};return b}
 document.addEventListener('click',hideTip);window.addEventListener('scroll',hideTip,{passive:true});
-const PANE_SUB={fix:'Put the real date, location and caption back into your photos.',sort:'Merge same-named folders and skip exact duplicates.',merge:'Bring two or more folders together into one.',clean:'Tidy up leftovers once you are done.',convert:'Turn older video formats into MP4.'};
+const PANE_SUB={fix:'Put the real date, location and caption back into your photos.',merge:'Bring two or more folders together into one.',clean:'Tidy up leftovers once you are done.',convert:'Turn older video formats into MP4.'};
 function decorate(){
   document.querySelectorAll('.opt').forEach(o=>{
     const box=o.querySelector(':scope > div');if(!box)return;
@@ -1675,7 +1665,6 @@ function showSummary(s){
   if(s.kind==='cleanup'){showCleanup(s);return}
   if(s.kind==='merge'){showMerge(s);return}
   if(s.kind==='convert'){showConvert(s);return}
-  if(s.kind==='sort'){showSort(s);return}
   let h=`<div class="tiles">${tile(s.total,'media files')}${tile(s.duplicates,'exact duplicates skipped')}${tile(s.matched,'unique files matched ('+s.pct_matched+'%)','ok')}${tile(s.no_json,'no JSON found',s.no_json?'bad':'ok')}${tile(s.orphans,'JSON with no photo')}</div>`;
   h+=s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
   h+=`<div class="tiles">${tile(s.replaced_files,'files with a value replaced')}${tile((s.live||{}).paired||0,'Live Photos paired')}</div>`;
@@ -1695,51 +1684,6 @@ function showSummary(s){
   h+='<small>Saved: full report CSV (with before/after values per file), a changes-only CSV, a CSV of just the no-JSON files, and a text summary.</small>';
   $('sumbody').innerHTML=h;$('sum').style.display='block'}
 const fmtBytes=b=>b>1e9?(b/1e9).toFixed(2)+' GB':b>1e6?(b/1e6).toFixed(1)+' MB':Math.round(b/1e3)+' KB';
-$('sgo').onclick=async()=>{
-  if(!sroots().length){alert('Add your folders in the bar at the top first');return}
-  const inPlace=!dest();
-  if(inPlace&&!$('smove').checked){alert('Choose an output folder, or tick "Move" to merge everything into the first folder in the list');return}
-  if($('smove').checked&&!$('sdry').checked&&!confirm(inPlace?'MOVE will merge everything into '+sroots()[0]+' and take files out of the other folders. Make sure you have another backup. Continue?':'MOVE takes files out of your source folders. Make sure you have another backup. Continue?'))return;
-  $('sum').style.display='none';
-  const r=await post('/api/sort_start',{roots:sroots(),out:dest(),dry_run:$('sdry').checked,dedupe:$('sdedupe').checked,bring_json:$('sjson').checked,move:$('smove').checked});
-  if(r.error)alert(r.error);else{$('prog').style.display='block';$('prog').scrollIntoView({behavior:'smooth'});poll()}};
-function showSort(s){
-  const w=s.dry_run?'would be ':'';
-  let h=`<div class="tiles">${tile(s.total,'files found')}${tile(s.duplicates,'duplicates '+w+'skipped')}${tile(s.placed,'files '+w+'placed','ok')}${tile(s.folders_in,'source folders')}${tile(s.folders_out,'folders after merging')}${tile(s.json_along,'.json files brought along')}</div>`;
-  h+=`<div class="tip" style="border-color:var(--acc)">${s.folders_in.toLocaleString()} folders ${s.dry_run?'would be ':'were '}merged into ${s.folders_out.toLocaleString()}.${s.duplicates?` ${s.duplicates.toLocaleString()} identical copies (${fmtBytes(s.dupe_bytes)}) ${s.dry_run?'would be ':'were '}skipped.`:''}</div>`;
-  h+=s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
-  if((s.out_folders||[]).length)h+='<h2>Resulting folders</h2>'+tbl(['Folder','Files'],s.out_folders.slice(0,80).map(r=>[esc(r[0]),r[1].toLocaleString()]))+(s.out_folders.length>80?'<small>Showing 80 of '+s.out_folders.length+'. See the report CSV for the rest.</small>':'');
-  h+='<small>Saved: a CSV listing where every file went.</small>';
-  $('sumbody').innerHTML=h;$('sum').style.display='block'}
-
-(async function(){
-  let boot=null;
-  const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-  async function st(){try{const j=await (await fetch('/api/status')).json();if(j&&j.version)$('ver').textContent='Version '+j.version;return j}catch(e){return null}}
-  async function checkNow(manual){
-    if(manual)$('vermsg').textContent='Checking...';
-    try{await post('/api/update_check')}catch(e){}
-    for(let i=0;i<12;i++){
-      await sleep(800);const s=await st();if(!s)continue;boot=s.boot;const u=s.update||{};
-      if(u.state==='available'){
-        $('updmsg').textContent='Updated files: '+u.files.join(', ')+'. Your settings are not affected.';$('upd').style.display='block';
-        $('vermsg').innerHTML='<span class="ok">Update available</span>';return}
-      if(u.state==='current'){$('vermsg').innerHTML=manual?'<span class="ok">&#10003; Up to date</span>':'';return}
-      if(u.state==='unknown'){$('vermsg').innerHTML=manual?'<span class="err">Could not check (offline?)</span>':'';return}
-    }
-    if(manual)$('vermsg').textContent='';
-  }
-  $('vercheck').onclick=e=>{e.preventDefault();checkNow(true)};
-  checkNow(false);setInterval(()=>checkNow(false),30*60*1000);
-  $('updno').onclick=()=>{$('upd').style.display='none'};
-  $('updgo').onclick=async()=>{
-    $('updgo').disabled=true;$('updmsg').textContent='Updating...';
-    const r=await post('/api/update');
-    if(r.error){$('updmsg').innerHTML='<span class="err">'+esc(r.error)+'</span>';$('updgo').disabled=false;return}
-    $('updmsg').textContent='Updated. Restarting...';
-    for(let i=0;i<30;i++){await new Promise(x=>setTimeout(x,1000));const s=await st();if(s&&s.boot!==boot){location.reload();return}}
-    $('updmsg').textContent='Updated. If the page does not reload, restart the app in Terminal.'}
-})();
 function setBar(barId,fillId,pctId,pct,indet){
   const bar=$(barId),fill=$(fillId),lab=$(pctId);
   bar.classList.toggle('indet',!!indet);
@@ -1747,7 +1691,7 @@ function setBar(barId,fillId,pctId,pct,indet){
   pct=Math.max(0,Math.min(100,pct));fill.style.width=pct+'%';lab.textContent=Math.floor(pct)+'%';
   if(pct>=12){lab.className='';lab.style.left='calc('+pct+'% - 44px)'}else{lab.className='out';lab.style.left='calc('+pct+'% + 8px)'}}
 
-const TABS=['fix','sort','merge','clean','convert'];const tabOf=k=>({cleanup:'clean'}[k]||k);let jobKind='fix';
+const TABS=['fix','merge','clean','convert'];const tabOf=k=>({cleanup:'clean',sort:'merge'}[k]||k);let jobKind='fix';
 function showTab(t){if(!TABS.includes(t))t='fix';
   TABS.forEach(x=>{$('pane-'+x).style.display=x===t?'block':'none';document.querySelector('.tab[data-tab="'+x+'"]').classList.toggle('on',x===t)});
   try{localStorage.setItem('tab',t)}catch(e){}
@@ -1760,6 +1704,7 @@ $('goto').onclick=e=>{e.preventDefault();showTab(tabOf(jobKind));$('results').sc
 document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
 function placeResults(kind){const pane=$('pane-'+(kind==='clean'?'fix':tabOf(kind)));if(pane&&$('results').parentNode!==pane)pane.appendChild($('results'))}
 let startTab='fix';try{startTab=location.hash.slice(1)||localStorage.getItem('tab')||'fix'}catch(e){}
+if(startTab==='sort')startTab='merge';
 showTab(startTab);
 
 // ---- Part 4: convert
@@ -1796,11 +1741,11 @@ $('mgo').onclick=async()=>{
   if(!mv&&!dest()){alert('Choose a Destination at the top, or tick "Move" to merge everything into the first source folder');return}
   if(mv&&!$('mgdry').checked&&!confirm(dest()?'MOVE will take the files out of your source folders and merge them into '+dest()+'. Make sure you have a backup. Continue?':'MOVE will merge everything into '+roots()[0]+' and take files out of the other folders. Make sure you have a backup. Continue?'))return;
   $('sum').style.display='none';
-  const r=await post('/api/merge_start',{roots:roots(),dest:dest(),dry_run:$('mgdry').checked,opts:{move:mv,conflict:$('mgconf').value,dupes:$('mgdup').value,tidy:$('mgtidy').checked,nocase:$('mgcase').checked}});
+  const r=await post('/api/merge_start',{roots:roots(),dest:dest(),dry_run:$('mgdry').checked,opts:{move:mv,conflict:$('mgconf').value,dupes:$('mgdup').value,tidy:$('mgtidy').checked,nocase:$('mgcase').checked,takeout:$('mgtk').checked,global_dedupe:$('mgdd').checked}});
   if(r.error)alert(r.error);else{jobKind='merge';placeResults('merge');$('prog').style.display='block';poll()}};
 function showMerge(s){
   const w=s.dry_run?'would be ':'';
-  let h=`<div class="tiles">${tile(s.total,'files found')}${tile(s.brought,'files '+w+(s.move?'moved':'copied')+' in','ok')}${tile(s.in_place_files,'already in place')}${tile(s.identical,'identical copies (kept once)')}${tile(s.clashes,'name clashes resolved')}${tile(s.merged_dirs,'folders '+w+'merged from 2+ sources')}${tile(s.failed,'problems',s.failed?'bad':'')}</div>`;
+  let h=`<div class="tiles">${tile(s.total,'files found')}${tile(s.brought,'files '+w+(s.move?'moved':'copied')+' in','ok')}${tile(s.in_place_files,'already in place')}${tile(s.identical,'identical copies (kept once)')}${tile(s.clashes,'name clashes resolved')}${tile(s.merged_dirs,'folders '+w+'merged from 2+ sources')}${s.json_along?tile(s.json_along,'.json files brought along'):''}${tile(s.failed,'problems',s.failed?'bad':'')}</div>`;
   h+=`<div class="tip" style="border-color:var(--acc)">Merged into <b>${esc(s.dest)}</b>${s.in_place?' (the first source folder)':''}.</div>`;
   h+=s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
   h+='<h2>By source folder</h2>'+tbl(['Source folder','Files','Brought in','Identical','Name clashes','Problems'],s.per_root.map(r=>[esc(r.root.split('/').filter(Boolean).pop()||r.root),r.found.toLocaleString(),r.placed.toLocaleString(),r.identical.toLocaleString(),r.conflicts.toLocaleString(),r.failed.toLocaleString()]));
@@ -1873,7 +1818,7 @@ function showConvert(s){
 
 function liveTiles(s,c,done,nj){
   if(!s.total)return '';const x=s.extra||{};const err=(x.errors?tile(x.errors,'files with errors','bad'):'');
-  if(jobKind==='merge')return tile(s.total,'files found')+tile(x.placed||0,'brought in','ok')+tile(x.identical||0,'identical (kept once)')+tile(x.clashes||0,'name clashes')+(x.errors?tile(x.errors,'problems','bad'):'');
+  if(jobKind==='merge')return tile(s.total,'files found')+tile(x.placed||0,'brought in','ok')+tile(x.identical||0,'identical (kept once)')+tile(x.clashes||0,'name clashes')+(x.json_along?tile(x.json_along,'.json brought along'):'')+(x.errors?tile(x.errors,'problems','bad'):'');
   if(jobKind==='cleanup')return tile(x.json||0,'.json files')+tile(x.junk||0,'junk files')+tile(x.renamed||0,'renamed')+tile(x.merged||0,'folders merged')+tile(x.empty||0,'empty folders')+(x.errors?tile(x.errors,'errors','bad'):'');
   if(jobKind==='convert')return tile(s.total,'videos found')+tile(done,'checked so far')+tile(x.converted||0,'converted','ok')+(x.bytes_before?tile(fmtBytes(Math.max(0,x.bytes_before-x.bytes_after))+' ('+Math.round(100*(1-x.bytes_after/x.bytes_before))+'%)','space saved so far','ok'):'')+tile(x.skipped_live||0,'Live Photo videos skipped')+(x.errors?tile(x.errors,'could not convert','bad'):'');
   if(jobKind==='sort')return tile(s.total,'files found')+tile(x.duplicates||0,'duplicates skipped')+tile(x.written||0,'files placed','ok')+tile(x.merged_from||0,'source folders')+tile(x.folders||0,'folders after merging')+(x.json_along?tile(x.json_along,'.json brought along'):'')+err;
@@ -1913,7 +1858,7 @@ let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   else if(s.phase&&s.phase.total){pct=100*s.phase.done/s.phase.total}
   else if(s.state==='scanning'||s.state==='running'){indet=true}
   setBar('bar','fill','pct',pct,indet);
-  const LBL={fix:'Part 1 Fix',sort:'Part 2 Sort',convert:'Part 5 Convert',cleanup:'Part 4 Clean up',merge:'Part 3 Merge'}[jobKind]||'';
+  const LBL={fix:'Part 1 Fix',convert:'Part 4 Convert',cleanup:'Part 3 Clean up',merge:'Part 2 Merge'}[jobKind]||'';
   $('msg').innerHTML=(LBL?'<b>'+LBL+'</b> &middot; ':'')+(s.state==='error'?'<span class="err">'+esc(s.message)+'</span>':s.state==='done'?'<span class="ok">Finished.</span>':esc(s.message)+(s.done?` (${s.done.toLocaleString()} / ${s.total.toLocaleString()})`:''));
   const c=s.counts||{},done=s.done||0,nj=c['no-json']||0;
   $('tiles').innerHTML=liveTiles(s,c,done,nj);

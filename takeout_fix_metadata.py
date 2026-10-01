@@ -1570,18 +1570,26 @@ def check_merge_roots(roots, dest, move):
 def merge_trees(roots, dest, opts, dry_run=False, on_progress=None, on_item=None):
     """Bring several folder trees together. Folders with the same path merge; identical files are kept once;
     different files with the same name are resolved by opts['conflict'] (both|newer|larger|first); a losing
-    file is set aside in _merge_conflicts, never deleted. Returns (rows, per_root, merged_dirs)."""
+    file is set aside in _merge_conflicts, never deleted.
+    opts['takeout']: ignore 'Takeout N / Google Photos' wrapper folders and carry each photo's .json along.
+    opts['global_dedupe']: skip exact duplicates anywhere, not only inside the same folder.
+    Returns (rows, per_root, merged_dirs)."""
     roots = [Path(r) for r in roots]
     dest = Path(dest) if dest else roots[0]
     move = bool(opts.get("move"))
     tidy, nocase = bool(opts.get("tidy")), bool(opts.get("nocase", True))
     conflict, dupes = opts.get("conflict", "both"), opts.get("dupes", "delete")
+    takeout, gdedupe = bool(opts.get("takeout")), bool(opts.get("global_dedupe"))
     name_opts = {"paren": tidy, "copy": tidy, "spaces": tidy}
     casemap, claimed, rows = {}, {}, []
     per_root = [{"root": str(r), "found": 0, "placed": 0, "identical": 0, "conflicts": 0, "failed": 0} for r in roots]
     dir_sources = defaultdict(set)
 
     def canon(parts):
+        parts = list(parts)
+        if takeout:
+            while parts and _TAKEOUT_WRAP.match(parts[0]):
+                parts.pop(0)
         out = []
         for p in parts:
             name = clean_name(p, name_opts, False) if tidy else p
@@ -1590,7 +1598,7 @@ def merge_trees(roots, dest, opts, dry_run=False, on_progress=None, on_item=None
             out.append(name)
         return out
 
-    items = []
+    items, json_files = [], []
     for ri, root in enumerate(roots):
         for dp, dns, fns in os.walk(root, topdown=True, followlinks=False):
             keep = []
@@ -1607,8 +1615,14 @@ def merge_trees(roots, dest, opts, dry_run=False, on_progress=None, on_item=None
             for f in fns:
                 if is_junk(f, True):
                     continue
+                if takeout and f.lower().endswith(".json"):
+                    json_files.append((ri, Path(dp) / f, rel))   # carried along with its photo, or placed at the end if unmatched
+                    continue
                 items.append((ri, os.path.join(dp, f), rel, f, False))
-    total = len(items)
+    idx = build_index([p for _, p, _ in json_files]) if json_files else None
+    used_json = set()
+    dupe_of = plan_duplicates([Path(it[1]) for it in items if not it[4]])[0] if gdedupe else {}
+    state = {"k": 0, "total": len(items)}
     manifest = {}
     lock = threading.Lock()
     prog = argparse.Namespace(lock=lock, out_root=str(dest), dry_run=dry_run, manifest=manifest, manifest_file=MANIFEST_MERGE)
@@ -1628,81 +1642,143 @@ def merge_trees(roots, dest, opts, dry_run=False, on_progress=None, on_item=None
         else:
             place_file(Path(src), target, move)
 
-    for k, (ri, src, rel, name, is_b) in enumerate(items, 1):
+    def json_for(src, final):
+        """Copy the Google info file of src next to its placed copy, named after the placed file."""
+        if idx is None or state.get("leftover"):
+            return 0
+        sc, how = find_sidecar(Path(src), idx)
+        if how == "tree-ambiguous":
+            sc = pick_closest(Path(src), sc)
+        if not sc:
+            return 0
+        used_json.add(str(sc))
+        jd = Path(str(final) + ".json")
+        if not dry_run:
+            if jd.exists():
+                return 0
+            jd.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(sc, jd)
+        return 1
+
+    def json_mark(src):
+        """A skipped duplicate's own .json is not a separate file to place."""
+        if idx is None:
+            return
+        sc, how = find_sidecar(Path(src), idx)
+        if how == "tree-ambiguous":
+            sc = pick_closest(Path(src), sc)
+        if sc:
+            used_json.add(str(sc))
+
+    def process_item(ri, src, rel, name, is_b):
         per_root[ri]["found"] += 1
-        row = {"root": str(roots[ri]), "src": src, "dest": "", "status": "", "detail": ""}
+        row = {"root": str(roots[ri]), "src": src, "dest": "", "status": "", "detail": "", "json": 0}
         try:
             done = manifest.get(src)
             if done and Path(done).exists():
                 row["status"], row["dest"] = "already-done", done
                 per_root[ri]["placed"] += 1
-            else:
-                dparts = canon(rel)
-                target = dest.joinpath(*dparts, name)
-                row["dest"] = str(target)
-                dir_key = str(dest.joinpath(*dparts))
-                if str(target) == src:
-                    row["status"] = "in-place"
-                    claimed[str(target)] = src
-                    per_root[ri]["placed"] += 1
-                    dir_sources[dir_key].add(ri)
-                else:
-                    existing = str(target) if target.exists() else claimed.get(str(target))
-                    if existing and not is_b and _same_content(src, existing):
-                        per_root[ri]["identical"] += 1
-                        dir_sources[dir_key].add(ri)
-                        row["status"] = "identical"
-                        if move and not dry_run:
-                            if dupes == "delete":
-                                os.remove(src)
-                            else:
-                                shutil.move(src, aside(DUPES_DIR, dparts, name))
-                            row["detail"] = "extra copy " + ("deleted" if dupes == "delete" else "moved to _duplicates")
-                    elif existing:
-                        per_root[ri]["conflicts"] += 1
-                        dir_sources[dir_key].add(ri)
-                        if conflict == "both" or is_b:
-                            alt = Path(_free_name(str(target)))
-                            while str(alt) in claimed:
-                                alt = Path(_free_name(str(alt)))
-                            row["status"], row["dest"], row["detail"] = "kept-both", str(alt), f"second file named {alt.name}"
-                            claimed[str(alt)] = src
-                            if not dry_run:
-                                put(src, alt, is_b)
-                        else:
-                            try:
-                                es, ss = os.stat(existing), os.stat(src)
-                            except OSError:
-                                es = ss = None
-                            incoming_wins = bool(es and ((conflict == "newer" and ss.st_mtime > es.st_mtime) or
-                                                         (conflict == "larger" and ss.st_size > es.st_size)))
-                            if incoming_wins:
-                                row["status"], row["detail"] = "replaced", f"{conflict} file takes the name; the other is in {CONFLICTS_DIR}"
-                                if not dry_run:
-                                    shutil.move(str(target), aside(CONFLICTS_DIR, dparts, name)) if target.exists() else None
-                                    put(src, target, is_b)
-                                claimed[str(target)] = src
-                            else:
-                                row["status"], row["detail"] = "kept-existing", f"this file is in {CONFLICTS_DIR}"
-                                if not dry_run:
-                                    put(src, aside(CONFLICTS_DIR, dparts, name), is_b)
+                return row
+            dparts = canon(rel)
+            target = dest.joinpath(*dparts, name)
+            dir_key = str(dest.joinpath(*dparts))
+            if src in dupe_of:  # identical to a copy that is kept elsewhere
+                per_root[ri]["identical"] += 1
+                dir_sources[dir_key].add(ri)
+                row["status"], row["detail"] = "identical", "identical to " + os.path.basename(dupe_of[src]) + " kept elsewhere"
+                json_mark(src)
+                if move and not dry_run:
+                    if dupes == "delete":
+                        os.remove(src)
                     else:
-                        row["status"] = "placed"
-                        claimed[str(target)] = src
-                        per_root[ri]["placed"] += 1
-                        dir_sources[dir_key].add(ri)
+                        shutil.move(src, aside(DUPES_DIR, dparts, name))
+                    row["detail"] += "; extra copy " + ("deleted" if dupes == "delete" else "moved to _duplicates")
+                return row
+            row["dest"] = str(target)
+            if str(target) == src:
+                row["status"] = "in-place"
+                claimed[str(target)] = src
+                per_root[ri]["placed"] += 1
+                dir_sources[dir_key].add(ri)
+                return row
+            existing = str(target) if target.exists() else claimed.get(str(target))
+            if existing and not is_b and _same_content(src, existing):
+                per_root[ri]["identical"] += 1
+                dir_sources[dir_key].add(ri)
+                row["status"] = "identical"
+                json_mark(src)
+                if move and not dry_run:
+                    if dupes == "delete":
+                        os.remove(src)
+                    else:
+                        shutil.move(src, aside(DUPES_DIR, dparts, name))
+                    row["detail"] = "extra copy " + ("deleted" if dupes == "delete" else "moved to _duplicates")
+            elif existing:
+                per_root[ri]["conflicts"] += 1
+                dir_sources[dir_key].add(ri)
+                if conflict == "both" or is_b:
+                    alt = Path(_free_name(str(target)))
+                    while str(alt) in claimed:
+                        alt = Path(_free_name(str(alt)))
+                    row["status"], row["dest"], row["detail"] = "kept-both", str(alt), f"second file named {alt.name}"
+                    claimed[str(alt)] = src
+                    if not dry_run:
+                        put(src, alt, is_b)
+                    row["json"] = json_for(src, alt)
+                else:
+                    try:
+                        es, ss = os.stat(existing), os.stat(src)
+                    except OSError:
+                        es = ss = None
+                    incoming_wins = bool(es and ((conflict == "newer" and ss.st_mtime > es.st_mtime) or
+                                                 (conflict == "larger" and ss.st_size > es.st_size)))
+                    if incoming_wins:
+                        row["status"], row["detail"] = "replaced", f"{conflict} file takes the name; the other is in {CONFLICTS_DIR}"
                         if not dry_run:
+                            if target.exists():
+                                shutil.move(str(target), aside(CONFLICTS_DIR, dparts, name))
+                                oj = Path(str(target) + ".json")
+                                if oj.exists():
+                                    shutil.move(str(oj), aside(CONFLICTS_DIR, dparts, name + ".json"))
                             put(src, target, is_b)
-                if not dry_run and row["status"] in ("placed", "kept-both", "replaced", "in-place"):
-                    record_progress(prog, src, row["dest"])
+                        claimed[str(target)] = src
+                        row["json"] = json_for(src, target)
+                    else:
+                        row["status"], row["detail"] = "kept-existing", f"this file is in {CONFLICTS_DIR}"
+                        side = aside(CONFLICTS_DIR, dparts, name) if not dry_run else str(dest / CONFLICTS_DIR / name)
+                        if not dry_run:
+                            put(src, side, is_b)
+                        row["json"] = json_for(src, side)
+            else:
+                row["status"] = "placed"
+                claimed[str(target)] = src
+                per_root[ri]["placed"] += 1
+                dir_sources[dir_key].add(ri)
+                if not dry_run:
+                    put(src, target, is_b)
+                row["json"] = json_for(src, target)
+            if not dry_run and row["status"] in ("placed", "kept-both", "replaced", "in-place"):
+                record_progress(prog, src, row["dest"])
         except OSError as e:
             row["status"], row["detail"] = "failed", str(e)
             per_root[ri]["failed"] += 1
+        return row
+
+    def finish(row):
         rows.append(row)
+        state["k"] += 1
         if on_item:
             on_item(row)
-        if on_progress and (k % 25 == 0 or k == total):
-            on_progress(k, total)
+        if on_progress and (state["k"] % 25 == 0 or state["k"] == state["total"]):
+            on_progress(state["k"], state["total"])
+
+    for ri, src, rel, name, is_b in items:
+        finish(process_item(ri, src, rel, name, is_b))
+    leftovers = [(ri, p, rel) for ri, p, rel in json_files if str(p) not in used_json]   # .json files that matched no photo
+    state["total"] += len(leftovers)
+    state["leftover"] = True
+    for ri, p, rel in leftovers:
+        finish(process_item(ri, str(p), rel, p.name, False))
     if move and not dry_run and opts.get("prune", True):
         prune_empty_dirs(roots)
     merged = {d: sorted(v) for d, v in dir_sources.items() if len(v) > 1}

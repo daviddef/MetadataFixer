@@ -47,17 +47,17 @@ To keep each tab uncluttered, the longer explanations sit behind small **i** but
 
 ## Layout
 
-The app has five tabs: **1 Fix metadata**, **2 Sort**, **3 Merge folders**, **4 Clean up** (`.json` files, junk, names, empty folders) and **5 Convert videos**.
+The app has four tabs: **1 Fix metadata**, **2 Merge folders** (also sorts Takeout folders and removes duplicates), **3 Clean up** (`.json` files, junk, names, empty folders) and **4 Convert videos**.
 
 ## Choosing your folders (once, for every tab)
 
 The title block at the top holds two rows that every tab uses, so you only choose them once:
 
 - **Source:** the folders to work on. Press **Add folders...** (hold Cmd in the Finder dialog to pick several), or **Edit list** to type or paste one path per line, or drag folders onto the title block. Each folder shows as a chip; press the **x** on a chip to remove it.
-- **Destination:** where the fixed, sorted or merged copies go. Type or paste a path, or press **Choose...**. Fix, Sort and Merge use it; the other tabs ignore it. Leave it empty to fix files in place (Fix), or, with Move ticked, to merge everything into the first source folder (Sort, Merge).
+- **Destination:** where the fixed, sorted or merged copies go. Type or paste a path, or press **Choose...**. Fix and Merge use it; the other tabs ignore it. Leave it empty to fix files in place (Fix), or, with Move ticked, to merge everything into the first source folder (Merge).
 - Both are remembered in your browser. Under the title block, the tabs and the progress bar stay frozen at the top of the window as you scroll.
 - Each tab shows which folders and destination it is using.
-- **Order matters in one place:** when you merge or sort in place, everything goes into the **first** source folder. Use **Edit list** to reorder.
+- **Order matters in one place:** when you merge in place, everything goes into the **first** source folder. Use **Edit list** to reorder.
 - Because the same list is used everywhere, check it before a destructive step: the Clean up tab and the confirmation prompts list the folders they will act on.
 
 ## Using the app (recommended)
@@ -180,26 +180,7 @@ Takeout splits a Live Photo into a still (`IMG_1234.HEIC`) and a video (`IMG_123
 - Works only where the still still has its Apple ID. Others are counted as "Still has no Apple ID" or "No matching still" and remain separate videos.
 - Check a few pairs in the Photos app after importing.
 
-## Part 2: Sort only (merge folders, remove duplicates)
-
-The **Sort only** panel does just the tidying, with no dates, locations or captions touched, so you can sort your library without the metadata work. It is independent of Part 1, and you can run it before or after.
-
-1. Add the folders to sort, and choose an output folder. **If you tick Move you can leave the output empty**: everything is then merged into the **first folder in your list** (sorting in place), and any folders left empty by the move are removed.
-2. Leave **Preview only** ticked and press **Start sorting** to see what would happen: how many folders would merge into how many, and how many duplicates would be skipped.
-3. Untick Preview to do it for real.
-
-What it does:
-- **Merges folders with the same path.** The folder path below each folder you chose decides where a file goes, so `2014/08` in two different folders becomes one `2014/08`, and every `Photos from 2012` across your Takeouts becomes one `Photos from 2012` (the `Takeout N / Google Photos` wrapper folders are ignored). Your own folder structure is kept; nothing is flattened, and no date folders are created.
-- **Skips exact duplicates** (optional, ticked by default). It compares file contents, so the same photo repeated across Takeouts or albums is kept once, preferring the copy in `Photos from YYYY`. Two *different* photos that share a name are both kept; the second becomes `name_1`.
-- **Brings the `.json` files along** (optional, ticked by default), placing each beside its photo, so Part 1 still works on the sorted folder. Untick it if you only want photos.
-- **Duplicates when moving:** an exact duplicate is not moved; it stays behind in its original folder, so you can review and delete it.
-- **Copy or move.** Copy leaves the source untouched and needs about as much free space again. Move needs no extra space but empties the source folders (duplicates and `.json` files stay behind; remove the `.json` files later with the clean-up panel). Back up first if you choose Move.
-
-You get live counts while it runs, then a summary: files found, duplicates skipped (and the space they take), files placed, and "N folders merged into M", plus a table of the resulting folders and a CSV of where every file went. A preview saves its CSV to your Desktop and leaves the output folder untouched.
-
-Command line: `python3 takeout_fix_metadata.py "/path/to/Takeouts" --sort-only --dedupe --out "/path/to/Sorted"` (add `--move`, `--dry-run` or `--no-json` as needed).
-
-## Convert old videos to MP4 (tab 5)
+## Convert old videos to MP4 (tab 4)
 
 The **Convert videos** tab turns older video formats into `.mp4`, which plays on every phone, TV and app, and is usually smaller. It needs **ffmpeg** (`brew install ffmpeg`).
 
@@ -226,11 +207,11 @@ How it works:
 - **Default types:** every type is ticked except `.mov` (which is often an iPhone Live Photo video or a modern phone clip). Your tick boxes are remembered.
 - **Sizes:** a preview shows how many videos (and how much space) would be re-wrapped versus re-encoded, and the largest ones; the exact saving can only be known after converting. During a real run a **space saved so far** tile updates as each video finishes. The final summary shows total size **before, after and saved** (with a percentage), a breakdown by method (re-wrapped vs re-encoded) and by file type, and a **Biggest savings** table. Re-wrapped videos stay about the same size; re-encoded ones usually shrink a lot. The saving is real free space only if the originals are deleted; if you keep them or move them to `_original_videos`, they still use disk space until you delete them.
 
-Suggested order: run Part 1 (it creates the Live Photo `.MOV` files), then Part 4 for your other videos.
+Suggested order: run Part 1 (it creates the Live Photo `.MOV` files), then tab 4 for your other videos.
 
-## Merge folders (tab 3)
+## Merge folders (tab 2)
 
-Brings two or more folders together into one, for any folders (not only Google Takeout). Folders with the same name at any depth are merged, their files are combined, identical files are kept once, and different files with the same name are handled the way you choose. (The **Sort** tab is built around Takeout: it also carries `.json` files along and prefers the "Photos from YYYY" copy.)
+Brings two or more folders together into one, for any folders, including Google Takeout exports (this tab replaces the old *Sort* tab). Folders with the same name at any depth are merged, their files are combined, identical files are kept once, and different files with the same name are handled the way you choose.
 
 1. Put the folders to merge in the **Source** list and choose a **Destination** (or tick **Move** with no destination to merge everything into the first source folder).
 2. Leave **Preview only** ticked and press **Start**. You see how many files would come in, how many are identical, how many names clash, and which folders would come together, and nothing changes.
@@ -240,11 +221,13 @@ Choices:
 - **Copy or Move.** Copy leaves your sources untouched (needs about as much free space again). Move empties the sources, and folders left empty are removed.
 - **When two different files have the same name in the same folder:** *keep both* (the second becomes `name_1`), or *the newer*, *the larger*, or *the one from the first source folder* keeps the name. With those last three the other file is **not deleted**: it is set aside in a `_merge_conflicts` folder inside the destination for you to review.
 - **Identical files** (same content, compared by content not name) are kept once. When moving, the extra copy is deleted or moved to `_duplicates`, as you choose.
+- **These are Google Takeout folders:** ignores the `Takeout N / Google Photos` wrappers so every `Photos from 2012` becomes one folder, and brings each photo's `.json` file along beside it, so tab 1 still works on the merged result. Leave it unticked for ordinary folders.
+- **Find identical photos anywhere:** compares contents across all folders (not only within the same folder), so a photo repeated in several albums is kept once. Slower on big libraries.
 - **Treat `Folder (1)`, `Folder copy` and extra spaces as the same folder as `Folder`**, and **ignore upper and lower case** (so `photos` and `Photos` become one folder). Real names such as `Summer (2019)` are not changed.
 
 Safety: sources that overlap, or a destination inside a source, are refused. App and library bundles (such as `.photoslibrary`) are moved as one item. Invisible system files are left out. An interrupted merge can be run again with the same settings: files already placed are skipped. A CSV of every file and where it went is saved on your Desktop; the summary shows each source folder, the folders that came together, and every name clash.
 
-## Clean up (tab 4)
+## Clean up (tab 3)
 
 One tab, five optional tasks. Tick what you want; they always run in this order, so earlier steps leave work for later ones (for example, deleting cache files leaves folders empty, which the last step removes). Use **Preview only** first: it lists everything that would happen and changes nothing.
 
