@@ -168,12 +168,12 @@ def ts(d, field):
         return None
 
 
-def build_args(d, ext, overwrite):
+def build_args(d, ext, overwrite, skip=()):
     """exiftool arguments for one sidecar. Returns (args, taken_epoch)."""
     is_video = ext in VIDEO_EXT
     taken = ts(d, "photoTakenTime") or ts(d, "creationTime")
     a = []
-    if taken:
+    if taken and "date" not in skip:
         dt = datetime.fromtimestamp(taken, timezone.utc).strftime("%Y:%m:%d %H:%M:%S")
         if is_video:
             a += ["-api", "QuickTimeUTC=1",
@@ -185,6 +185,8 @@ def build_args(d, ext, overwrite):
     if not (geo.get("latitude") or geo.get("longitude")):
         geo = d.get("geoDataExif") or {}
     lat, lon = geo.get("latitude"), geo.get("longitude")
+    if "gps" in skip:
+        lat = lon = None
     if (lat or lon) and is_video:
         alt = geo.get("altitude") or 0
         coord = f"{lat}, {lon}, {alt}"
@@ -195,7 +197,7 @@ def build_args(d, ext, overwrite):
               f"-GPSLongitude={abs(lon)}", f"-GPSLongitudeRef={'E' if lon >= 0 else 'W'}",
               f"-GPSAltitude={abs(alt)}", f"-GPSAltitudeRef={1 if alt < 0 else 0}"]
     desc = (d.get("description") or "").strip()
-    if desc:
+    if desc and "desc" not in skip:
         a += [f"-XMP-dc:Description={desc}"]
         if not is_video:
             a += [f"-ImageDescription={desc}"]
@@ -368,19 +370,44 @@ def read_existing(path, is_video=False):
     return {"date": date, "lat": lat, "lon": lon, "desc": desc}
 
 
-def classify(d, ext, ex, overwrite):
-    """Per-field outcome: none / added / same / replaced / kept."""
+def _epoch(date_str):
+    try:
+        return datetime.strptime(date_str[:19], "%Y:%m:%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        return None
+
+
+def classify(d, ext, ex, overwrite, date_policy="earlier"):
+    """Per-field outcome: none / added / same / replaced / kept.
+
+    date_policy decides a disagreement between the photo's own date and Google's:
+    earlier = keep whichever is earlier (default), photo = keep the photo's, google = use Google's."""
     differ = "replaced" if overwrite else "kept"
     out = {}
     taken = ts(d, "photoTakenTime") or ts(d, "creationTime")
+    out["_taken_final"] = taken
     if not taken:
         out["date"] = "none"
     else:
         dt = datetime.fromtimestamp(taken, timezone.utc).strftime("%Y:%m:%d %H:%M:%S")
         e = ex.get("date", "")
-        out["date"] = "added" if (not e or e.startswith("0000")) else ("same" if e[:19] == dt else differ)
+        if not e or e.startswith("0000"):
+            out["date"] = "added"
+        elif e[:19] == dt:
+            out["date"] = "same"
+        elif date_policy == "google":
+            out["date"] = "replaced"
+        elif date_policy == "photo":
+            out["date"] = "kept"
+        else:  # earlier wins: Google's date is often the (later) upload or re-save time
+            out["date"] = "replaced" if dt < e[:19] else "kept"
+        if out["date"] in ("kept", "same") and e and not e.startswith("0000"):
+            out["_taken_final"] = _epoch(e) or taken
         out["date_before"] = "" if e.startswith("0000") else e[:19]
         out["date_google"] = dt + " UTC"
+        up = ts(d, "creationTime")
+        if up and abs(up - taken) <= 300:
+            out["date_note"] = "Google's date equals its upload time, so it may not be when the photo was taken"
     geo = d.get("geoData") or {}
     if not (geo.get("latitude") or geo.get("longitude")):
         geo = d.get("geoDataExif") or {}
@@ -426,7 +453,7 @@ def pick_closest(m, candidates):
 
 
 REPORT_FIELDS = ["file", "sidecar", "match", "status", "detail", "live", "output",
-                 "date", "date_before", "date_google",
+                 "date", "date_before", "date_google", "date_note",
                  "gps", "gps_before", "gps_google",
                  "desc", "desc_before", "desc_google",
                  "people", "favourite"]
@@ -708,9 +735,15 @@ def process(m, idx, args, out_root):
         row["live"] = "paired" if cid else why
     d = load_json(sc) if sc else None
     status0 = "no-json" if not sc else "bad-json"
-    exif_args, taken = build_args(d, ext, args.overwrite) if d else ([], None)
+    skip, final_taken = set(), None
     if d and ext not in NO_WRITE_EXT:
-        row.update(classify(d, ext, read_existing(m, ext in VIDEO_EXT), args.overwrite))
+        cl = classify(d, ext, read_existing(m, ext in VIDEO_EXT), args.overwrite, getattr(args, "date_policy", "earlier"))
+        final_taken = cl.pop("_taken_final", None)
+        row.update(cl)
+        skip = {k for k in ("date", "gps", "desc") if row.get(k) in ("same", "kept", "none")}
+    exif_args, taken = build_args(d, ext, args.overwrite, skip) if d else ([], None)
+    if final_taken:
+        taken = final_taken  # file times follow the date that actually won
     dest = None
     if out_root:
         dest = claim_dest(dest_dir_for(m, taken, args, out_root) / m.name, args)
@@ -725,7 +758,7 @@ def process(m, idx, args, out_root):
         place_file(m, dest, getattr(args, "move", False))
         target = dest
     if d and exif_args and ext not in NO_WRITE_EXT:
-        ok, msg = run_exiftool(target, exif_args, args.overwrite, sidecar_for_raw=ext in RAW_EXT)
+        ok, msg = run_exiftool(target, exif_args, True, sidecar_for_raw=ext in RAW_EXT)
         row["status"] = "updated" if ok else "exiftool-error"
         row["detail"] = msg[:300]
     elif d:
@@ -1026,7 +1059,9 @@ def main():
     ap.add_argument("root", type=Path, help="folder containing all extracted 'Takeout N' folders")
     ap.add_argument("--out", type=Path, help="copy fixed files here instead of editing in place")
     ap.add_argument("--dry-run", action="store_true", help="match only; change nothing")
-    ap.add_argument("--overwrite", action="store_true", help="replace existing EXIF values")
+    ap.add_argument("--overwrite", action="store_true", help="replace existing location and caption (dates follow --date-policy)")
+    ap.add_argument("--date-policy", choices=["earlier", "photo", "google"], default="earlier",
+                    help="when the photo already has a different date: keep the earlier one (default), the photo's, or Google's")
     ap.add_argument("--pair-live", action="store_true",
                     help="relink Live Photo videos to their still (needs --out); videos become .MOV")
     ap.add_argument("--dedupe", action="store_true", help="skip byte-identical duplicate files")

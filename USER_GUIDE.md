@@ -67,13 +67,14 @@ Pick a new empty folder. Fixed copies and reports are saved there, and your Take
 | Remove exact duplicates | **on** | Skips byte-identical copies of the same photo (repeated across Takeouts or albums); keeps the one in `Photos from YYYY`. |
 | Move instead of copy | off | Moves files into the output folder instead of copying. Saves disk space but empties your Takeout folders as it goes. |
 | Re-pair Live Photos | off | Re-links iPhone Live Photo videos to their still (see below). |
-| Replace information already stored in the photo (overwrite EXIF) | off | Off: only fill in missing values. On: replace existing values with Google's. |
+| When a photo already has a date and Google's is different | **Keep the earlier date** | Google sometimes records the day a photo was uploaded or re-saved, which is later than when it was taken, so the earlier of the two wins. Other choices: always keep the photo's own date, or always use Google's. A photo with no date gets Google's. |
+| Replace location and caption already stored in the photo (overwrite) | on | Off: only fill in a missing location or caption. On: replace a different one with Google's. |
 
 ### 4. Run a preview first
 Leave Preview on and press **Start**. Read the summary (below). If **No JSON found** is high, add more Takeout folders and preview again.
 
 ### 5. Run it for real
-Untick **Preview only**. Because Google's exports often carry wrong dates, tick **Replace information already stored in the photo** too. Press **Start**. Large libraries take a while; the progress bar and live counts show how far along it is.
+Untick **Preview only**. Because Google's exports often carry wrong dates, tick **Replace location and caption already stored in the photo** too. Press **Start**. Large libraries take a while; the progress bar and live counts show how far along it is.
 
 ### 6. Check the result
 Use **Show reports in Finder**, and spot-check a few files:
@@ -89,6 +90,16 @@ With an output folder the tool **builds a new, merged library there and leaves y
 Every file is placed, including those with no JSON (they keep their existing data). Folder names stay exactly as Google exported them: same-named folders from different Takeouts merge into one, and album folders stay as albums. If two different images land in the same folder with the same name (iPhones restart numbering), nothing is overwritten: the second is saved as `name_1.ext`. Each image is matched to its own JSON (the one in its own folder first, then the one with the closest date), so each keeps its own date and location. Exact duplicates are detected by content, not name. Because duplicate album copies are skipped, **album membership is not preserved**; the photo stays in its `Photos from YYYY` folder. You can re-run into the same output folder to resume an interrupted or partly failed run: finished files are skipped.
 
 While it runs you see live counts (duplicates skipped, files placed, output folders) and the last dozen files with where each went. The summary ends with a table of the output folders.
+
+## How dates are decided
+
+Every photo can carry its own date (stored inside the file, in a label called EXIF), and Google's `.json` file carries another. The **date setting** on the Fix tab decides what happens when both exist and disagree:
+
+- **Keep the earlier date (default).** Google often records the day a photo was *uploaded or re-saved* rather than when it was taken, and that is always later than the real date. Keeping the earlier one protects correct dates (for example a 2006 photo that Google dated 2018) and still fixes a camera date that is too late.
+- **Keep the photo's own date.** Never changes a date that is already there.
+- **Use Google's date.** Always replaces it.
+
+A photo with **no date at all** always gets Google's date. Where Google's date is exactly its upload time, the report notes it in the `date_note` column (and the summary counts them, and the sample table shows a warning mark), because that date may not be when the photo was taken. One limit: a camera with a dead clock battery can stamp very early dates (such as the year 2000); "keep the earlier date" would keep those, so for such photos choose **Use Google's date**. The file's own modified date is set to the date that wins.
 
 ## Reading the summary
 

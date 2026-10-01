@@ -121,10 +121,15 @@ def summarise(rows, sidecars, roots, dry_run):
                     "mismatch; check the no-json list." % (len(orphans), nj))
     if not nj:
         tips.append("Every file found a JSON sidecar.")
+    upload_like = sum(1 for r in rows if r.get("date_note") and r.get("date") in ("added", "replaced")
+                      and r["status"] in ("updated", "would-update"))
+    if upload_like:
+        tips.append("%d dates written from Google look like its upload time rather than when the photo was taken "
+                    "(see the 'date_note' column in the report). Check a few of them." % upload_like)
     kept = sum(fields[k].get("kept", 0) for k in fields)
     if kept:
         tips.append("%d existing date/location/description values differ from Google's but were left alone. "
-                    "Tick 'Replace information already stored in the photo' to replace them." % kept)
+                    "Tick 'Replace location and caption already stored in the photo' to replace locations and captions, or change the date setting." % kept)
     if live.get("no-id") or live.get("no-still"):
         tips.append("Live Photos: %d videos had a still but no Apple ID to copy, %d had no matching still; those stay as separate videos."
                     % (live.get("no-id", 0), live.get("no-still", 0)))
@@ -183,7 +188,7 @@ def write_text_summary(path, sm):
     Path(path).write_text("\n".join(L) + "\n", encoding="utf-8")
 
 
-def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=False):
+def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=False, date_policy="earlier"):
     with LOCK:
         STATE.update(state="scanning", total=0, done=0, counts={}, message="Scanning folders...",
                      report="", summary=None, scan=None, extra={}, recent=[], phase=None, kind="fix")
@@ -214,7 +219,7 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
                          scan={"media": len(media), "json": len(sidecars), "folders": len(resolved)},
                          message=f"{len(media)} media files, {len(sidecars)} json files")
         args = argparse.Namespace(dry_run=dry_run, overwrite=overwrite, pair_live=pair_live,
-                                  dedupe=dedupe, move=move, out_root=out or None, roots=resolved)
+                                  dedupe=dedupe, move=move, out_root=out or None, roots=resolved, date_policy=date_policy)
         with LOCK:
             STATE["message"] = "Finding exact duplicates..." if dedupe else "Preparing..."
 
@@ -290,7 +295,7 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
         fx.close_all()
         sm = summarise(rows, sidecars, resolved, dry_run)
         sm["dupe_bytes"] = getattr(args, "dupe_bytes", 0)
-        sm["samples"] = [{"file": Path(r["file"]).name, "date": [r["date"], r["date_before"], r["date_google"]],
+        sm["samples"] = [{"file": Path(r["file"]).name, "date": [r["date"], r["date_before"], r["date_google"], r.get("date_note", "")],
                           "gps": [r["gps"], r["gps_before"], r["gps_google"]],
                           "desc": [r["desc"], r["desc_before"], r["desc_google"]]}
                          for r in changed if "replaced" in (r["date"], r["gps"], r["desc"])
@@ -767,7 +772,7 @@ class Handler(BaseHTTPRequestHandler):
             threading.Thread(target=run_job, daemon=True, args=(
                 body.get("roots", []), body.get("out", ""),
                 bool(body.get("dry_run")), bool(body.get("overwrite")), bool(body.get("pair_live")),
-                bool(body.get("dedupe")), bool(body.get("move")))).start()
+                bool(body.get("dedupe")), bool(body.get("move")), body.get("date_policy", "earlier"))).start()
             self._send(200, "{}")
         elif self.path == "/api/update_check":
             threading.Thread(target=check_update, daemon=True).start()
@@ -922,7 +927,10 @@ code{background:var(--bg);padding:1px 5px;border-radius:5px;font-size:12px}
 <div class="opt"><input type="checkbox" id="dedupe" checked><div>Remove exact duplicates<small>Skips byte-identical copies (the same photo repeated across Takeouts or albums). Keeps the copy in 'Photos from YYYY'. Needs an extra read pass over files that share a size.</small></div></div>
 <div class="opt"><input type="checkbox" id="move"><div>Move files instead of copying<small>Saves disk space but empties your Takeout folders as it goes. Off = safe copy (needs roughly as much free space again).</small></div></div>
 <div class="opt"><input type="checkbox" id="live" checked><div>Re-pair Live Photos<small>Copies each still's Apple ID onto its video and saves the video as .MOV so Photos can treat them as one Live Photo. Needs an output folder.</small></div></div>
-<div class="opt"><input type="checkbox" id="ow" checked><div>Replace information already stored in the photo<small>Every photo has a hidden label of facts saved inside the file itself (called EXIF): when it was taken, where, and a caption. Google&#39;s export often leaves these blank or wrong. <b>Off</b>: only fill in facts that are missing and never change ones already there. <b>On</b>: replace what is there with Google&#39;s version (recommended if your dates look wrong). Your pictures themselves are never altered.</small></div></div></div>
+<div class="opt"><div style="flex:1"><label for="datepol" style="font-weight:600">When a photo already has a date and Google&#39;s is different</label>
+<select id="datepol" class="sel"><option value="earlier" selected>Keep the earlier date (recommended)</option><option value="photo">Keep the photo&#39;s own date</option><option value="google">Use Google&#39;s date</option></select>
+<small>Google sometimes records the day a photo was uploaded or re-saved instead of the day it was taken, and that day is always later. Keeping the earlier of the two is usually right. A photo with no date at all always gets Google&#39;s.</small></div></div>
+<div class="opt"><input type="checkbox" id="ow" checked><div>Replace location and caption already stored in the photo<small>Every photo has hidden facts saved inside the file itself (called EXIF). <b>Off</b>: only fill in a location or caption that is missing. <b>On</b>: replace a different one with Google&#39;s version. Your pictures themselves are never altered.</small></div></div></div>
 
 <button class="p" id="go">Start</button>
 
@@ -1011,7 +1019,7 @@ $('go').onclick=async()=>{
   if(!$('dry').checked&&!$('out').value.trim()&&!confirm('No output folder: files will be edited IN PLACE. Continue?'))return;
   if($('move').checked&&!$('dry').checked&&!confirm('MOVE will take files out of your Takeout folders. Make sure you have another backup. Continue?'))return;
   $('sum').style.display='none';
-  const r=await post('/api/start',{roots:roots(),out:$('out').value.trim(),dry_run:$('dry').checked,overwrite:$('ow').checked,pair_live:$('live').checked,dedupe:$('dedupe').checked,move:$('move').checked});
+  const r=await post('/api/start',{roots:roots(),out:$('out').value.trim(),dry_run:$('dry').checked,overwrite:$('ow').checked,pair_live:$('live').checked,dedupe:$('dedupe').checked,move:$('move').checked,date_policy:$('datepol').value});
   if(r.error)alert(r.error);else poll();
 };
 $('rev').onclick=()=>post('/api/reveal');
@@ -1036,7 +1044,7 @@ function showSummary(s){
   if(s.live&&Object.keys(s.live).length)h+='<h2>Live Photo pairing</h2>'+tbl(['Result','Videos'],Object.entries(s.live).map(([k,v])=>[({paired:'Paired with its still','no-id':'Still has no Apple ID','no-still':'No matching still','pair-error':'Error'})[k]||k,v.toLocaleString()]));
   if((s.out_folders||[]).length)h+='<h2>Output folders</h2>'+tbl(['Folder','Files'],s.out_folders.slice(0,80).map(r=>[esc(r[0]),r[1].toLocaleString()]))+(s.out_folders.length>80?'<small>Showing 80 of '+s.out_folders.length+'; see the summary .txt for all.</small>':'');
   if(s.album_no_json.length)h+='<h2>Albums with the most no-JSON files</h2>'+tbl(['Album','No JSON'],s.album_no_json.map(r=>[esc(r[0]),r[1].toLocaleString()]));
-  const fmt=([o,b,g])=>o==='same'?'<span style="color:var(--mute)">already correct</span>':o==='none'||!o?'-':`${esc(b||'(none)')} &rarr; <b>${esc(g)}</b> <small style="display:inline">(${o})</small>`;
+  const fmt=([o,b,g,n])=>o==='same'?'<span style="color:var(--mute)">already correct</span>':o==='none'||!o?'-':`${esc(b||'(none)')} &rarr; <b>${esc(g)}</b> <small style="display:inline">(${o})</small>${n?' <span title="'+esc(n)+'">&#9888;</span>':''}`;
   if((s.samples||[]).length)h+='<h2>Sample of changes (first 15)</h2>'+tbl(['File','Date taken','Location','Description'],s.samples.map(x=>[esc(x.file),fmt(x.date),fmt(x.gps),fmt(x.desc)]));
   h+='<small>Saved: full report CSV (with before/after values per file), a changes-only CSV, a CSV of just the no-JSON files, and a text summary.</small>';
   $('sumbody').innerHTML=h;$('sum').style.display='block'}
