@@ -125,6 +125,12 @@ def summarise(rows, sidecars, roots, dry_run):
     if live.get("no-id") or live.get("no-still"):
         tips.append("Live Photos: %d videos had a still but no Apple ID to copy, %d had no matching still; those stay as separate videos."
                     % (live.get("no-id", 0), live.get("no-still", 0)))
+    if st.get("copy-error") or st.get("error"):
+        tips.append("%d files could not be copied or processed and were skipped; see the 'detail' column in the report. "
+                    "'Input/output error' (Errno 5) usually means a problem reading or writing the drive or that file."
+                    % (st.get("copy-error", 0) + st.get("error", 0)))
+    if st.get("already-done"):
+        tips.append("%d files were already in place from an earlier run and were skipped." % st["already-done"])
     if st.get("exiftool-error"):
         tips.append("%d files hit an exiftool error; see the 'detail' column in the report." % st["exiftool-error"])
     if dup:
@@ -205,7 +211,7 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
                          scan={"media": len(media), "json": len(sidecars), "folders": len(resolved)},
                          message=f"{len(media)} media files, {len(sidecars)} json files")
         args = argparse.Namespace(dry_run=dry_run, overwrite=overwrite, pair_live=pair_live,
-                                  dedupe=dedupe, move=move)
+                                  dedupe=dedupe, move=move, out_root=out or None)
         with LOCK:
             STATE["message"] = "Finding exact duplicates..." if dedupe else "Preparing..."
 
@@ -223,7 +229,7 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
         rows, counts, extra = [], defaultdict(int), defaultdict(int)
         out_dirs, recent = set(), []
         with ThreadPoolExecutor(max_workers=4) as ex:
-            for row in ex.map(lambda m: fx.process(m, idx, args, out_root), media):
+            for row in ex.map(lambda m: fx.guarded(fx.process)(m, idx, args, out_root), media):
                 rows.append(row)
                 counts[row["status"]] += 1
                 if row["status"] in ("updated", "would-update"):
@@ -239,6 +245,8 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
                         extra["desc_changed"] += 1
                 if row["live"] == "paired":
                     extra["live_paired"] += 1
+                if row["status"] in ("copy-error", "error", "exiftool-error"):
+                    extra["errors"] += 1
                 if row["status"] == "duplicate":
                     extra["duplicates"] += 1
                 if row["output"]:
@@ -313,7 +321,7 @@ def run_sort(roots, out, dry_run, dedupe, move, bring_json):
             sidecars += [x for x in sc if x.resolve() not in sseen and not sseen.add(x.resolve())]
         idx = fx.build_index(sidecars) if bring_json else None
         args = argparse.Namespace(dry_run=dry_run, dedupe=dedupe, move=move, bring_json=bring_json,
-                                  pair_live=False, overwrite=False)
+                                  pair_live=False, overwrite=False, out_root=out)
         with LOCK:
             STATE.update(state="running", total=len(media), scan={"media": len(media), "json": len(sidecars), "folders": len(resolved)},
                          message=f"Checking {len(media):,} files for exact duplicates..." if dedupe else "Preparing...")
@@ -327,9 +335,11 @@ def run_sort(roots, out, dry_run, dedupe, move, bring_json):
         out_root = Path(out)
         rows, counts, extra, out_dirs, src_dirs, recent = [], defaultdict(int), defaultdict(int), set(), set(), []
         with ThreadPoolExecutor(max_workers=4) as ex:
-            for row in ex.map(lambda m: fx.sort_one(m, idx, args, out_root), media):
+            for row in ex.map(lambda m: fx.guarded(fx.sort_one)(m, idx, args, out_root), media):
                 rows.append(row)
                 counts[row["status"]] += 1
+                if row["status"] in ("copy-error", "error", "exiftool-error"):
+                    extra["errors"] += 1
                 if row["status"] == "duplicate":
                     extra["duplicates"] += 1
                 if row["output"]:
@@ -368,6 +378,13 @@ def run_sort(roots, out, dry_run, dedupe, move, bring_json):
               "json_along": extra.get("json_along", 0),
               "out_folders": sorted([os.path.relpath(k, base) if k != base else ".", v] for k, v in folders.items()),
               "tips": []}
+        errs = counts.get("copy-error", 0) + counts.get("error", 0)
+        if errs:
+            sm["tips"].append("%d files could not be copied or moved and were skipped; see the 'detail' column in the report. "
+                              "'Input/output error' (Errno 5) usually means a problem reading or writing the drive or that file. "
+                              "Fix the drive problem and run the same sort again: finished files are skipped." % errs)
+        if counts.get("already-done"):
+            sm["tips"].append("%d files were already in place from an earlier run and were skipped." % counts["already-done"])
         if dedupe and not sm["duplicates"]:
             sm["tips"].append("No exact duplicates were found.")
         if sm["duplicates"]:
@@ -698,7 +715,7 @@ let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   const pct=s.total?Math.round(100*s.done/s.total):0;$('fill').style.width=pct+'%';
   $('msg').innerHTML=s.state==='error'?'<span class="err">'+esc(s.message)+'</span>':s.state==='done'?'<span class="ok">Finished.</span>':esc(s.message)+(s.done?` (${s.done.toLocaleString()} / ${s.total.toLocaleString()})`:'');
   const c=s.counts||{},done=s.done||0,nj=c['no-json']||0;
-  $('tiles').innerHTML=s.total?tile(s.total,'media files')+tile(done-nj,'matched so far','ok')+tile(nj,'no JSON so far',nj?'bad':'')+tile((s.extra||{}).dates_changed||0,'dates changed')+tile((s.extra||{}).gps_changed||0,'locations changed')+tile((s.extra||{}).desc_changed||0,'captions changed')+tile((s.extra||{}).replaced_files||0,'files with info replaced')+tile((s.extra||{}).live_paired||0,'Live Photos paired')+tile((s.extra||{}).duplicates||0,'duplicates skipped')+((s.extra||{}).json_along?tile(s.extra.json_along,'.json brought along'):'')+tile((s.extra||{}).written||0,'files placed')+tile((s.extra||{}).folders||0,'output folders')+(s.scan?tile(s.scan.json,'JSON files found'):''):'';
+  $('tiles').innerHTML=s.total?tile(s.total,'media files')+tile(done-nj,'matched so far','ok')+tile(nj,'no JSON so far',nj?'bad':'')+tile((s.extra||{}).dates_changed||0,'dates changed')+tile((s.extra||{}).gps_changed||0,'locations changed')+tile((s.extra||{}).desc_changed||0,'captions changed')+tile((s.extra||{}).replaced_files||0,'files with info replaced')+tile((s.extra||{}).live_paired||0,'Live Photos paired')+tile((s.extra||{}).duplicates||0,'duplicates skipped')+((s.extra||{}).errors?tile(s.extra.errors,'files with errors','bad'):'')+((s.extra||{}).json_along?tile(s.extra.json_along,'.json brought along'):'')+tile((s.extra||{}).written||0,'files placed')+tile((s.extra||{}).folders||0,'output folders')+(s.scan?tile(s.scan.json,'JSON files found'):''):'';
   $('recent').innerHTML=(s.recent||[]).map(r=>`${esc(r.name)} &rarr; ${r.status==='duplicate'?'duplicate (skipped)':esc(r.to)+' ['+esc(r.status)+(r.live==='paired'?', live paired':'')+']'}`).reverse().join('<br>');
   if(s.state==='done'&&s.summary)showSummary(s.summary);
   if(['done','error','idle'].includes(s.state))clearInterval(timer);

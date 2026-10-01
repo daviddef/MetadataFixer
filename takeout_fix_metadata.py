@@ -35,6 +35,7 @@ import hashlib
 import subprocess
 import sys
 import tempfile
+import time
 import threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -549,9 +550,79 @@ def plan_live(media, progress=None):
     return plan
 
 
+def place_file(src, dest, move):
+    """Copy or move one file, retrying once and cleaning up a partial copy if it fails."""
+    for attempt in (1, 2):
+        try:
+            if move:
+                shutil.move(str(src), str(dest))
+            else:
+                shutil.copy2(src, dest)
+            return
+        except OSError:
+            try:
+                if dest.exists():
+                    dest.unlink()
+            except OSError:
+                pass
+            if attempt == 2:
+                raise
+            time.sleep(1)
+
+
+MANIFEST = ".metadatafixer_progress.jsonl"
+
+
+def load_manifest(out_root):
+    done = {}
+    try:
+        with open(Path(out_root) / MANIFEST, encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    d = json.loads(line)
+                    done[d["src"]] = d["dest"]
+                except (ValueError, KeyError):
+                    pass
+    except OSError:
+        pass
+    return done
+
+
+def record_progress(args, src, dest):
+    """Remember that src was placed at dest, so an interrupted run can resume without duplicating."""
+    root = getattr(args, "out_root", None)
+    if not root or getattr(args, "dry_run", False):
+        return
+    with args.lock:
+        with open(Path(root) / MANIFEST, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"src": str(src), "dest": str(dest)}, ensure_ascii=False) + "\n")
+        args.manifest[str(src)] = str(dest)
+
+
+def already_done(m, args):
+    d = (getattr(args, "manifest", None) or {}).get(str(m))
+    return d if d and Path(d).exists() else None
+
+
+def guarded(fn):
+    """One bad file must never stop the whole run: turn any failure into an error row."""
+    def run(m, idx, args, out_root):
+        try:
+            return fn(m, idx, args, out_root)
+        except Exception as e:
+            row = {k: "" for k in REPORT_FIELDS}
+            row["file"] = str(m)
+            row["status"] = "copy-error" if isinstance(e, OSError) else "error"
+            row["detail"] = f"{type(e).__name__}: {e}"[:300]
+            return row
+    return run
+
+
 def prepare(args, media, progress=None):
     """progress(stage, done, total) is called as work proceeds."""
     args.lock, args.claimed = threading.Lock(), set()
+    root = getattr(args, "out_root", None)
+    args.manifest = load_manifest(root) if root and not getattr(args, "dry_run", False) else {}
     dedupe_progress = (lambda d, t: progress("dedupe", d, t)) if progress else None
     args.dupes, args.dupe_bytes = (plan_duplicates(media, dedupe_progress) if getattr(args, "dedupe", False) else ({}, 0))
     args.live_plan = plan_live(media, progress) if getattr(args, "pair_live", False) else {}
@@ -583,6 +654,10 @@ def process(m, idx, args, out_root):
     if kept:
         row["status"], row["detail"] = "duplicate", f"identical to {kept}"
         return row
+    prev = already_done(m, args)
+    if prev:
+        row["status"], row["output"] = "already-done", prev
+        return row
     ext = m.suffix.lower()
     cid = None
     if getattr(args, "pair_live", False) and ext in (".mp4", ".mov"):
@@ -604,10 +679,7 @@ def process(m, idx, args, out_root):
     target = m
     if out_root:
         dest.parent.mkdir(parents=True, exist_ok=True)
-        if getattr(args, "move", False):
-            shutil.move(str(m), str(dest))
-        else:
-            shutil.copy2(m, dest)
+        place_file(m, dest, getattr(args, "move", False))
         target = dest
     if d and exif_args and ext not in NO_WRITE_EXT:
         ok, msg = run_exiftool(target, exif_args, args.overwrite, sidecar_for_raw=ext in RAW_EXT)
@@ -629,6 +701,8 @@ def process(m, idx, args, out_root):
             os.utime(target, (taken, taken))
         except OSError:
             pass
+    if out_root:
+        record_progress(args, m, target)
     return row
 
 
@@ -640,7 +714,20 @@ def sort_one(m, idx, args, out_root):
     if kept:
         row["status"], row["detail"] = "duplicate", f"identical to {kept}"
         return row
-    dest = claim_dest(dest_dir_for(m, None, args, out_root) / m.name, args)
+    prev = already_done(m, args)
+    if prev:
+        row["status"], row["output"] = "already-done", prev
+        return row
+    first = dest_dir_for(m, None, args, out_root) / m.name
+    try:
+        if first.exists() and first.stat().st_size == m.stat().st_size and file_hash(first) == file_hash(m):
+            row["status"], row["output"] = "already-done", str(first)
+            if not args.dry_run:
+                record_progress(args, m, first)
+            return row
+    except OSError:
+        pass
+    dest = claim_dest(first, args)
     row["output"] = str(dest)
     sc = None
     if getattr(args, "bring_json", False):
@@ -653,15 +740,13 @@ def sort_one(m, idx, args, out_root):
         row["status"] = "would-place"
         return row
     dest.parent.mkdir(parents=True, exist_ok=True)
-    if getattr(args, "move", False):
-        shutil.move(str(m), str(dest))
-    else:
-        shutil.copy2(m, dest)
+    place_file(m, dest, getattr(args, "move", False))
     if sc:  # keep the info file next to its photo so metadata can be fixed afterwards
         jd = dest.with_name(dest.name + ".json")
         if not jd.exists():
             shutil.copy2(sc, jd)
     row["status"] = "placed"
+    record_progress(args, m, dest)
     return row
 
 
@@ -702,13 +787,14 @@ def main():
     print(f"  {len(media)} media files, {len(sidecars)} json files")
     idx = build_index(sidecars)
     args.bring_json = not args.no_json
+    args.out_root = args.out
     prepare(args, media)
     if args.dedupe:
         print(f"  {len(args.dupes)} exact duplicates will be skipped ({args.dupe_bytes / 1e9:.1f} GB)")
 
     rows = []
     with ThreadPoolExecutor(max_workers=args.workers) as ex:
-        for i, row in enumerate(ex.map(lambda m: (sort_one if args.sort_only else process)(m, idx, args, args.out), media), 1):
+        for i, row in enumerate(ex.map(lambda m: guarded(sort_one if args.sort_only else process)(m, idx, args, args.out), media), 1):
             rows.append(row)
             if i % 500 == 0:
                 print(f"  {i}/{len(media)}")

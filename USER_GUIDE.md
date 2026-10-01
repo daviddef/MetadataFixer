@@ -73,7 +73,7 @@ Keep your Takeout folders until you are happy with the output.
 
 With an output folder the tool **builds a new, merged library there and leaves your Takeout folders untouched** (a second copy, so you need roughly as much free space again). Tick **Move** to relocate files instead; it uses no extra space but empties the Takeout folders, so have another backup first.
 
-Every file is placed, including those with no JSON (they keep their existing data). Folder names stay exactly as Google exported them: same-named folders from different Takeouts merge into one, and album folders stay as albums. If two different images land in the same folder with the same name (iPhones restart numbering), nothing is overwritten: the second is saved as `name_1.ext`. Each image is matched to its own JSON (the one in its own folder first, then the one with the closest date), so each keeps its own date and location. Exact duplicates are detected by content, not name. Because duplicate album copies are skipped, **album membership is not preserved**; the photo stays in its `Photos from YYYY` folder. Use a fresh output folder each run: re-running into the same one creates `_1` copies.
+Every file is placed, including those with no JSON (they keep their existing data). Folder names stay exactly as Google exported them: same-named folders from different Takeouts merge into one, and album folders stay as albums. If two different images land in the same folder with the same name (iPhones restart numbering), nothing is overwritten: the second is saved as `name_1.ext`. Each image is matched to its own JSON (the one in its own folder first, then the one with the closest date), so each keeps its own date and location. Exact duplicates are detected by content, not name. Because duplicate album copies are skipped, **album membership is not preserved**; the photo stays in its `Photos from YYYY` folder. You can re-run into the same output folder to resume an interrupted or partly failed run: finished files are skipped.
 
 While it runs you see live counts (duplicates skipped, files placed, output folders) and the last dozen files with where each went. The summary ends with a table of the output folders.
 
@@ -199,6 +199,8 @@ The command line takes one folder; put your batches under a common parent folder
 | Dates look wrong by some hours | Timezone: Google's times are UTC |
 | **Kept** counts are high | Tick **Replace information already stored in the photo** |
 | Folder buttons do nothing | Type or paste the paths instead |
+| `Input/output error` (Errno 5) on a file | The drive could not read or write that file (a failing drive, loose cable or power, or a damaged file). The tool skips the file, records it as `copy-error` in the report and carries on. Check the drive in Disk Utility (First Aid), try copying that file in Finder, then run the same job again |
+| A run stopped or was interrupted | Run it again with the **same output folder**. Files already placed are skipped (the tool keeps a hidden `.metadatafixer_progress.jsonl` log in the output folder, and for sorting it also recognises identical files already there), so you get no `_1` copies |
 | `exiftool-error` rows | See the `detail` column in the report |
 | Live Photo not recognised in Photos | The still probably lost its Apple ID; see the Live Photos section |
 
