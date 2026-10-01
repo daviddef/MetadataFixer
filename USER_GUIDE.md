@@ -197,7 +197,9 @@ Command line: `python3 takeout_fix_metadata.py "/path/to/Takeouts" --sort-only -
 
 ## Part 4: Convert old videos to MP4
 
-The **Convert videos** tab turns `.avi` and `.mov` videos into `.mp4`, which plays on every phone, TV and app, and is usually smaller. It needs **ffmpeg** (`brew install ffmpeg`).
+The **Convert videos** tab turns older video formats into `.mp4`, which plays on every phone, TV and app, and is usually smaller. It needs **ffmpeg** (`brew install ffmpeg`).
+
+**Choose the formats one by one.** Each type has its own tick box: `.avi`, `.mov`, `.mpg`, `.mpeg`, `.wmv`, `.3gp`, `.flv` (ticked by default) and `.mkv`, `.mts`, `.m2ts`, `.vob` (unticked). Press **Scan folders for counts** to see, next to each type, how many videos there are and how much space they use, plus how many of the `.mov` files are **Live Photo videos** (these are left alone unless you tick the Live Photo option). The preview and the final summary also include a **By video type** table: found, converted (or would convert), Live Photo videos skipped, and problems.
 
 1. Add the folders to scan. Leave **Preview only** ticked and press **Start converting** to see how many videos would be converted, and which would be quickly re-wrapped (lossless) and which re-encoded.
 2. Choose what happens to the **original** video:
@@ -208,7 +210,7 @@ The **Convert videos** tab turns `.avi` and `.mov` videos into `.mp4`, which pla
 3. Untick Preview and start.
 
 How it works:
-- Videos already in H.264 or HEVC with AAC/MP3 audio are **re-wrapped** into an MP4 without re-encoding: fast and with no quality loss. Anything else is **re-encoded** to H.264/AAC (quality setting: very high, high, or smaller), which can take a long time for big files.
+- Three methods, chosen per video: **re-wrapped** (video H.264 or HEVC with AAC/MP3/AC3 audio: nothing is re-encoded, so it is fast and lossless); **video kept, audio converted** (H.264/HEVC video with other audio, such as Vorbis or Opus: the video is untouched and only the audio becomes AAC); and **re-encoded** (everything else, such as MPEG-2 `.mpg`, `.wmv` and old `.avi`: converted to H.264/AAC at your quality setting, which can take a long time for big files). Interlaced MPEG-2 video is de-interlaced.
 - The date taken and GPS location are carried across to the new file, and its modified date matches the original. If the original had a `.json` file beside it, a copy is made for the new name.
 - If an unrelated `.mp4` already has the same name, the new file is called `name_converted.mp4`; nothing is overwritten.
 - **Live Photos:** an iPhone Live Photo is a still (`.HEIC`) plus a short `.MOV` video that Apple Photos links together. A `.MOV` sitting next to a photo with the same name is treated as a Live Photo video and skipped, because converting it would break the link. Tick **Also convert Live Photo videos** to override.

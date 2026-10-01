@@ -842,7 +842,8 @@ def m_is_dupe(m, args):
 
 # ---------------------------------------------------------------- Part 4: convert old videos to MP4
 CONVERT_FIELDS = ["file", "status", "mode", "output", "size_before", "size_after", "original", "detail"]
-LEGACY_EXT = (".avi", ".mov")
+LEGACY_EXT = (".avi", ".mov", ".mpg", ".mpeg", ".wmv", ".3gp", ".flv", ".mkv", ".mts", ".m2ts", ".vob")
+DEFAULT_EXT = (".avi", ".mov", ".mpg", ".mpeg", ".wmv", ".3gp", ".flv")
 ORIGINALS_DIR = "_original_videos"
 QUALITY_CRF = {"veryhigh": 16, "high": 20, "small": 24}
 
@@ -877,9 +878,10 @@ def is_live_video(path):
 
 
 def convert_mode(info):
-    """remux = rewrap without re-encoding (lossless, fast); encode = convert to H.264/AAC."""
-    if info["vcodec"] in ("h264", "hevc") and info["acodec"] in (None, "aac", "mp3", "ac3"):
-        return "remux"
+    """remux = rewrap, nothing re-encoded (lossless, fast); audio = video kept, audio converted to AAC;
+    encode = convert video to H.264 and audio to AAC."""
+    if info["vcodec"] in ("h264", "hevc"):
+        return "remux" if info["acodec"] in (None, "aac", "mp3", "ac3") else "audio"
     return "encode"
 
 
@@ -898,12 +900,31 @@ def scan_legacy(roots, exts):
     return out
 
 
+def count_legacy(roots, exts=LEGACY_EXT):
+    """Quick census of convertible videos per type: count, bytes, and how many .mov are Live Photo videos."""
+    out = {}
+    for p, _ in scan_legacy(roots, set(exts)):
+        e = p.suffix.lower()
+        d = out.setdefault(e, {"n": 0, "bytes": 0, "live": 0})
+        d["n"] += 1
+        try:
+            d["bytes"] += p.stat().st_size
+        except OSError:
+            pass
+        if e == ".mov" and is_live_video(p):
+            d["live"] += 1
+    return out
+
+
 def _run_ffmpeg(src, part, info, mode, crf, duration, progress):
     cmd = ["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(src), "-map", "0:v:0", "-map", "0:a?"]
     if mode == "remux":
         cmd += ["-c", "copy"] + (["-tag:v", "hvc1"] if info["vcodec"] == "hevc" else [])
+    elif mode == "audio":
+        cmd += ["-c:v", "copy"] + (["-tag:v", "hvc1"] if info["vcodec"] == "hevc" else []) + ["-c:a", "aac", "-b:a", "192k"]
     else:
-        cmd += ["-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-preset", "medium",
+        vf = ("yadif=deint=interlaced," if info["vcodec"] == "mpeg2video" else "") + "scale=trunc(iw/2)*2:trunc(ih/2)*2"
+        cmd += ["-vf", vf, "-c:v", "libx264", "-preset", "medium",
                 "-crf", str(crf), "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k"]
     cmd += ["-map_metadata", "0", "-movflags", "+faststart+use_metadata_tags", "-f", "mp4",
             "-progress", "pipe:1", "-nostats", str(part)]

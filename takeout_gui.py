@@ -26,7 +26,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.01-j"
+VERSION = "2026.10.01-k"
 STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}, "recent": [], "clean": {"state": "idle"}, "update": {"state": "idle", "files": []}, "phase": None, "kind": "fix", "version": VERSION, "boot": time.time()}
 LOCK = threading.Lock()
 
@@ -448,10 +448,10 @@ def run_convert(roots, dry_run, exts, include_live, quality, action):
             raise ValueError("Add at least one folder")
         exts = {e.lower() for e in exts} & set(fx.LEGACY_EXT)
         if not exts:
-            raise ValueError("Tick .avi and/or .mov")
+            raise ValueError("Tick at least one video type")
         items = fx.scan_legacy(folders, exts)
         if not items:
-            raise ValueError("No .avi or .mov files found in those folders")
+            raise ValueError("No videos of the ticked types were found in those folders")
         with LOCK:
             STATE.update(state="running", total=len(items), message=f"Reading {len(items):,} videos...",
                          scan={"media": len(items), "json": 0, "folders": len(folders)})
@@ -522,6 +522,19 @@ def run_convert(roots, dry_run, exts, include_live, quality, action):
                 d["before"] += int(r["size_before"] or 0)
                 d["after"] += int(r["size_after"] or 0)
         sm["by_mode"], sm["by_ext"] = by_mode, by_ext
+        types = {}
+        for r in rows:
+            d = types.setdefault(Path(r["file"]).suffix.lower(), {"found": 0, "converted": 0, "live": 0, "failed": 0, "bytes": 0})
+            d["found"] += 1
+            d["bytes"] += int(r["size_before"] or 0)
+            if r["status"] in ("converted", "already-converted", "would-convert", "would-finish"):
+                d["converted"] += 1
+            elif r["status"] == "skipped-live":
+                d["live"] += 1
+            else:
+                d["failed"] += 1
+        sm["types"] = types
+        sm["remux"] = sm["remux"] + sum(1 for r in done_rows + todo_rows if r["mode"] == "audio")
         sm["top"] = [{"file": Path(r["file"]).name, "mode": r["mode"], "before": int(r["size_before"] or 0), "after": int(r["size_after"] or 0)}
                      for r in sorted(sized, key=lambda r: -(int(r["size_before"] or 0) - int(r["size_after"] or 0)) if done_rows
                                      else -int(r["size_before"] or 0))[:15]]
@@ -962,6 +975,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, "{}")
         elif self.path == "/api/update":
             self._send(200, json.dumps(apply_update()))
+        elif self.path == "/api/convert_scan":
+            try:
+                folders = check_clean_folders(body.get("roots", []))
+                self._send(200, json.dumps({"types": fx.count_legacy(folders)}))
+            except ValueError as e:
+                self._send(200, json.dumps({"error": str(e)}))
         elif self.path == "/api/cleanup_start":
             with LOCK:
                 busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
@@ -1084,6 +1103,7 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 .frow{display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap;font-size:13px}.frow .flabel{white-space:nowrap}
 .frow .fchips{flex:1 1 160px;margin-top:0;min-width:0}.frow:not(:first-child) input[type=text]{flex:1 1 160px;min-width:0;padding:5px 8px;font-size:12px}
 .sub{display:block;margin-top:7px;font-size:13px;color:var(--ink);line-height:1.4}.sub input{margin-right:6px}
+.vtypes{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:8px}.vt{font-size:13px;white-space:nowrap}.vt .vc{color:var(--mute)}
 </style></head><body><main>
 <div id="upd" style="display:none" class="card"><b>A newer version is available.</b> <span id="updmsg"></span>
 <div style="margin-top:8px"><button class="p" id="updgo">Update now</button> <button id="updno">Not now</button></div></div>
@@ -1194,10 +1214,13 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 </section>
 <section class="pane" id="pane-convert">
 <h2 class="ph">Convert old videos to MP4</h2>
-<div class="card"><small style="margin-top:0">Turns <b>.avi</b> and <b>.mov</b> videos into <b>.mp4</b>, which plays on every phone, TV and app. Videos that are already H.264 or HEVC are simply re-wrapped (fast, no quality loss); others are re-encoded. Dates and locations are carried across. Needs <b>ffmpeg</b> (in Terminal: <code>brew install ffmpeg</code>).</small>
+<div class="card"><small style="margin-top:0">Turns older video formats (<b>.avi</b>, <b>.mov</b>, <b>.mpg</b>, <b>.wmv</b>, <b>.3gp</b> and more) into <b>.mp4</b>, which plays on every phone, TV and app. Videos that are already H.264 or HEVC are simply re-wrapped (fast, no quality loss); others are re-encoded. Dates and locations are carried across. Needs <b>ffmpeg</b> (in Terminal: <code>brew install ffmpeg</code>).</small>
 <div class="usef" style="margin-top:12px"><b>Folders to scan:</b> <span class="fnote"></span></div>
 <div class="opt"><input type="checkbox" id="vdry" checked><div>Preview only<small>On by default. Counts what would be converted (and how), changes nothing.</small></div></div>
-<div class="opt"><div><b>Convert these types</b><br><label><input type="checkbox" id="vavi" checked> .avi</label> &nbsp; <label><input type="checkbox" id="vmov" checked> .mov</label></div></div>
+<div class="opt"><div style="flex:1"><b>Video types to convert</b> <button id="vscan" class="sm" style="margin-left:8px">Scan folders for counts</button>
+<div id="vtypes" class="vtypes"></div>
+<div id="vscansum" class="tip" style="display:none;margin-top:8px"></div>
+<small>Tick the formats you want, each one separately. Scan to see how many videos of each type there are and how many .mov files are Live Photo videos. Types you leave unticked are not touched.</small></div></div>
 <div class="opt"><input type="checkbox" id="vlive"><div>Also convert Live Photo videos<small>Off by default. An iPhone Live Photo is a still picture plus a short .MOV video that Apple Photos links together. If a .MOV sits next to a photo with the same name, it is treated as a Live Photo video and left alone, because converting it to .mp4 would break the link. Your ordinary .mov and .avi videos are converted as normal.</small></div></div>
 <div class="opt"><div style="flex:1"><label for="vq" style="font-weight:600">Quality when re-encoding</label>
 <select id="vq" class="sel"><option value="veryhigh">Very high (largest files)</option><option value="high" selected>High (recommended)</option><option value="small">Smaller files</option></select></div></div>
@@ -1357,13 +1380,27 @@ showTab(startTab);
 // ---- Part 4: convert
 $('vgo').onclick=async()=>{
   if(!vroots().length){alert('Add your folders in the bar at the top first');return}
-  const exts=[$('vavi').checked?'.avi':null,$('vmov').checked?'.mov':null].filter(Boolean);
-  if(!exts.length){alert('Tick .avi and/or .mov');return}
+  const exts=[...document.querySelectorAll('#vtypes input:checked')].map(i=>i.dataset.ext);
+  if(!exts.length){alert('Tick at least one video type');return}
   const act=$('vact').value;
   if(act==='delete'&&!$('vdry').checked){const t=prompt('This permanently deletes each original video after its .mp4 is verified. It cannot be undone.\nType DELETE to confirm.');if(t!=='DELETE')return}
   $('sum').style.display='none';
   const r=await post('/api/convert_start',{roots:vroots(),dry_run:$('vdry').checked,exts:exts,include_live:$('vlive').checked,quality:$('vq').value,action:act});
   if(r.error)alert(r.error);else{jobKind='convert';placeResults('convert');$('prog').style.display='block';poll()}};
+
+const VT=[['.avi',1],['.mov',1],['.mpg',1],['.mpeg',1],['.wmv',1],['.3gp',1],['.flv',1],['.mkv',0],['.mts',0],['.m2ts',0],['.vob',0]];
+$('vtypes').innerHTML=VT.map(([e,d])=>`<label class="vt"><input type="checkbox" data-ext="${e}" ${d?'checked':''}> ${e} <span class="vc" data-ext="${e}"></span></label>`).join('');
+$('vscan').onclick=async()=>{
+  if(!vroots().length){alert('Add your folders in the bar at the top first');return}
+  const b=$('vscan');b.disabled=true;b.textContent='Scanning...';
+  const r=await post('/api/convert_scan',{roots:vroots()});b.disabled=false;b.textContent='Scan folders for counts';
+  if(r.error){alert(r.error);return}
+  let tot=0,live=0,bytes=0;
+  document.querySelectorAll('.vc').forEach(sp=>{const t=r.types[sp.dataset.ext];
+    if(t){tot+=t.n;live+=t.live;bytes+=t.bytes}
+    sp.textContent=t?'('+t.n.toLocaleString()+' · '+fmtBytes(t.bytes)+(t.live?' · '+t.live.toLocaleString()+' Live Photo':'')+')':'(none)'});
+  const el=$('vscansum');el.style.display='block';
+  el.innerHTML=tot?`Found <b>${tot.toLocaleString()}</b> videos (${fmtBytes(bytes)}) of these types.`+(live?` <b>${live.toLocaleString()}</b> of the .mov files are <b>Live Photo videos</b> (left alone unless you tick the Live Photo option below).`:''):'No videos of these types were found in the folders at the top.'};
 function showConvert(s){
   const w=s.dry_run?'would be ':'';
   const pc=(b,a)=>b?Math.round(100*(1-a/b)):0;
@@ -1371,7 +1408,7 @@ function showConvert(s){
   if(!s.dry_run&&s.converted){
     const saved=s.bytes_before-s.bytes_after;
     h+=`<h2>Size before and after</h2><div class="tiles">${tile(fmtBytes(s.bytes_before),'before')}${tile(fmtBytes(s.bytes_after),'after')}${tile((saved>=0?'':'+')+fmtBytes(Math.abs(saved))+' ('+(saved>=0?'':'+')+Math.abs(pc(s.bytes_before,s.bytes_after))+'%)',saved>=0?'space saved':'space used','ok')}</div>`;
-    const rows=[];const M={remux:'Re-wrapped (lossless)',encode:'Re-encoded'};
+    const rows=[];const M={remux:'Re-wrapped (lossless)',audio:'Video kept, audio converted',encode:'Re-encoded'};
     Object.entries(s.by_mode||{}).forEach(([k,v])=>rows.push([M[k]||k,v.n.toLocaleString(),fmtBytes(v.before),fmtBytes(v.after),pc(v.before,v.after)+'%']));
     Object.entries(s.by_ext||{}).forEach(([k,v])=>rows.push([k+' files',v.n.toLocaleString(),fmtBytes(v.before),fmtBytes(v.after),pc(v.before,v.after)+'%']));
     h+=tbl(['','Videos','Before','After','Saved'],rows);
@@ -1379,12 +1416,13 @@ function showConvert(s){
     h+=`<div class="tip" style="border-color:var(--acc)">Originals: ${({move:'moved to _original_videos (still using disk space until you delete that folder)',keep:'kept in place (still using disk space)',delete:'deleted, so the saving above is real free space'})[s.action]}.</div>`;
   } else if(s.dry_run){
     h+=`<h2>Size of what would be converted</h2><div class="tiles">${tile(fmtBytes(s.bytes_before),'total size now')}</div>`;
-    const M={remux:'Re-wrapped: stays about the same size, no quality loss',encode:'Re-encoded: usually much smaller; the exact saving is shown after converting'};
+    const M={remux:'Re-wrapped: stays about the same size, no quality loss',audio:'Video kept, only the audio is converted: about the same size',encode:'Re-encoded: usually much smaller; the exact saving is shown after converting'};
     const rows=Object.entries(s.by_mode||{}).map(([k,v])=>[M[k]||k,v.n.toLocaleString(),fmtBytes(v.before)]);
     Object.entries(s.by_ext||{}).forEach(([k,v])=>rows.push([k+' files',v.n.toLocaleString(),fmtBytes(v.before)]));
     h+=tbl(['','Videos','Size now'],rows);
     if((s.top||[]).length)h+='<h2>Largest videos to convert</h2>'+tbl(['Video','How','Size now'],s.top.map(t=>[esc(t.file),t.mode==='remux'?'Re-wrap':'Re-encode',fmtBytes(t.before)]));
   }
+  if(Object.keys(s.types||{}).length)h+='<h2>By video type</h2>'+tbl(['Type','Found','Size now',s.dry_run?'Would convert':'Converted','Live Photo (skipped)','Problems'],Object.entries(s.types).map(([k,v])=>[k,v.found.toLocaleString(),fmtBytes(v.bytes),v.converted.toLocaleString(),v.live.toLocaleString(),v.failed.toLocaleString()]));
   h+=s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
   if((s.failures||[]).length)h+='<h2>Problems</h2>'+tbl(['File','Result','Detail'],s.failures.map(f=>[esc(f.file),esc(f.status),esc(f.detail)]));
   h+='<small>Saved: a CSV with the before and after size of every video (on your Desktop).</small>';
