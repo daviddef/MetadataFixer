@@ -29,3 +29,6 @@ Existing EXIF values are kept and only missing tags are filled in; add `--overwr
 - Handles `.supplemental-metadata.json` (including truncated), 46-character name truncation, `(1)` duplicates, `-edited` copies and live-photo videos.
 - Google stores times in UTC and they are written as-is.
 - Formats exiftool can't write (avi, mkv, wmv, mpg, mts, bmp) only get their modified time fixed.
+
+## Live Photos
+Tick **Re-pair Live Photos** in the app (or pass `--pair-live` with `--out`) to copy each still's Apple ContentIdentifier onto its video and save the video as `.MOV`, so Apple Photos can import them as one Live Photo. Works only where the still still has its Apple ID; others are reported as `no-id` / `no-still`.

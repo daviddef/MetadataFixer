@@ -73,6 +73,10 @@ def summarise(rows, sidecars, roots, dry_run):
         batch[batch_of(r["file"])][0 if ok else 1] += 1
         if not ok:
             album_nj[Path(r["file"]).parent.name] += 1
+    live = defaultdict(int)
+    for r in rows:
+        if r.get("live"):
+            live[r["live"]] += 1
     used = {r["sidecar"] for r in rows if r["sidecar"]}
     orphans = [p for p in sidecars if str(p) not in used and is_media_sidecar(p)]
     nj = st.get("no-json", 0)
@@ -85,6 +89,9 @@ def summarise(rows, sidecars, roots, dry_run):
                     "mismatch; check the no-json list." % (len(orphans), nj))
     if not nj:
         tips.append("Every file found a JSON sidecar.")
+    if live.get("no-id") or live.get("no-still"):
+        tips.append("Live Photos: %d videos had a still but no Apple ID to copy, %d had no matching still; those stay as separate videos."
+                    % (live.get("no-id", 0), live.get("no-still", 0)))
     if st.get("exiftool-error"):
         tips.append("%d files hit an exiftool error; see the 'detail' column in the report." % st["exiftool-error"])
     if dry_run:
@@ -96,7 +103,7 @@ def summarise(rows, sidecars, roots, dry_run):
         "ext": sorted(([k, v[0], v[1]] for k, v in ext.items()), key=lambda x: -(x[1] + x[2])),
         "batch": sorted(([k, v[0], v[1]] for k, v in batch.items()),
                         key=lambda x: int(re.sub(r"\D", "", x[0]) or 0)),
-        "album_no_json": top(album_nj), "tips": tips, "roots": [str(r) for r in roots], "dry_run": dry_run,
+        "album_no_json": top(album_nj), "live": dict(live), "tips": tips, "roots": [str(r) for r in roots], "dry_run": dry_run,
     }
 
 
@@ -109,11 +116,13 @@ def write_text_summary(path, sm):
     L += ["", "By file type (with JSON / no JSON):"] + [f"  {e or '(none)'}: {a} / {b}" for e, a, b in sm["ext"]]
     L += ["", "By Takeout batch (with JSON / no JSON):"] + [f"  {e}: {a} / {b}" for e, a, b in sm["batch"]]
     L += ["", "Albums with most no-JSON files:"] + [f"  {k}: {v}" for k, v in sm["album_no_json"]]
+    if sm.get("live"):
+        L += ["", "Live Photo pairing:"] + [f"  {k}: {v}" for k, v in sm["live"].items()]
     L += [""] + sm["tips"]
     Path(path).write_text("\n".join(L) + "\n", encoding="utf-8")
 
 
-def run_job(roots, out, dry_run, overwrite):
+def run_job(roots, out, dry_run, overwrite, pair_live=False):
     with LOCK:
         STATE.update(state="scanning", total=0, done=0, counts={}, message="Scanning folders...",
                      report="", summary=None, scan=None)
@@ -129,6 +138,8 @@ def run_job(roots, out, dry_run, overwrite):
                 resolved.append(p)
         if not resolved:
             raise ValueError("Add at least one folder")
+        if pair_live and not out and not dry_run:
+            raise ValueError("Live Photo pairing renames videos to .MOV, so choose an output folder")
         if not dry_run and not shutil.which("exiftool"):
             raise ValueError("exiftool not found. In Terminal run: brew install exiftool")
         media, sidecars, mseen, sseen = [], [], set(), set()
@@ -141,7 +152,7 @@ def run_job(roots, out, dry_run, overwrite):
             STATE.update(state="running", total=len(media),
                          scan={"media": len(media), "json": len(sidecars), "folders": len(resolved)},
                          message=f"{len(media)} media files, {len(sidecars)} json files")
-        args = argparse.Namespace(dry_run=dry_run, overwrite=overwrite)
+        args = argparse.Namespace(dry_run=dry_run, overwrite=overwrite, pair_live=pair_live)
         out_root = Path(out) if out else None
         rows, counts = [], defaultdict(int)
         with ThreadPoolExecutor(max_workers=4) as ex:
@@ -155,7 +166,7 @@ def run_job(roots, out, dry_run, overwrite):
         report_dir.mkdir(parents=True, exist_ok=True)
         tag = "dryrun" if dry_run else "report"
         report = report_dir / f"takeout_{tag}.csv"
-        fields = ["file", "sidecar", "match", "status", "detail"]
+        fields = ["file", "sidecar", "match", "status", "detail", "live"]
         with open(report, "w", newline="", encoding="utf-8") as fh:
             w = csv.DictWriter(fh, fieldnames=fields)
             w.writeheader()
@@ -209,7 +220,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(409, json.dumps({"error": "A job is already running"}))
             threading.Thread(target=run_job, daemon=True, args=(
                 body.get("roots", []), body.get("out", ""),
-                bool(body.get("dry_run")), bool(body.get("overwrite")))).start()
+                bool(body.get("dry_run")), bool(body.get("overwrite")), bool(body.get("pair_live")))).start()
             self._send(200, "{}")
         elif self.path == "/api/reveal":
             with LOCK:
@@ -258,6 +269,7 @@ table{width:100%;border-collapse:collapse;font-size:14px;font-variant-numeric:ta
 
 <div class="card"><label class="t">3. Options</label>
 <div class="opt"><input type="checkbox" id="dry" checked><div>Preview only (dry run)<small>On by default. Matches files and reports counts; changes nothing.</small></div></div>
+<div class="opt"><input type="checkbox" id="live"><div>Re-pair Live Photos<small>Copies each still's Apple ID onto its video and saves the video as .MOV so Photos can treat them as one Live Photo. Needs an output folder.</small></div></div>
 <div class="opt"><input type="checkbox" id="ow"><div>Overwrite existing EXIF values<small>Off = only fill in missing tags.</small></div></div></div>
 
 <button class="p" id="go">Start</button>
@@ -287,7 +299,7 @@ $('go').onclick=async()=>{
   if(!roots().length){alert('Add at least one Takeout folder first');return}
   if(!$('dry').checked&&!$('out').value.trim()&&!confirm('No output folder: files will be edited IN PLACE. Continue?'))return;
   $('sum').style.display='none';
-  const r=await post('/api/start',{roots:roots(),out:$('out').value.trim(),dry_run:$('dry').checked,overwrite:$('ow').checked});
+  const r=await post('/api/start',{roots:roots(),out:$('out').value.trim(),dry_run:$('dry').checked,overwrite:$('ow').checked,pair_live:$('live').checked});
   if(r.error)alert(r.error);else poll();
 };
 $('rev').onclick=()=>post('/api/reveal');
@@ -301,6 +313,7 @@ function showSummary(s){
   h+='<h2>How files were matched</h2>'+tbl(['Match type','Files'],Object.entries(s.match).map(([k,v])=>[({folder:'Same album folder',tree:'Another folder / batch',stem:'Same name, other extension (RAW+JPG, live photo)'})[k]||k,v.toLocaleString()]));
   h+='<h2>By file type</h2>'+tbl(['Type','With JSON','No JSON'],bars(s.ext));
   h+='<h2>By Takeout batch</h2>'+tbl(['Batch','With JSON','No JSON'],bars(s.batch));
+  if(s.live&&Object.keys(s.live).length)h+='<h2>Live Photo pairing</h2>'+tbl(['Result','Videos'],Object.entries(s.live).map(([k,v])=>[({paired:'Paired with its still','no-id':'Still has no Apple ID','no-still':'No matching still','pair-error':'Error'})[k]||k,v.toLocaleString()]));
   if(s.album_no_json.length)h+='<h2>Albums with the most no-JSON files</h2>'+tbl(['Album','No JSON'],s.album_no_json.map(r=>[esc(r[0]),r[1].toLocaleString()]));
   h+='<small>Saved: full report CSV, a CSV of just the no-JSON files, and a text summary.</small>';
   $('sumbody').innerHTML=h;$('sum').style.display='block'}

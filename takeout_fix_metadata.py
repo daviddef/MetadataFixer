@@ -175,7 +175,11 @@ def build_args(d, ext, overwrite):
     if not (geo.get("latitude") or geo.get("longitude")):
         geo = d.get("geoDataExif") or {}
     lat, lon = geo.get("latitude"), geo.get("longitude")
-    if lat or lon:
+    if (lat or lon) and is_video:
+        alt = geo.get("altitude") or 0
+        coord = f"{lat}, {lon}, {alt}"
+        a += [f"-Keys:GPSCoordinates={coord}", f"-UserData:GPSCoordinates={coord}"]
+    elif lat or lon:
         alt = geo.get("altitude") or 0
         a += [f"-GPSLatitude={abs(lat)}", f"-GPSLatitudeRef={'N' if lat >= 0 else 'S'}",
               f"-GPSLongitude={abs(lon)}", f"-GPSLongitudeRef={'E' if lon >= 0 else 'W'}",
@@ -215,7 +219,25 @@ def run_exiftool(target, args, overwrite, sidecar_for_raw=False):
     else:
         cmd.append(str(target))
     r = subprocess.run(cmd, capture_output=True, text=True)
-    return r.returncode == 0, (r.stderr or r.stdout).strip()
+    msg = (r.stderr or r.stdout).strip()
+    if r.returncode != 0 and not sidecar_for_raw and "looks more like" in msg:
+        return _retry_real_type(target, cmd[:-1], msg)
+    return r.returncode == 0, msg
+
+
+def _retry_real_type(target, cmd, first_msg):
+    """Google sometimes saves JPEGs as .HEIC (etc). Write via a temp name with the real extension."""
+    r = subprocess.run(["exiftool", "-s3", "-FileTypeExtension", str(target)], capture_output=True, text=True)
+    real = r.stdout.strip().lower()
+    if not real:
+        return False, first_msg
+    tmp = target.with_name(target.stem + ".__fix__." + real)
+    target.rename(tmp)
+    try:
+        r2 = subprocess.run(cmd + [str(tmp)], capture_output=True, text=True)
+    finally:
+        tmp.rename(target)
+    return r2.returncode == 0, (r2.stderr or r2.stdout).strip()
 
 
 def unique_dest(dest):
@@ -229,9 +251,41 @@ def unique_dest(dest):
         i += 1
 
 
+STILL_EXT = {".heic", ".heif", ".jpg", ".jpeg"}
+
+
+def live_id(video):
+    """Apple ContentIdentifier of the still image that shares this video's name, or (None, reason)."""
+    for ext in (".HEIC", ".heic", ".JPG", ".jpg", ".JPEG", ".jpeg", ".HEIF", ".heif"):
+        still = video.with_suffix(ext)
+        if still.exists():
+            r = subprocess.run(["exiftool", "-s3", "-ContentIdentifier", str(still)],
+                               capture_output=True, text=True)
+            cid = r.stdout.strip()
+            return (cid, "") if cid else (None, "no-id")
+    return None, "no-still"
+
+
+def pair_live(target, cid):
+    """Write the still's ContentIdentifier into the video and make it a .MOV."""
+    ok, msg = run_exiftool(target, [f"-Keys:ContentIdentifier={cid}"], True)
+    if not ok:
+        return target, msg
+    if target.suffix.lower() != ".mov":
+        new = unique_dest(target.with_suffix(".MOV"))
+        target.rename(new)
+        target = new
+    return target, ""
+
+
 def process(m, idx, args, out_root):
     sc, how = find_sidecar(m, idx)
-    row = {"file": str(m), "sidecar": str(sc) if sc else "", "match": how or "", "status": "", "detail": ""}
+    row = {"file": str(m), "sidecar": str(sc) if sc else "", "match": how or "", "status": "",
+           "detail": "", "live": ""}
+    cid = None
+    if getattr(args, "pair_live", False) and m.suffix.lower() in (".mp4", ".mov"):
+        cid, why = live_id(m)
+        row["live"] = "paired" if cid else why
     if not sc:
         row["status"] = "no-json"
         return row
@@ -257,6 +311,11 @@ def process(m, idx, args, out_root):
         row["detail"] = msg[:300]
     else:
         row["status"] = "mtime-only"
+    if cid and not args.dry_run:
+        target, err = pair_live(target, cid)
+        if err:
+            row["live"] = "pair-error"
+            row["detail"] = (row["detail"] + " " + err).strip()[:300]
     if taken:
         try:
             os.utime(target, (taken, taken))
@@ -271,12 +330,16 @@ def main():
     ap.add_argument("--out", type=Path, help="copy fixed files here instead of editing in place")
     ap.add_argument("--dry-run", action="store_true", help="match only; change nothing")
     ap.add_argument("--overwrite", action="store_true", help="replace existing EXIF values")
+    ap.add_argument("--pair-live", action="store_true",
+                    help="relink Live Photo videos to their still (needs --out); videos become .MOV")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--report", type=Path, default=Path("takeout_report.csv"))
     args = ap.parse_args()
 
     if not args.dry_run and not shutil.which("exiftool"):
         sys.exit("exiftool not found. macOS: brew install exiftool | Windows: https://exiftool.org")
+    if args.pair_live and not (args.out or args.dry_run):
+        sys.exit("--pair-live renames videos, so it needs --out (or --dry-run)")
     if not args.root.is_dir():
         sys.exit(f"{args.root} is not a folder")
 
@@ -293,7 +356,7 @@ def main():
                 print(f"  {i}/{len(media)}")
 
     with open(args.report, "w", newline="", encoding="utf-8") as fh:
-        w = csv.DictWriter(fh, fieldnames=["file", "sidecar", "match", "status", "detail"])
+        w = csv.DictWriter(fh, fieldnames=["file", "sidecar", "match", "status", "detail", "live"])
         w.writeheader()
         w.writerows(rows)
 
