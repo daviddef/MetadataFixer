@@ -754,6 +754,170 @@ def m_is_dupe(m, args):
     return str(m) in (getattr(args, "dupes", None) or {})
 
 
+
+# ---------------------------------------------------------------- Part 4: convert old videos to MP4
+CONVERT_FIELDS = ["file", "status", "mode", "output", "size_before", "size_after", "original", "detail"]
+LEGACY_EXT = (".avi", ".mov")
+ORIGINALS_DIR = "_original_videos"
+QUALITY_CRF = {"veryhigh": 16, "high": 20, "small": 24}
+
+
+def have_ffmpeg():
+    return bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
+
+
+def probe_video(path):
+    r = subprocess.run(["ffprobe", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(path)],
+                       capture_output=True, text=True)
+    try:
+        d = json.loads(r.stdout)
+    except ValueError:
+        return None
+    streams = d.get("streams", [])
+    v = next((x for x in streams if x.get("codec_type") == "video"
+              and not x.get("disposition", {}).get("attached_pic")), None)
+    a = next((x for x in streams if x.get("codec_type") == "audio"), None)
+    fmt = d.get("format", {})
+    try:
+        dur = float(fmt.get("duration") or (v or {}).get("duration") or 0)
+    except ValueError:
+        dur = 0.0
+    return {"vcodec": v and v.get("codec_name"), "acodec": a and a.get("codec_name"),
+            "duration": dur, "has_video": v is not None}
+
+
+def is_live_video(path):
+    """A .MOV sitting next to a still with the same name is almost certainly an iPhone Live Photo video."""
+    return any(path.with_suffix(e).exists() for e in (".HEIC", ".heic", ".HEIF", ".heif", ".JPG", ".jpg", ".JPEG", ".jpeg"))
+
+
+def convert_mode(info):
+    """remux = rewrap without re-encoding (lossless, fast); encode = convert to H.264/AAC."""
+    if info["vcodec"] in ("h264", "hevc") and info["acodec"] in (None, "aac", "mp3", "ac3"):
+        return "remux"
+    return "encode"
+
+
+def _dur_ok(a, b):
+    return a <= 0 or abs(a - b) <= max(1.0, 0.02 * a)
+
+
+def scan_legacy(roots, exts):
+    out = []
+    for root in roots:
+        for dirpath, dirs, files in os.walk(root):
+            dirs[:] = [d for d in dirs if d != ORIGINALS_DIR]
+            for f in files:
+                if Path(f).suffix.lower() in exts and not f.startswith("._"):
+                    out.append((Path(dirpath) / f, Path(root)))
+    return out
+
+
+def _run_ffmpeg(src, part, info, mode, crf, duration, progress):
+    cmd = ["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(src), "-map", "0:v:0", "-map", "0:a?"]
+    if mode == "remux":
+        cmd += ["-c", "copy"] + (["-tag:v", "hvc1"] if info["vcodec"] == "hevc" else [])
+    else:
+        cmd += ["-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-preset", "medium",
+                "-crf", str(crf), "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k"]
+    cmd += ["-map_metadata", "0", "-movflags", "+faststart+use_metadata_tags", "-f", "mp4",
+            "-progress", "pipe:1", "-nostats", str(part)]
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
+    errs = []
+    for line in p.stdout:
+        line = line.strip()
+        if line.startswith(("out_time_us=", "out_time_ms=")):
+            try:
+                secs = int(line.split("=")[1]) / 1e6
+                if progress and duration:
+                    progress(min(secs, duration))
+            except ValueError:
+                pass
+        elif "=" not in line and line:
+            errs.append(line)
+    p.wait()
+    return p.returncode == 0, " ".join(errs[-3:])
+
+
+def _copy_video_tags(src, dest):
+    """Best effort: carry dates and GPS across with exiftool (ffmpeg keeps most, not all, of them)."""
+    try:
+        tool().run(["-m", "-P", "-overwrite_original", "-api", "QuickTimeUTC=1", "-TagsFromFile", str(src),
+                    "-QuickTime:CreateDate", "-QuickTime:ModifyDate", "-QuickTime:MediaCreateDate",
+                    "-QuickTime:TrackCreateDate", "-Keys:GPSCoordinates", "-UserData:GPSCoordinates", str(dest)])
+    except (OSError, RuntimeError):
+        pass
+
+
+def convert_file(src, root, opts, progress=None):
+    """Convert one .avi/.mov to .mp4. opts: crf, action (keep|move|delete), include_live, dry_run."""
+    row = {k: "" for k in CONVERT_FIELDS}
+    row["file"] = str(src)
+    try:
+        row["size_before"] = src.stat().st_size
+    except OSError as e:
+        row["status"], row["detail"] = "failed", str(e)
+        return row
+    if src.suffix.lower() == ".mov" and not opts.get("include_live") and is_live_video(src):
+        row["status"], row["detail"] = "skipped-live", "Live Photo video: kept as .MOV so Photos keeps the pair"
+        return row
+    info = probe_video(src)
+    if not info or not info["has_video"]:
+        row["status"], row["detail"] = "unreadable", "ffprobe could not read a video stream"
+        return row
+    row["mode"] = convert_mode(info)
+    final, resumed = src.with_suffix(".mp4"), False
+    if final.exists():
+        oi = probe_video(final)
+        if oi and oi["has_video"] and _dur_ok(info["duration"], oi["duration"]):
+            resumed = True
+        else:
+            final = unique_dest(src.with_name(src.stem + "_converted.mp4"))
+    row["output"] = str(final)
+    if opts.get("dry_run"):
+        row["status"] = "would-finish" if resumed else "would-convert"
+        return row
+    if not resumed:
+        part = src.with_name(src.name + ".part")
+        ok, err = _run_ffmpeg(src, part, info, row["mode"], opts.get("crf", 20), info["duration"], progress)
+        oi = probe_video(part) if ok and part.exists() else None
+        if not (oi and oi["has_video"] and _dur_ok(info["duration"], oi["duration"])):
+            part.unlink(missing_ok=True)
+            row["status"], row["detail"] = "failed", (err or "output failed verification")[:300]
+            return row
+        os.replace(part, final)
+        _copy_video_tags(src, final)
+        try:
+            st = src.stat()
+            os.utime(final, (st.st_atime, st.st_mtime))
+        except OSError:
+            pass
+        for sc in (src.name + ".json", src.name + ".supplemental-metadata.json"):
+            sp = src.with_name(sc)
+            if sp.exists():
+                dp = final.with_name(final.name + sc[len(src.name):])
+                if not dp.exists():
+                    shutil.copy2(sp, dp)
+    row["size_after"] = final.stat().st_size
+    action = opts.get("action", "keep")
+    try:
+        if action == "delete":
+            src.unlink()
+            row["original"] = "deleted"
+        elif action == "move":
+            dest = Path(root) / ORIGINALS_DIR / src.relative_to(root)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest = unique_dest(dest)
+            shutil.move(str(src), str(dest))
+            row["original"] = f"moved to {dest}"
+        else:
+            row["original"] = "kept"
+    except OSError as e:
+        row["original"], row["detail"] = "not removed", f"converted, but could not remove the original: {e}"
+    row["status"] = "already-converted" if resumed else "converted"
+    return row
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("root", type=Path, help="folder containing all extracted 'Takeout N' folders")

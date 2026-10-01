@@ -41,6 +41,10 @@ git clone https://github.com/daviddef/MetadataFixer ~/MetadataFixer
 
 Or download `takeout_fix_metadata.py` and `takeout_gui.py` from the repo into one folder. The two files must be from the same version.
 
+## Layout
+
+The app has four tabs: **1 Fix metadata**, **2 Sort**, **3 Clean up** and **4 Convert videos**. A bar with a moving percentage stays at the top of the window on every tab, showing whatever job is running; if you switch to another tab, a **View results** link takes you back. Only one job runs at a time.
+
 ## Using the app (recommended)
 
 ```
@@ -167,6 +171,29 @@ What it does:
 You get live counts while it runs, then a summary: files found, duplicates skipped (and the space they take), files placed, and "N folders merged into M", plus a table of the resulting folders and a CSV of where every file went. A preview saves its CSV to your Desktop and leaves the output folder untouched.
 
 Command line: `python3 takeout_fix_metadata.py "/path/to/Takeouts" --sort-only --dedupe --out "/path/to/Sorted"` (add `--move`, `--dry-run` or `--no-json` as needed).
+
+## Part 4: Convert old videos to MP4
+
+The **Convert videos** tab turns `.avi` and `.mov` videos into `.mp4`, which plays on every phone, TV and app, and is usually smaller. It needs **ffmpeg** (`brew install ffmpeg`).
+
+1. Add the folders to scan. Leave **Preview only** ticked and press **Start converting** to see how many videos would be converted, and which would be quickly re-wrapped (lossless) and which re-encoded.
+2. Choose what happens to the **original** video:
+   - **Move to an `_original_videos` folder** (default, safe): the original is moved aside, keeping its folder structure.
+   - **Keep it where it is**, next to the new `.mp4`.
+   - **Delete it** (permanent; you must type `DELETE` to confirm).
+   In every case the original is only moved or deleted **after** the new `.mp4` has been checked (it must play and match the original's length).
+3. Untick Preview and start.
+
+How it works:
+- Videos already in H.264 or HEVC with AAC/MP3 audio are **re-wrapped** into an MP4 without re-encoding: fast and with no quality loss. Anything else is **re-encoded** to H.264/AAC (quality setting: very high, high, or smaller), which can take a long time for big files.
+- The date taken and GPS location are carried across to the new file, and its modified date matches the original. If the original had a `.json` file beside it, a copy is made for the new name.
+- If an unrelated `.mp4` already has the same name, the new file is called `name_converted.mp4`; nothing is overwritten.
+- **Live Photos:** an iPhone Live Photo is a still (`.HEIC`) plus a short `.MOV` video that Apple Photos links together. A `.MOV` sitting next to a photo with the same name is treated as a Live Photo video and skipped, because converting it would break the link. Tick **Also convert Live Photo videos** to override.
+- A video that cannot be read, or whose conversion fails the check, is left untouched and listed in the report.
+- An interrupted run can be repeated: finished conversions are recognised and skipped.
+- Progress is shown by video length, so the percentage moves smoothly through long conversions.
+
+Suggested order: run Part 1 (it creates the Live Photo `.MOV` files), then Part 4 for your other videos.
 
 ## Cleaning up the .json files
 

@@ -26,7 +26,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}, "recent": [], "clean": {"state": "idle"}, "update": {"state": "idle", "files": []}, "boot": time.time()}
+STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}, "recent": [], "clean": {"state": "idle"}, "update": {"state": "idle", "files": []}, "phase": None, "kind": "fix", "boot": time.time()}
 LOCK = threading.Lock()
 
 
@@ -186,7 +186,7 @@ def write_text_summary(path, sm):
 def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=False):
     with LOCK:
         STATE.update(state="scanning", total=0, done=0, counts={}, message="Scanning folders...",
-                     report="", summary=None, scan=None, extra={}, recent=[])
+                     report="", summary=None, scan=None, extra={}, recent=[], phase=None, kind="fix")
     try:
         resolved, seen = [], set()
         for r in roots:
@@ -220,12 +220,15 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
 
         def hashing(stage, done, todo):
             with LOCK:
+                STATE["phase"] = {"stage": stage, "done": done, "total": todo}
                 if stage == "dedupe":
                     STATE["message"] = (f"Step 1: checking {todo:,} files that share a size with another file for "
                                         f"exact duplicates ({done:,}/{todo:,})")
                 else:
                     STATE["message"] = f"Step 2: reading Live Photo IDs ({done:,}/{todo:,} stills)"
         fx.prepare(args, media, hashing)
+        with LOCK:
+            STATE["phase"] = None
         with LOCK:
             STATE["message"] = f"Step 3: fixing and placing {len(media):,} files"
         out_root = Path(out) if out else None
@@ -303,7 +306,7 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
 def run_sort(roots, out, dry_run, dedupe, move, bring_json):
     with LOCK:
         STATE.update(state="scanning", total=0, done=0, counts={}, message="Scanning folders...", report="",
-                     summary=None, scan=None, extra={}, recent=[])
+                     summary=None, scan=None, extra={}, recent=[], phase=None, kind="sort")
     try:
         resolved, seen = [], set()
         for r in roots:
@@ -331,8 +334,11 @@ def run_sort(roots, out, dry_run, dedupe, move, bring_json):
 
         def hashing(stage, done, todo):
             with LOCK:
+                STATE["phase"] = {"stage": stage, "done": done, "total": todo}
                 STATE["message"] = f"Step 1: comparing {todo:,} files that share a size ({done:,}/{todo:,})"
         fx.prepare(args, media, hashing)
+        with LOCK:
+            STATE["phase"] = None
         with LOCK:
             STATE["message"] = f"Step 2: {'copying' if not move else 'moving'} {len(media):,} files into place"
         out_root = Path(out)
@@ -401,6 +407,107 @@ def run_sort(roots, out, dry_run, dedupe, move, bring_json):
         with LOCK:
             STATE.update(state="done", report=str(report), summary=sm, message="Finished")
     except Exception as e:
+        with LOCK:
+            STATE.update(state="error", message=str(e))
+
+
+def run_convert(roots, dry_run, exts, include_live, quality, action):
+    with LOCK:
+        STATE.update(state="scanning", total=0, done=0, counts={}, message="Looking for old videos...", report="",
+                     summary=None, scan=None, extra={}, recent=[], phase=None, kind="convert")
+    try:
+        if not fx.have_ffmpeg():
+            raise ValueError("ffmpeg not found. In Terminal run: brew install ffmpeg")
+        folders, seen = [], set()
+        for r in roots:
+            p = Path(r).expanduser()
+            if not p.is_dir():
+                raise ValueError(f"Not a folder: {p}")
+            if p.resolve() not in seen:
+                seen.add(p.resolve())
+                folders.append(p)
+        if not folders:
+            raise ValueError("Add at least one folder")
+        exts = {e.lower() for e in exts} & set(fx.LEGACY_EXT)
+        if not exts:
+            raise ValueError("Tick .avi and/or .mov")
+        items = fx.scan_legacy(folders, exts)
+        if not items:
+            raise ValueError("No .avi or .mov files found in those folders")
+        with LOCK:
+            STATE.update(state="running", total=len(items), message=f"Reading {len(items):,} videos...",
+                         scan={"media": len(items), "json": 0, "folders": len(folders)})
+        durations = {}
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            for (p, _), info in zip(items, ex.map(lambda it: fx.probe_video(it[0]), items)):
+                durations[str(p)] = (info or {}).get("duration", 0) or 0
+        total_secs = sum(durations.values())
+        opts = {"dry_run": dry_run, "action": action, "include_live": include_live,
+                "crf": fx.QUALITY_CRF.get(quality, 20)}
+        rows, counts, extra, recent = [], defaultdict(int), defaultdict(int), []
+        secs_done = 0.0
+        for i, (p, root) in enumerate(items, 1):
+            dur = durations.get(str(p), 0)
+            with LOCK:
+                STATE["message"] = f"{'Checking' if dry_run else 'Converting'} {i:,} of {len(items):,}: {p.name}"
+                if not dry_run:
+                    STATE["phase"] = {"stage": "convert", "done": secs_done, "total": total_secs}
+
+            def cb(secs, base=secs_done):
+                with LOCK:
+                    STATE["phase"] = {"stage": "convert", "done": base + max(0.0, secs), "total": total_secs}
+            row = fx.convert_file(p, root, opts, cb)
+            secs_done += dur
+            rows.append(row)
+            counts[row["status"]] += 1
+            if row["status"] in ("converted", "already-converted"):
+                extra["converted"] += 1
+            if row["status"] in ("failed", "unreadable"):
+                extra["errors"] += 1
+            if row["status"] == "skipped-live":
+                extra["skipped_live"] += 1
+            recent.append(row)
+            del recent[:-12]
+            with LOCK:
+                STATE["done"] = i
+                STATE["counts"] = dict(counts)
+                STATE["extra"] = dict(extra)
+                STATE["recent"] = [{"name": Path(r["file"]).name, "status": r["status"],
+                                    "to": (r["mode"] + " " if r["mode"] else ""), "live": ""} for r in recent]
+        fx.close_all()
+        report_dir = Path.home() / "Desktop"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        report = report_dir / ("takeout_convert_preview.csv" if dry_run else "takeout_convert_report.csv")
+        with open(report, "w", newline="", encoding="utf-8") as fh:
+            w = csv.DictWriter(fh, fieldnames=fx.CONVERT_FIELDS)
+            w.writeheader()
+            w.writerows(rows)
+        done_rows = [r for r in rows if r["status"] in ("converted", "already-converted")]
+        todo_rows = [r for r in rows if r["status"] in ("would-convert", "would-finish")]
+        sm = {"kind": "convert", "dry_run": dry_run, "action": action, "total": len(rows),
+              "converted": len(done_rows), "would": len(todo_rows),
+              "remux": sum(1 for r in done_rows + todo_rows if r["mode"] == "remux"),
+              "encode": sum(1 for r in done_rows + todo_rows if r["mode"] == "encode"),
+              "skipped_live": counts.get("skipped-live", 0), "failed": counts.get("failed", 0) + counts.get("unreadable", 0),
+              "bytes_before": sum(int(r["size_before"] or 0) for r in done_rows or todo_rows),
+              "bytes_after": sum(int(r["size_after"] or 0) for r in done_rows),
+              "failures": [{"file": Path(r["file"]).name, "status": r["status"], "detail": r["detail"]}
+                           for r in rows if r["status"] in ("failed", "unreadable")][:30], "tips": []}
+        if sm["skipped_live"]:
+            sm["tips"].append("%d Live Photo videos were left as .MOV so Apple Photos keeps them paired with their stills. "
+                              "Tick 'Also convert Live Photo videos' only if you do not need that." % sm["skipped_live"])
+        if sm["failed"]:
+            sm["tips"].append("%d videos could not be converted; they were left untouched. See the report." % sm["failed"])
+        if dry_run:
+            sm["tips"].append("This was a preview: nothing was converted, moved or deleted. Re-encoding can take a long "
+                              "time; remuxed videos (already H.264/HEVC) are fast and lossless.")
+        elif action == "move" and sm["converted"]:
+            sm["tips"].append("Original videos were moved to a '_original_videos' folder inside each folder you chose. "
+                              "Delete those folders once you have checked the new .mp4 files.")
+        with LOCK:
+            STATE.update(state="done", report=str(report), summary=sm, message="Finished", phase=None)
+    except Exception as e:
+        fx.close_all()
         with LOCK:
             STATE.update(state="error", message=str(e))
 
@@ -586,6 +693,15 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, "{}")
         elif self.path == "/api/update":
             self._send(200, json.dumps(apply_update()))
+        elif self.path == "/api/convert_start":
+            with LOCK:
+                busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
+            if busy:
+                return self._send(409, json.dumps({"error": "A job is already running"}))
+            threading.Thread(target=run_convert, daemon=True, args=(
+                body.get("roots", []), bool(body.get("dry_run")), body.get("exts", []),
+                bool(body.get("include_live")), body.get("quality", "high"), body.get("action", "move"))).start()
+            self._send(200, "{}")
         elif self.path == "/api/sort_start":
             with LOCK:
                 busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
@@ -635,20 +751,72 @@ textarea{min-height:92px;resize:vertical}textarea.over{border-color:var(--acc);o
 button{padding:9px 14px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--ink);font:inherit;cursor:pointer;white-space:nowrap}
 button.p{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600}button:disabled{opacity:.5;cursor:default}
 .opt{display:flex;gap:8px;align-items:flex-start;margin:8px 0}
-.bar{height:10px;background:var(--line);border-radius:6px;overflow:hidden;margin:10px 0}.bar>i{display:block;height:100%;width:0;background:var(--acc);transition:width .2s}
+.bar{background:var(--line);border-radius:12px;margin:10px 0}
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin:10px 0}
 .tile{border:1px solid var(--line);border-radius:10px;padding:10px 12px}.tile b{display:block;font-size:24px;font-variant-numeric:tabular-nums}.tile span{color:var(--mute);font-size:13px}
 .tile.bad b{color:var(--bad)}.tile.ok b{color:var(--ok)}.err{color:var(--bad)}.ok{color:var(--ok)}
 table{width:100%;border-collapse:collapse;font-size:14px;font-variant-numeric:tabular-nums}th,td{text-align:left;padding:5px 6px;border-bottom:1px solid var(--line)}th{color:var(--mute);font-weight:500}td.n,th.n{text-align:right}
 .tip{border-left:3px solid var(--warn);padding:6px 10px;margin:8px 0;background:var(--bg)}
 .mini{display:inline-block;height:8px;background:var(--bad);border-radius:3px;vertical-align:middle;margin-left:6px}
+.hero{background:linear-gradient(135deg,color-mix(in srgb,var(--acc) 14%,var(--card)),var(--card) 70%);border:1px solid var(--line);border-radius:16px;padding:20px 20px 16px;margin:0 0 22px}
+.brand{display:flex;align-items:center;gap:14px}.logo{width:56px;height:56px;flex:none;filter:drop-shadow(0 2px 6px rgba(79,140,255,.35))}
+.hero h1{font-size:25px;letter-spacing:-.02em;margin:0;line-height:1.15}.hero .tag{margin:4px 0 0;color:var(--mute);font-size:15px}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+.chip{display:inline-flex;align-items:center;gap:7px;padding:6px 12px;border:1px solid var(--line);border-radius:999px;background:var(--card);color:var(--ink);font-size:13px;text-decoration:none}
+a.chip:hover{border-color:var(--acc)}.chip b{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--acc);color:#fff;font-size:12px}
+.chip.priv{color:var(--mute);border-style:dashed}html{scroll-behavior:smooth}
+@media(max-width:560px){.brand{align-items:flex-start}.hero h1{font-size:21px}}
+.bar{height:24px;position:relative;overflow:hidden}
+.bar>i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--acc),#7c5cff);transition:width .25s ease}
+.bar>span{position:absolute;top:0;bottom:0;display:flex;align-items:center;font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;color:#fff;white-space:nowrap;transition:left .25s ease;pointer-events:none}
+.bar>span.out{color:var(--ink)}
+.bar.indet>i{width:40%!important;animation:slide 1.2s ease-in-out infinite alternate}
+@keyframes slide{from{margin-left:0}to{margin-left:60%}}
+textarea{width:100%}
+#frame{position:sticky;top:0;z-index:30;margin:0 -16px 16px;padding:10px 16px 8px;background:color-mix(in srgb,var(--bg) 90%,transparent);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+.tabs{display:flex;gap:6px;overflow-x:auto;padding-bottom:2px;scrollbar-width:none}.tabs::-webkit-scrollbar{display:none}
+.tab{display:inline-flex;align-items:center;gap:7px;padding:8px 14px;border:1px solid var(--line);border-radius:999px;background:var(--card);color:var(--ink);font-size:14px;white-space:nowrap}
+.tab b{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--line);color:var(--ink);font-size:12px}
+.tab.on{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600}.tab.on b{background:#fff;color:var(--acc)}
+.status{margin-top:8px}.srow{display:flex;justify-content:space-between;gap:10px;font-size:13px;color:var(--mute);min-height:20px}.srow #msg{min-width:0;overflow:hidden;text-overflow:ellipsis}.srow a{white-space:nowrap;color:var(--acc)}
+.status .bar{margin:6px 0 0}
+.pane{display:none}.ph{font-size:18px;margin:4px 0 12px}
+.sel{margin-left:8px;padding:6px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink);max-width:100%}
+code{background:var(--bg);padding:1px 5px;border-radius:5px;font-size:12px}
 </style></head><body><main>
 <div id="upd" style="display:none" class="card"><b>A newer version is available.</b> <span id="updmsg"></span>
 <div style="margin-top:8px"><button class="p" id="updgo">Update now</button> <button id="updno">Not now</button></div></div>
-<h1>Takeout Metadata Fixer</h1>
-<p class="sub">Restores date, location, description and people from Google's .json files. Runs only on your computer.</p>
+<header class="hero">
+  <div class="brand">
+    <svg class="logo" viewBox="0 0 64 64" role="img" aria-label="Metadata Fixer logo">
+      <defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4f8cff"/><stop offset="1" stop-color="#7c5cff"/></linearGradient></defs>
+      <rect width="64" height="64" rx="15" fill="url(#lg)"/>
+      <rect x="11" y="14" width="38" height="30" rx="5" fill="#fff" opacity=".95"/>
+      <circle cx="22" cy="24" r="4" fill="#ffb84d"/>
+      <path d="M13 41l11-11 8 8 6-6 9 9v3a2 2 0 0 1-2 2H15a2 2 0 0 1-2-2z" fill="#4f8cff" opacity=".9"/>
+      <circle cx="47" cy="45" r="11" fill="#22c55e" stroke="#fff" stroke-width="3"/>
+      <path d="M42 45.5l3.6 3.6L52 42.5" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <div>
+      <h1>Takeout Metadata Fixer</h1>
+      <p class="tag">Put the right date, place and caption back on your Google Photos export.</p>
+    </div>
+  </div>
+  <div class="chips"><span class="chip priv">&#128274; Runs only on your computer: nothing is uploaded</span></div>
+</header>
 
-<h2 style="font-size:18px;margin-top:6px">Part 1: Fix dates, locations and captions</h2>
+<div id="frame">
+  <nav class="tabs" role="tablist">
+    <button class="tab" data-tab="fix" role="tab"><b>1</b> Fix metadata</button>
+    <button class="tab" data-tab="sort" role="tab"><b>2</b> Sort</button>
+    <button class="tab" data-tab="clean" role="tab"><b>3</b> Clean up</button>
+    <button class="tab" data-tab="convert" role="tab"><b>4</b> Convert videos</button>
+  </nav>
+  <div class="status"><div class="srow"><span id="msg">Ready. Choose a tab, set it up and press Start.</span><a href="#" id="goto" style="display:none">View results &rarr;</a></div>
+  <div class="bar" id="bar"><i id="fill"></i><span id="pct">0%</span></div></div>
+</div>
+<section class="pane" id="pane-fix">
+<h2 class="ph">Fix dates, locations and captions</h2>
 <div class="card"><label class="t">1. Takeout folders (one per line, as many as you like)</label>
 <textarea id="roots" placeholder="/Volumes/Drive/2024-08-07 1-50&#10;/Volumes/Drive/2024-08-07 51-80" spellcheck="false"></textarea>
 <div class="row" style="margin-top:8px"><button id="b1">Add folders...</button><button id="clr">Clear</button></div>
@@ -662,20 +830,24 @@ table{width:100%;border-collapse:collapse;font-size:14px;font-variant-numeric:ta
 <div class="opt"><input type="checkbox" id="dry" checked><div>Preview only<small>On by default. Works out what it would do and reports the numbers, but changes nothing. Untick to do it for real.</small></div></div>
 <div class="opt"><input type="checkbox" id="dedupe" checked><div>Remove exact duplicates<small>Skips byte-identical copies (the same photo repeated across Takeouts or albums). Keeps the copy in 'Photos from YYYY'. Needs an extra read pass over files that share a size.</small></div></div>
 <div class="opt"><input type="checkbox" id="move"><div>Move files instead of copying<small>Saves disk space but empties your Takeout folders as it goes. Off = safe copy (needs roughly as much free space again).</small></div></div>
-<div class="opt"><input type="checkbox" id="live"><div>Re-pair Live Photos<small>Copies each still's Apple ID onto its video and saves the video as .MOV so Photos can treat them as one Live Photo. Needs an output folder.</small></div></div>
-<div class="opt"><input type="checkbox" id="ow"><div>Replace information already stored in the photo<small>Every photo has a hidden label of facts saved inside the file itself (called EXIF): when it was taken, where, and a caption. Google&#39;s export often leaves these blank or wrong. <b>Off</b>: only fill in facts that are missing and never change ones already there. <b>On</b>: replace what is there with Google&#39;s version (recommended if your dates look wrong). Your pictures themselves are never altered.</small></div></div></div>
+<div class="opt"><input type="checkbox" id="live" checked><div>Re-pair Live Photos<small>Copies each still's Apple ID onto its video and saves the video as .MOV so Photos can treat them as one Live Photo. Needs an output folder.</small></div></div>
+<div class="opt"><input type="checkbox" id="ow" checked><div>Replace information already stored in the photo<small>Every photo has a hidden label of facts saved inside the file itself (called EXIF): when it was taken, where, and a caption. Google&#39;s export often leaves these blank or wrong. <b>Off</b>: only fill in facts that are missing and never change ones already there. <b>On</b>: replace what is there with Google&#39;s version (recommended if your dates look wrong). Your pictures themselves are never altered.</small></div></div></div>
 
 <button class="p" id="go">Start</button>
 
+<div id="results">
 <div class="card" id="prog" style="display:none;margin-top:14px">
-<div id="msg"></div><div class="bar"><i id="fill"></i></div>
 <div class="tiles" id="tiles"></div>
 <div id="recent" style="font:12px ui-monospace,Menlo,monospace;color:var(--mute);line-height:1.6;overflow:hidden"></div></div>
 
 <div class="card" id="sum" style="display:none"><h2 style="margin-top:0">Summary</h2><div id="sumbody"></div>
 <div style="margin-top:12px"><button id="rev">Show reports in Finder</button></div></div>
 
-<h2 style="font-size:18px;margin-top:26px">Part 2: Sort only (merge folders, remove duplicates)</h2>
+
+</div>
+</section>
+<section class="pane" id="pane-sort">
+<h2 class="ph">Sort only: merge folders, remove duplicates</h2>
 <div class="card"><small style="margin-top:0">Tidies the folder structure and nothing else: no dates, locations or captions are touched. All the same-named folders (every <i>Photos from 2012</i>) are merged into one, and identical duplicate photos are skipped. Use it on its own, or before Part 1.</small>
 <label class="t" style="margin-top:12px">Folders to sort (one per line)</label>
 <textarea id="sroots" placeholder="/Volumes/Drive/Takeouts" spellcheck="false" style="width:100%"></textarea>
@@ -688,13 +860,34 @@ table{width:100%;border-collapse:collapse;font-size:14px;font-variant-numeric:ta
 <div class="opt"><input type="checkbox" id="smove"><div>Move instead of copy<small>Saves disk space but empties the source folders as it goes. Off = copy (needs about as much free space again).</small></div></div>
 <button class="p" id="sgo" style="margin-top:6px">Start sorting</button></div>
 
-<div class="card" style="margin-top:22px"><label class="t">Clean up: remove .json files (do this last)</label>
+</section>
+<section class="pane" id="pane-clean">
+<h2 class="ph">Clean up</h2>
+<div class="card"><label class="t">Remove the leftover .json files (do this last)</label>
 <small style="margin-top:0">Once you're happy with the fixed photos, delete the leftover Google .json files. They are no longer needed, but they are the only source of the date and location data, so run the fix first. Deleted files do not go to the Trash.</small>
 <textarea id="cleanroots" placeholder="Folders to clean (one per line)" spellcheck="false" style="margin-top:8px;width:100%"></textarea>
 <div class="row" style="margin-top:8px"><button id="cb1">Add folders...</button><button id="cscan">Scan</button></div>
 <div class="opt"><input type="checkbox" id="cother"><div>Also remove other .json files<small>Off = only Google Photos sidecars and album/memory data files. On = every .json in the folders.</small></div></div>
+<div class="bar" id="cbar" style="display:none"><i id="cfill"></i><span id="cpct">0%</span></div>
 <div id="cres" style="margin-top:8px"></div>
 <button id="cdel" disabled style="margin-top:8px;border-color:var(--bad);color:var(--bad)">Delete .json files</button></div>
+</section>
+<section class="pane" id="pane-convert">
+<h2 class="ph">Convert old videos to MP4</h2>
+<div class="card"><small style="margin-top:0">Turns <b>.avi</b> and <b>.mov</b> videos into <b>.mp4</b>, which plays on every phone, TV and app. Videos that are already H.264 or HEVC are simply re-wrapped (fast, no quality loss); others are re-encoded. Dates and locations are carried across. Needs <b>ffmpeg</b> (in Terminal: <code>brew install ffmpeg</code>).</small>
+<label class="t" style="margin-top:12px">Folders to scan (one per line)</label>
+<textarea id="vroots" placeholder="/Volumes/Drive/Sorted" spellcheck="false"></textarea>
+<div class="row" style="margin-top:8px"><button id="vb1">Add folders...</button></div>
+<div class="opt"><input type="checkbox" id="vdry" checked><div>Preview only<small>On by default. Counts what would be converted (and how), changes nothing.</small></div></div>
+<div class="opt"><div><b>Convert these types</b><br><label><input type="checkbox" id="vavi" checked> .avi</label> &nbsp; <label><input type="checkbox" id="vmov" checked> .mov</label></div></div>
+<div class="opt"><input type="checkbox" id="vlive"><div>Also convert Live Photo videos<small>Off by default. An iPhone Live Photo is a still picture plus a short .MOV video that Apple Photos links together. If a .MOV sits next to a photo with the same name, it is treated as a Live Photo video and left alone, because converting it to .mp4 would break the link. Your ordinary .mov and .avi videos are converted as normal.</small></div></div>
+<div class="opt"><div style="flex:1"><label for="vq" style="font-weight:600">Quality when re-encoding</label>
+<select id="vq" class="sel"><option value="veryhigh">Very high (largest files)</option><option value="high" selected>High (recommended)</option><option value="small">Smaller files</option></select></div></div>
+<div class="opt"><div style="flex:1"><label for="vact" style="font-weight:600">What happens to the original video</label>
+<select id="vact" class="sel"><option value="move" selected>Move to an _original_videos folder (safe)</option><option value="keep">Keep it where it is, next to the new .mp4</option><option value="delete">Delete it once the new .mp4 is verified (permanent)</option></select>
+<small>Originals are only moved or deleted after the new file has been checked (it must play and match the original&#39;s length).</small></div></div>
+<button class="p" id="vgo" style="margin-top:6px">Start converting</button></div>
+</section>
 <script>
 const $=id=>document.getElementById(id), esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const roots=()=>$('roots').value.split('\n').map(x=>x.trim()).filter(Boolean);
@@ -722,6 +915,7 @@ const tile=(n,l,c)=>`<div class="tile ${c||''}"><b>${n.toLocaleString()}</b><spa
 function tbl(head,rows){return `<table><tr>${head.map((h,i)=>`<th class="${i?'n':''}">${h}</th>`).join('')}</tr>${rows.map(r=>`<tr>${r.map((c,i)=>`<td class="${i?'n':''}">${c}</td>`).join('')}</tr>`).join('')}</table>`}
 function bars(rows){const m=Math.max(1,...rows.map(r=>r[2]));return rows.map(r=>[esc(r[0]||'(none)'),r[1].toLocaleString(),r[2].toLocaleString()+`<span class="mini" style="width:${Math.round(60*r[2]/m)}px"></span>`])}
 function showSummary(s){
+  if(s.kind==='convert'){showConvert(s);return}
   if(s.kind==='sort'){showSort(s);return}
   let h=`<div class="tiles">${tile(s.total,'media files')}${tile(s.duplicates,'exact duplicates skipped')}${tile(s.matched,'unique files matched ('+s.pct_matched+'%)','ok')}${tile(s.no_json,'no JSON found',s.no_json?'bad':'ok')}${tile(s.orphans,'JSON with no photo')}</div>`;
   h+=s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
@@ -759,6 +953,8 @@ $('cdel').onclick=async()=>{
   if(r.error){alert(r.error);return}
   $('cdel').disabled=true;
   const tm=setInterval(async()=>{const s=(await (await fetch('/api/status')).json()).clean;
+    jobKind='clean';$('msg').innerHTML='<b>Part 3 Clean up</b> &middot; '+(s.state==='done'?'Finished':s.state==='error'?esc(s.message):'Deleting .json files...');setBar('bar','fill','pct',s.state==='done'?100:(s.total?100*s.done/s.total:0),s.state==='running'&&!s.total);
+    $('cbar').style.display=s.state==='error'?'none':'block';setBar('cbar','cfill','cpct',s.state==='done'?100:(s.total?100*s.done/s.total:0),s.state==='running'&&!s.total);
     $('cres').innerHTML=s.state==='error'?'<span class="err">'+esc(s.message)+'</span>':`${s.state==='done'?'<span class="ok">Finished.</span> ':''}Deleted ${s.deleted.toLocaleString()} of ${s.total.toLocaleString()} (${fmtBytes(s.bytes)})${s.errors?`, <span class="err">${s.errors} errors</span>`:''}`;
     if(s.state!=='running')clearInterval(tm)},500)};
 
@@ -797,18 +993,76 @@ function showSort(s){
     for(let i=0;i<30;i++){await new Promise(x=>setTimeout(x,1000));const s=await st();if(s&&s.boot!==boot){location.reload();return}}
     $('updmsg').textContent='Updated. If the page does not reload, restart the app in Terminal.'}
 })();
+function setBar(barId,fillId,pctId,pct,indet){
+  const bar=$(barId),fill=$(fillId),lab=$(pctId);
+  bar.classList.toggle('indet',!!indet);
+  if(indet){lab.textContent='working...';lab.className='out';lab.style.left='12px';fill.style.width='';return}
+  pct=Math.max(0,Math.min(100,pct));fill.style.width=pct+'%';lab.textContent=Math.floor(pct)+'%';
+  if(pct>=12){lab.className='';lab.style.left='calc('+pct+'% - 44px)'}else{lab.className='out';lab.style.left='calc('+pct+'% + 8px)'}}
+
+const TABS=['fix','sort','clean','convert'];let jobKind='fix';
+function showTab(t){if(!TABS.includes(t))t='fix';
+  TABS.forEach(x=>{$('pane-'+x).style.display=x===t?'block':'none';document.querySelector('.tab[data-tab="'+x+'"]').classList.toggle('on',x===t)});
+  try{localStorage.setItem('tab',t)}catch(e){}
+  try{history.replaceState(null,'','#'+t)}catch(e){}
+  updGoto()}
+function updGoto(){const a=$('goto');const cur=TABS.find(x=>$('pane-'+x).style.display==='block');
+  const has=$('prog').style.display!=='none'||$('sum').style.display!=='none';
+  a.style.display=(has&&cur!==jobKind&&jobKind!=='clean')?'inline':'none'}
+$('goto').onclick=e=>{e.preventDefault();showTab(jobKind);$('results').scrollIntoView({behavior:'smooth'})};
+document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
+function placeResults(kind){const pane=$('pane-'+(kind==='clean'?'fix':kind));if(pane&&$('results').parentNode!==pane)pane.appendChild($('results'))}
+let startTab='fix';try{startTab=location.hash.slice(1)||localStorage.getItem('tab')||'fix'}catch(e){}
+showTab(startTab);
+
+// ---- Part 4: convert
+const vroots=()=>$('vroots').value.split('\n').map(x=>x.trim()).filter(Boolean);
+$('vb1').onclick=async()=>{const r=await post('/api/choose',{prompt:'Choose the folders to scan for .avi and .mov videos'});if(r.paths){const have=new Set(vroots());r.paths.forEach(p=>have.add(p));$('vroots').value=[...have].join('\n')}};
+$('vgo').onclick=async()=>{
+  if(!vroots().length){alert('Add the folders to scan first');return}
+  const exts=[$('vavi').checked?'.avi':null,$('vmov').checked?'.mov':null].filter(Boolean);
+  if(!exts.length){alert('Tick .avi and/or .mov');return}
+  const act=$('vact').value;
+  if(act==='delete'&&!$('vdry').checked){const t=prompt('This permanently deletes each original video after its .mp4 is verified. It cannot be undone.\nType DELETE to confirm.');if(t!=='DELETE')return}
+  $('sum').style.display='none';
+  const r=await post('/api/convert_start',{roots:vroots(),dry_run:$('vdry').checked,exts:exts,include_live:$('vlive').checked,quality:$('vq').value,action:act});
+  if(r.error)alert(r.error);else{jobKind='convert';placeResults('convert');$('prog').style.display='block';poll()}};
+function showConvert(s){
+  const w=s.dry_run?'would be ':'';
+  let h=`<div class="tiles">${tile(s.total,'videos found')}${tile(s.dry_run?s.would:s.converted,'videos '+w+'converted','ok')}${tile(s.remux,'re-wrapped (lossless)')}${tile(s.encode,'re-encoded')}${tile(s.skipped_live,'Live Photo videos skipped')}${tile(s.failed,'could not convert',s.failed?'bad':'')}</div>`;
+  if(!s.dry_run&&s.converted)h+=`<div class="tip" style="border-color:var(--acc)">${fmtBytes(s.bytes_before)} became ${fmtBytes(s.bytes_after)} (${s.bytes_before?Math.round(100*(1-s.bytes_after/s.bytes_before)):0}% smaller). Originals: ${({move:'moved to _original_videos',keep:'kept in place',delete:'deleted'})[s.action]}.</div>`;
+  h+=s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
+  if((s.failures||[]).length)h+='<h2>Problems</h2>'+tbl(['File','Result','Detail'],s.failures.map(f=>[esc(f.file),esc(f.status),esc(f.detail)]));
+  h+='<small>Saved: a CSV with the result for every video (on your Desktop).</small>';
+  $('sumbody').innerHTML=h;$('sum').style.display='block'}
+
+function liveTiles(s,c,done,nj){
+  if(!s.total)return '';const x=s.extra||{};const err=(x.errors?tile(x.errors,'files with errors','bad'):'');
+  if(jobKind==='convert')return tile(s.total,'videos found')+tile(done,'checked so far')+tile(x.converted||0,'converted','ok')+tile(x.skipped_live||0,'Live Photo videos skipped')+(x.errors?tile(x.errors,'could not convert','bad'):'');
+  if(jobKind==='sort')return tile(s.total,'files found')+tile(x.duplicates||0,'duplicates skipped')+tile(x.written||0,'files placed','ok')+tile(x.merged_from||0,'source folders')+tile(x.folders||0,'folders after merging')+(x.json_along?tile(x.json_along,'.json brought along'):'')+err;
+  return tile(s.total,'media files')+tile(done-nj,'matched so far','ok')+tile(nj,'no JSON so far',nj?'bad':'')+tile(x.dates_changed||0,'dates changed')+tile(x.gps_changed||0,'locations changed')+tile(x.desc_changed||0,'captions changed')+tile(x.replaced_files||0,'files with info replaced')+tile(x.live_paired||0,'Live Photos paired')+tile(x.duplicates||0,'duplicates skipped')+tile(x.written||0,'files placed')+tile(x.folders||0,'output folders')+err+(s.scan?tile(s.scan.json,'JSON files found'):'')}
 
 let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   const s=await (await fetch('/api/status')).json();$('prog').style.display='block';
   const run=s.state==='scanning'||s.state==='running';$('go').disabled=run;
-  const pct=s.total?Math.round(100*s.done/s.total):0;$('fill').style.width=pct+'%';
-  $('msg').innerHTML=s.state==='error'?'<span class="err">'+esc(s.message)+'</span>':s.state==='done'?'<span class="ok">Finished.</span>':esc(s.message)+(s.done?` (${s.done.toLocaleString()} / ${s.total.toLocaleString()})`:'');
+  jobKind=s.kind||'fix';placeResults(jobKind);
+  let pct=0,indet=false;
+  if(s.state==='done'){pct=100}
+  else if(s.phase&&s.phase.stage==='convert'&&s.phase.total){pct=100*s.phase.done/s.phase.total}
+  else if(s.done>0&&s.total){pct=100*s.done/s.total}
+  else if(s.phase&&s.phase.total){pct=100*s.phase.done/s.phase.total}
+  else if(s.state==='scanning'||s.state==='running'){indet=true}
+  setBar('bar','fill','pct',pct,indet);
+  const LBL={fix:'Part 1 Fix',sort:'Part 2 Sort',convert:'Part 4 Convert'}[jobKind]||'';
+  $('msg').innerHTML=(LBL?'<b>'+LBL+'</b> &middot; ':'')+(s.state==='error'?'<span class="err">'+esc(s.message)+'</span>':s.state==='done'?'<span class="ok">Finished.</span>':esc(s.message)+(s.done?` (${s.done.toLocaleString()} / ${s.total.toLocaleString()})`:''));
   const c=s.counts||{},done=s.done||0,nj=c['no-json']||0;
-  $('tiles').innerHTML=s.total?tile(s.total,'media files')+tile(done-nj,'matched so far','ok')+tile(nj,'no JSON so far',nj?'bad':'')+tile((s.extra||{}).dates_changed||0,'dates changed')+tile((s.extra||{}).gps_changed||0,'locations changed')+tile((s.extra||{}).desc_changed||0,'captions changed')+tile((s.extra||{}).replaced_files||0,'files with info replaced')+tile((s.extra||{}).live_paired||0,'Live Photos paired')+tile((s.extra||{}).duplicates||0,'duplicates skipped')+((s.extra||{}).errors?tile(s.extra.errors,'files with errors','bad'):'')+((s.extra||{}).json_along?tile(s.extra.json_along,'.json brought along'):'')+tile((s.extra||{}).written||0,'files placed')+tile((s.extra||{}).folders||0,'output folders')+(s.scan?tile(s.scan.json,'JSON files found'):''):'';
+  $('tiles').innerHTML=liveTiles(s,c,done,nj);
   $('recent').innerHTML=(s.recent||[]).map(r=>`${esc(r.name)} &rarr; ${r.status==='duplicate'?'duplicate (skipped)':esc(r.to)+' ['+esc(r.status)+(r.live==='paired'?', live paired':'')+']'}`).reverse().join('<br>');
   if(s.state==='done'&&s.summary)showSummary(s.summary);
+  updGoto();
   if(['done','error','idle'].includes(s.state))clearInterval(timer);
 },500)}
+(async function(){try{const s=await (await fetch('/api/status')).json();if(s.state&&s.state!=='idle'){jobKind=s.kind||'fix';placeResults(jobKind);$('prog').style.display='block';poll()}}catch(e){}})();
 </script></main></body></html>"""
 
 
