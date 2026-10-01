@@ -8,7 +8,13 @@ Takeout exports repeat the same album folders across many `Takeout N` folders, a
 - Python 3.8+
 - [exiftool](https://exiftool.org) (macOS: `brew install exiftool`)
 
-## Usage
+## Easiest: the local app
+```
+python3 takeout_gui.py
+```
+Opens a page in your browser (served only on your own machine). Click **Choose folder** to pick the Takeout parent folder and, ideally, a separate output folder, leave **Preview only** ticked for a first pass, then press Start. Progress and the CSV report are shown in the page. Both .py files must sit in the same folder.
+
+## Command line
 Extract all Takeout zips into one parent folder, then:
 
 ```
