@@ -193,12 +193,16 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
         with LOCK:
             STATE["message"] = "Finding exact duplicates..." if dedupe else "Preparing..."
 
-        def hashing(done, todo):
+        def hashing(stage, done, todo):
             with LOCK:
-                STATE["message"] = f"Finding exact duplicates... ({done:,}/{todo:,} files compared)"
+                if stage == "dedupe":
+                    STATE["message"] = (f"Step 1: checking {todo:,} files that share a size with another file for "
+                                        f"exact duplicates ({done:,}/{todo:,})")
+                else:
+                    STATE["message"] = f"Step 2: reading Live Photo IDs ({done:,}/{todo:,} stills)"
         fx.prepare(args, media, hashing)
         with LOCK:
-            STATE["message"] = f"{len(media)} media files, {len(sidecars)} json files"
+            STATE["message"] = f"Step 3: fixing and placing {len(media):,} files"
         out_root = Path(out) if out else None
         rows, counts, extra = [], defaultdict(int), defaultdict(int)
         out_dirs, recent = set(), []
@@ -526,7 +530,7 @@ let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   const s=await (await fetch('/api/status')).json();$('prog').style.display='block';
   const run=s.state==='scanning'||s.state==='running';$('go').disabled=run;
   const pct=s.total?Math.round(100*s.done/s.total):0;$('fill').style.width=pct+'%';
-  $('msg').innerHTML=s.state==='error'?'<span class="err">'+esc(s.message)+'</span>':s.state==='done'?'<span class="ok">Finished.</span>':esc(s.message)+(s.total?` (${s.done.toLocaleString()} / ${s.total.toLocaleString()})`:'');
+  $('msg').innerHTML=s.state==='error'?'<span class="err">'+esc(s.message)+'</span>':s.state==='done'?'<span class="ok">Finished.</span>':esc(s.message)+(s.done?` (${s.done.toLocaleString()} / ${s.total.toLocaleString()})`:'');
   const c=s.counts||{},done=s.done||0,nj=c['no-json']||0;
   $('tiles').innerHTML=s.total?tile(s.total,'media files')+tile(done-nj,'matched so far','ok')+tile(nj,'no JSON so far',nj?'bad':'')+tile((s.extra||{}).replaced_files||0,'files with EXIF replaced')+tile((s.extra||{}).live_paired||0,'Live Photos paired')+tile((s.extra||{}).duplicates||0,'duplicates skipped')+tile((s.extra||{}).written||0,'files placed')+tile((s.extra||{}).folders||0,'output folders')+(s.scan?tile(s.scan.json,'JSON files found'):''):'';
   $('recent').innerHTML=(s.recent||[]).map(r=>`${esc(r.name)} &rarr; ${r.status==='duplicate'?'duplicate (skipped)':esc(r.to)+' ['+esc(r.status)+(r.live==='paired'?', live paired':'')+']'}`).reverse().join('<br>');

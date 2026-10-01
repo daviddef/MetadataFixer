@@ -33,6 +33,7 @@ import shutil
 import hashlib
 import subprocess
 import sys
+import tempfile
 import threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -415,15 +416,63 @@ def plan_duplicates(media, progress=None):
     return dupes, saved
 
 
-def plan_live(media):
+STILL_SUFFIXES = (".HEIC", ".heic", ".JPG", ".jpg", ".JPEG", ".jpeg", ".HEIF", ".heif")
+
+
+def read_content_ids(paths, progress=None, chunk=400):
+    """ContentIdentifier of many files using a few exiftool runs instead of one per file."""
+    ids, done = {}, 0
+    for i in range(0, len(paths), chunk):
+        part = paths[i:i + chunk]
+        arg = Path(tempfile.mkstemp(suffix=".args")[1])
+        try:
+            arg.write_text("\n".join(str(p) for p in part), encoding="utf-8")
+            r = subprocess.run(["exiftool", "-charset", "filename=utf8", "-j", "-ContentIdentifier",
+                                "-@", str(arg)], capture_output=True, text=True)
+            try:
+                for item in json.loads(r.stdout or "[]"):
+                    cid = item.get("ContentIdentifier")
+                    if cid:
+                        ids[item["SourceFile"]] = str(cid)
+            except ValueError:
+                pass
+        finally:
+            arg.unlink(missing_ok=True)
+        done += len(part)
+        if progress:
+            progress("live", done, len(paths))
+    return ids
+
+
+def plan_live(media, progress=None):
     """Read each Live Photo video's still-image ID up front (before any file is moved)."""
-    return {str(m): live_id(m) for m in media if m.suffix.lower() in (".mp4", ".mov")}
+    pairs = {}
+    for m in media:
+        if m.suffix.lower() in (".mp4", ".mov"):
+            for ext in STILL_SUFFIXES:
+                still = m.with_suffix(ext)
+                if still.exists():
+                    pairs[str(m)] = still
+                    break
+    ids = read_content_ids(sorted({str(p) for p in pairs.values()}), progress)
+    plan = {}
+    for m in media:
+        if m.suffix.lower() in (".mp4", ".mov"):
+            still = pairs.get(str(m))
+            if not still:
+                plan[str(m)] = (None, "no-still")
+            else:
+                cid = ids.get(str(still))
+                plan[str(m)] = (cid, "") if cid else (None, "no-id")
+    return plan
 
 
 def prepare(args, media, progress=None):
+    """progress(stage, done, total) is called as work proceeds."""
     args.lock, args.claimed = threading.Lock(), set()
-    args.dupes, args.dupe_bytes = (plan_duplicates(media, progress) if getattr(args, "dedupe", False) else ({}, 0))
-    args.live_plan = plan_live(media) if getattr(args, "pair_live", False) else {}
+    dedupe_progress = (lambda d, t: progress("dedupe", d, t)) if progress else None
+    args.dupes, args.dupe_bytes = (plan_duplicates(media, dedupe_progress) if getattr(args, "dedupe", False) else ({}, 0))
+    args.live_plan = plan_live(media, progress) if getattr(args, "pair_live", False) else {}
 
 
 def claim_dest(dest, args):
