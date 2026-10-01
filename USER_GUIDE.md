@@ -81,6 +81,7 @@ While it runs you see live counts (duplicates skipped, files placed, output fold
 
 Live counters while running, then a full summary:
 
+- **Changes made:** how many dates, locations and captions were changed (split into added and replaced), how many files had people tagged, and how many favourites were marked. A preview says "would change".
 - **Media files / matched / no JSON** with the percent matched
 - **JSON with no photo**: sidecars that matched no file
 - **Files with a value replaced** and **Live Photos paired**
@@ -139,6 +140,24 @@ Takeout splits a Live Photo into a still (`IMG_1234.HEIC`) and a video (`IMG_123
 - Needs an output folder (it renames videos).
 - Works only where the still still has its Apple ID. Others are counted as "Still has no Apple ID" or "No matching still" and remain separate videos.
 - Check a few pairs in the Photos app after importing.
+
+## Part 2: Sort only (merge folders, remove duplicates)
+
+The **Sort only** panel does just the tidying, with no dates, locations or captions touched, so you can sort your library without the metadata work. It is independent of Part 1, and you can run it before or after.
+
+1. Add the folders to sort, and choose an output folder.
+2. Leave **Preview only** ticked and press **Start sorting** to see what would happen: how many folders would merge into how many, and how many duplicates would be skipped.
+3. Untick Preview to do it for real.
+
+What it does:
+- **Merges same-named folders.** Every `Photos from 2012` across all your Takeouts becomes one `Photos from 2012`. Album folders stay as albums. No date folders are created.
+- **Skips exact duplicates** (optional, ticked by default). It compares file contents, so the same photo repeated across Takeouts or albums is kept once, preferring the copy in `Photos from YYYY`. Two *different* photos that share a name are both kept; the second becomes `name_1`.
+- **Brings the `.json` files along** (optional, ticked by default), placing each beside its photo, so Part 1 still works on the sorted folder. Untick it if you only want photos.
+- **Copy or move.** Copy leaves the source untouched and needs about as much free space again. Move needs no extra space but empties the source folders (duplicates and `.json` files stay behind; remove the `.json` files later with the clean-up panel). Back up first if you choose Move.
+
+You get live counts while it runs, then a summary: files found, duplicates skipped (and the space they take), files placed, and "N folders merged into M", plus a table of the resulting folders and a CSV of where every file went. A preview saves its CSV to your Desktop and leaves the output folder untouched.
+
+Command line: `python3 takeout_fix_metadata.py "/path/to/Takeouts" --sort-only --dedupe --out "/path/to/Sorted"` (add `--move`, `--dry-run` or `--no-json` as needed).
 
 ## Cleaning up the .json files
 

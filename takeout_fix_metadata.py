@@ -25,6 +25,7 @@ By default existing EXIF values are kept and only missing tags are filled in.
 Use --overwrite to replace them with Google's values.
 """
 import argparse
+import atexit
 import csv
 import json
 import os
@@ -200,52 +201,130 @@ def build_args(d, ext, overwrite):
     for person in d.get("people") or []:
         name = (person or {}).get("name")
         if name:
-            a += [f"-XMP-iptcExt:PersonInImage+={name}"]
+            a += [f"-XMP-iptcExt:PersonInImage-={name}", f"-XMP-iptcExt:PersonInImage+={name}"]  # no repeats
     if d.get("favorited"):
         a += ["-XMP:Rating=5"]
     return a, taken
 
 
+class ExifTool:
+    """One long-lived exiftool process (avoids paying its start-up cost for every file)."""
+
+    def __init__(self):
+        self.p = subprocess.Popen(["exiftool", "-stay_open", "True", "-@", "-"], stdin=subprocess.PIPE,
+                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+
+    def alive(self):
+        return self.p.poll() is None
+
+    def run(self, args):
+        """Run one exiftool command. Returns (exit_status, output_lines)."""
+        a = ["-charset", "utf8", "-charset", "filename=utf8", "-echo4", "STATUS=${status}"]
+        a += [str(x) for x in args] + ["-execute"]
+        self.p.stdin.write(("\n".join(a) + "\n").encode("utf-8"))
+        self.p.stdin.flush()
+        lines, status = [], 1
+        while True:
+            raw = self.p.stdout.readline()
+            if not raw:
+                raise RuntimeError("exiftool stopped unexpectedly")
+            line = raw.decode("utf-8", "replace").rstrip("\n")
+            if line.strip() == "{ready}":
+                return status, lines
+            if line.startswith("STATUS="):
+                try:
+                    status = int(line[7:])
+                except ValueError:
+                    status = 1
+            else:
+                lines.append(line)
+
+    def close(self):
+        try:
+            self.p.stdin.write(b"-stay_open\nFalse\n")
+            self.p.stdin.flush()
+            self.p.wait(timeout=10)
+        except Exception:
+            self.p.kill()
+
+
+_tools = threading.local()
+_all_tools, _all_lock = [], threading.Lock()
+
+
+def tool():
+    t = getattr(_tools, "t", None)
+    if t is None or not t.alive():
+        t = ExifTool()
+        _tools.t = t
+        with _all_lock:
+            _all_tools.append(t)
+    return t
+
+
+def close_all():
+    with _all_lock:
+        for t in _all_tools:
+            t.close()
+        _all_tools.clear()
+
+
+atexit.register(close_all)
+
+_ASSIGN = re.compile(r"^-[A-Za-z0-9_:-]+\+?=")
+
+
+def _escape_assign(arg):
+    """With -E, exiftool reads values HTML-escaped; this keeps newlines and &<> intact."""
+    m = _ASSIGN.match(arg)
+    if not m:
+        return arg
+    v = arg[m.end():].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return m.group(0) + v.replace("\r", "").replace("\n", "&#xa;")
+
+
+def _message(lines):
+    return " | ".join(l.strip() for l in lines if l.strip().startswith(("Error", "Warning"))) or " ".join(
+        l.strip() for l in lines if l.strip())
+
+
 def run_exiftool(target, args, overwrite, sidecar_for_raw=False):
-    cmd = ["exiftool", "-q", "-m", "-overwrite_original", "-P"]
-    if not overwrite:
-        cmd += ["-wm", "cg"]  # create missing tags, never replace existing ones
-    cmd += args
+    flags = ["-m", "-P", "-E"]
+    tag_args = list(args)
     if sidecar_for_raw:
         xmp = str(target.with_suffix(".xmp"))
-        # pull the 'taken' info into an xmp sidecar next to the raw file
-        cmd = ["exiftool", "-q", "-m", "-P", "-o", xmp] + cmd[4:] + [str(target)]
-        # xmp output can't hold EXIF-group tags; map AllDates onto XMP equivalents
-        cmd = [c.replace("-AllDates=", "-XMP:DateCreated=") for c in cmd]
-        cmd = [c for c in cmd if not c.startswith(("-ImageDescription", "-GPSAltitudeRef",
-                                                   "-GPSLatitudeRef", "-GPSLongitudeRef"))]
-        cmd = [c.replace("-GPSLatitude=", "-XMP:GPSLatitude=").replace("-GPSLongitude=", "-XMP:GPSLongitude=")
-               .replace("-GPSAltitude=", "-XMP:GPSAltitude=") for c in cmd]
-        if Path(xmp).exists():
-            cmd.remove("-o"); cmd.remove(xmp)
-            cmd.insert(cmd.index("-P") + 1, "-overwrite_original")
+        # xmp can't hold EXIF-group tags; map them onto XMP equivalents
+        tag_args = [c.replace("-AllDates=", "-XMP:DateCreated=") for c in tag_args]
+        tag_args = [c for c in tag_args if not c.startswith(("-ImageDescription", "-GPSAltitudeRef",
+                                                             "-GPSLatitudeRef", "-GPSLongitudeRef"))]
+        tag_args = [c.replace("-GPSLatitude=", "-XMP:GPSLatitude=").replace("-GPSLongitude=", "-XMP:GPSLongitude=")
+                    .replace("-GPSAltitude=", "-XMP:GPSAltitude=") for c in tag_args]
+        flags += ["-overwrite_original"] if Path(xmp).exists() else ["-o", xmp]
     else:
-        cmd.append(str(target))
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    msg = (r.stderr or r.stdout).strip()
-    if r.returncode != 0 and not sidecar_for_raw and "looks more like" in msg:
-        return _retry_real_type(target, cmd[:-1], msg)
-    return r.returncode == 0, msg
+        flags += ["-overwrite_original"]
+    if not overwrite:
+        flags += ["-wm", "cg"]  # create missing tags, never replace existing ones
+    cmd = flags + [_escape_assign(c) for c in tag_args]
+    status, lines = tool().run(cmd + [str(target)])
+    msg = _message(lines)
+    if status != 0 and not sidecar_for_raw and "looks more like" in msg:
+        return _retry_real_type(target, cmd, msg)
+    return status == 0, msg
 
 
 def _retry_real_type(target, cmd, first_msg):
     """Google sometimes saves JPEGs as .HEIC (etc). Write via a temp name with the real extension."""
-    r = subprocess.run(["exiftool", "-s3", "-FileTypeExtension", str(target)], capture_output=True, text=True)
-    real = r.stdout.strip().lower()
-    if not real:
+    _, lines = tool().run(["-s3", "-FileTypeExtension", str(target)])
+    real = (lines[0].strip().lower() if lines else "")
+    if not real or " " in real:
         return False, first_msg
     tmp = target.with_name(target.stem + ".__fix__." + real)
     target.rename(tmp)
     try:
-        r2 = subprocess.run(cmd + [str(tmp)], capture_output=True, text=True)
+        status, out = tool().run(cmd + [str(tmp)])
     finally:
         tmp.rename(target)
-    return r2.returncode == 0, (r2.stderr or r2.stdout).strip()
+    return status == 0, _message(out)
 
 
 def unique_dest(dest):
@@ -262,13 +341,16 @@ def unique_dest(dest):
 
 def read_existing(path, is_video=False):
     """Existing date / GPS / description in a file, for before-and-after counting."""
-    r = subprocess.run(["exiftool", "-j", "-n", "-api", "QuickTimeUTC=1", "-DateTimeOriginal",
-                        "-QuickTime:CreateDate", "-GPSLatitude", "-GPSLongitude", "-Keys:GPSCoordinates",
-                        "-ImageDescription", "-XMP-dc:Description", str(path)],
-                       capture_output=True, text=True)
     try:
-        d = json.loads(r.stdout)[0]
-    except (ValueError, IndexError):
+        _, lines = tool().run(["-j", "-n", "-api", "QuickTimeUTC=1", "-DateTimeOriginal",
+                               "-QuickTime:CreateDate", "-GPSLatitude", "-GPSLongitude", "-Keys:GPSCoordinates",
+                               "-ImageDescription", "-XMP-dc:Description", str(path)])
+    except (OSError, RuntimeError):
+        return {}
+    try:
+        start = next(i for i, l in enumerate(lines) if l.startswith("["))
+        d = json.loads("\n".join(lines[start:]))[0]
+    except (StopIteration, ValueError, IndexError):
         return {}
     lat, lon = d.get("GPSLatitude"), d.get("GPSLongitude")
     kc = d.get("Keys:GPSCoordinates") or d.get("GPSCoordinates")
@@ -550,6 +632,39 @@ def process(m, idx, args, out_root):
     return row
 
 
+def sort_one(m, idx, args, out_root):
+    """Sorting only: merge same-named folders and skip duplicates. No metadata is read or written."""
+    row = {k: "" for k in REPORT_FIELDS}
+    row["file"] = str(m)
+    kept = (getattr(args, "dupes", None) or {}).get(str(m))
+    if kept:
+        row["status"], row["detail"] = "duplicate", f"identical to {kept}"
+        return row
+    dest = claim_dest(dest_dir_for(m, None, args, out_root) / m.name, args)
+    row["output"] = str(dest)
+    sc = None
+    if getattr(args, "bring_json", False):
+        sc, how = find_sidecar(m, idx)
+        if how == "tree-ambiguous":
+            sc = pick_closest(m, sc)
+        if sc:
+            row["sidecar"], row["match"] = str(sc), how
+    if args.dry_run:
+        row["status"] = "would-place"
+        return row
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if getattr(args, "move", False):
+        shutil.move(str(m), str(dest))
+    else:
+        shutil.copy2(m, dest)
+    if sc:  # keep the info file next to its photo so metadata can be fixed afterwards
+        jd = dest.with_name(dest.name + ".json")
+        if not jd.exists():
+            shutil.copy2(sc, jd)
+    row["status"] = "placed"
+    return row
+
+
 def m_is_dupe(m, args):
     return str(m) in (getattr(args, "dupes", None) or {})
 
@@ -564,11 +679,16 @@ def main():
                     help="relink Live Photo videos to their still (needs --out); videos become .MOV")
     ap.add_argument("--dedupe", action="store_true", help="skip byte-identical duplicate files")
     ap.add_argument("--move", action="store_true", help="move files into --out instead of copying (frees space)")
+    ap.add_argument("--sort-only", action="store_true",
+                    help="only merge same-named folders and (with --dedupe) drop duplicates; no metadata changes")
+    ap.add_argument("--no-json", action="store_true", help="with --sort-only: do not bring .json files along")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--report", type=Path, default=Path("takeout_report.csv"))
     args = ap.parse_args()
 
-    if not args.dry_run and not shutil.which("exiftool"):
+    if args.sort_only and not args.out:
+        sys.exit("--sort-only needs --out")
+    if not args.dry_run and not args.sort_only and not shutil.which("exiftool"):
         sys.exit("exiftool not found. macOS: brew install exiftool | Windows: https://exiftool.org")
     if args.pair_live and not (args.out or args.dry_run):
         sys.exit("--pair-live renames videos, so it needs --out (or --dry-run)")
@@ -581,13 +701,14 @@ def main():
     media, sidecars = scan(args.root)
     print(f"  {len(media)} media files, {len(sidecars)} json files")
     idx = build_index(sidecars)
+    args.bring_json = not args.no_json
     prepare(args, media)
     if args.dedupe:
         print(f"  {len(args.dupes)} exact duplicates will be skipped ({args.dupe_bytes / 1e9:.1f} GB)")
 
     rows = []
     with ThreadPoolExecutor(max_workers=args.workers) as ex:
-        for i, row in enumerate(ex.map(lambda m: process(m, idx, args, args.out), media), 1):
+        for i, row in enumerate(ex.map(lambda m: (sort_one if args.sort_only else process)(m, idx, args, args.out), media), 1):
             rows.append(row)
             if i % 500 == 0:
                 print(f"  {i}/{len(media)}")
@@ -597,6 +718,7 @@ def main():
         w.writeheader()
         w.writerows(rows)
 
+    close_all()
     counts = defaultdict(int)
     for r in rows:
         counts[r["status"]] += 1
