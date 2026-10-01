@@ -26,7 +26,21 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.01-x"
+VERSION = "2026.10.01-y"
+class Cancelled(Exception):
+    pass
+
+
+def check_cancel():
+    if STATE.get("cancel"):
+        raise Cancelled()
+
+
+def stopped_state(what="Nothing further was changed."):
+    with LOCK:
+        STATE.update(state="idle", phase=None, cv=None, message="Stopped by you. " + what)
+
+
 STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}, "recent": [], "clean": {"state": "idle"}, "update": {"state": "idle", "files": []}, "phase": None, "kind": "fix", "cv": None, "cancel": False, "version": VERSION, "boot": time.time()}
 LOCK = threading.Lock()
 
@@ -191,7 +205,7 @@ def write_text_summary(path, sm):
 
 def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=False, date_policy="earlier"):
     with LOCK:
-        STATE.update(state="scanning", total=0, done=0, counts={}, message="Scanning folders...",
+        STATE.update(state="scanning", cancel=False, total=0, done=0, counts={}, message="Scanning folders...",
                      report="", summary=None, scan=None, extra={}, recent=[], phase=None, kind="fix")
     try:
         resolved, seen = [], set()
@@ -227,6 +241,7 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
             STATE["message"] = "Finding exact duplicates..." if dedupe else "Preparing..."
 
         def hashing(stage, done, todo):
+            check_cancel()
             with LOCK:
                 STATE["phase"] = {"stage": stage, "done": done, "total": todo}
                 if stage == "dedupe":
@@ -243,7 +258,10 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
         rows, counts, extra = [], defaultdict(int), defaultdict(int)
         out_dirs, recent = set(), []
         with ThreadPoolExecutor(max_workers=4) as ex:
-            for row in ex.map(lambda m: fx.guarded(fx.process)(m, idx, args, out_root), media):
+            def work(m):
+                check_cancel()
+                return fx.guarded(fx.process)(m, idx, args, out_root)
+            for row in ex.map(work, media):
                 rows.append(row)
                 counts[row["status"]] += 1
                 if row["status"] in ("updated", "would-update"):
@@ -313,6 +331,12 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
         write_text_summary(report_dir / f"takeout_{tag}_summary.txt", sm)
         with LOCK:
             STATE.update(state="done", report=str(report), summary=sm, message="Finished")
+    except Cancelled:
+        try:
+            fx.close_all()
+        except Exception:
+            pass
+        stopped_state("Files already handled stay done; run it again to carry on.")
     except Exception as e:  # surface any failure in the UI
         with LOCK:
             STATE.update(state="error", message=str(e))
@@ -477,7 +501,7 @@ def run_convert(roots, dry_run, exts, include_live, quality, action, estimate=Fa
                 if stop():
                     for f_ in futs:
                         f_.cancel()
-                    raise RuntimeError("Stopped by you while reading the videos. Nothing was changed.")
+                    raise Cancelled()
         MODE_LABEL = {"remux": "re-wrap", "audio": "audio only", "encode": "re-encode"}
         plan = {m: {"n": 0, "dur": 0.0, "bytes": 0} for m in MODE_LABEL}
         info_of = {}
@@ -524,7 +548,7 @@ def run_convert(roots, dry_run, exts, include_live, quality, action, estimate=Fa
             ratios = defaultdict(list)
             for k, (e, q) in enumerate(picks, 1):
                 if stop():
-                    raise RuntimeError("Stopped by you. Nothing was changed.")
+                    raise Cancelled()
                 with LOCK:
                     STATE["phase"] = {"stage": "pct", "done": k - 1, "total": max(1, len(picks))}
                     STATE["message"] = f"Estimating the new sizes: test-encoding a short sample ({k} of {len(picks)}): {q.name}"
@@ -717,6 +741,8 @@ def run_convert(roots, dry_run, exts, include_live, quality, action, estimate=Fa
                               "Delete those folders once you have checked the new .mp4 files.")
         with LOCK:
             STATE.update(state="done", report=str(report), summary=sm, message="Finished", phase=None)
+    except Cancelled:
+        stopped_state("Nothing was changed.")
     except Exception as e:
         fx.close_all()
         with LOCK:
@@ -799,7 +825,7 @@ def run_empty(roots, dry_run, ignore_junk, remove_top):
 def run_cleanup(roots, dry_run, opts):
     """One Clean up job: .json files, junk files, name tidying, empty folders, always in that safe order."""
     with LOCK:
-        STATE.update(state="scanning", total=0, done=0, counts={}, message="Preparing...", report="",
+        STATE.update(state="scanning", cancel=False, total=0, done=0, counts={}, message="Preparing...", report="",
                      summary=None, scan=None, extra={}, recent=[], phase=None, kind="cleanup")
     try:
         folders = check_clean_folders(roots)
@@ -819,6 +845,7 @@ def run_cleanup(roots, dry_run, opts):
             return str(p)
 
         def phase(i, frac, msg=None):
+            check_cancel()
             with LOCK:
                 STATE["state"] = "running"
                 STATE["phase"] = {"stage": "pct", "done": 100 * (i + max(0.0, min(1.0, frac))) / n, "total": 100}
@@ -983,6 +1010,12 @@ def run_cleanup(roots, dry_run, opts):
         with LOCK:
             STATE.update(state="done", report=str(report), message="Finished", phase=None,
                          summary={"kind": "cleanup", "dry_run": dry_run, "sections": sections, "tips": tips})
+    except Cancelled:
+        try:
+            fx.close_all()
+        except Exception:
+            pass
+        stopped_state("Steps that already finished stay done.")
     except Exception as e:
         with LOCK:
             STATE.update(state="error", message=str(e))
@@ -1001,7 +1034,7 @@ def fmt_bytes(b):
 
 def run_merge(roots, dest, opts, dry_run):
     with LOCK:
-        STATE.update(state="scanning", total=0, done=0, counts={}, message="Looking through the folders...", report="",
+        STATE.update(state="scanning", cancel=False, total=0, done=0, counts={}, message="Looking through the folders...", report="",
                      summary=None, scan=None, extra={}, recent=[], phase=None, kind="merge")
     try:
         resolved, seen = [], set()
@@ -1019,11 +1052,13 @@ def run_merge(roots, dest, opts, dry_run):
         counts, extra, recent = defaultdict(int), defaultdict(int), []
 
         def prog(done, total):
+            check_cancel()
             with LOCK:
                 STATE.update(state="running", total=total, done=done,
                              message=f"{'Checking' if dry_run else 'Merging'} {done:,} of {total:,} files")
 
         def item(row):
+            check_cancel()
             counts[row["status"]] += 1
             if row["status"] in ("placed", "kept-both", "replaced", "kept-existing"):
                 extra["placed"] += 1
@@ -1080,6 +1115,12 @@ def run_merge(roots, dest, opts, dry_run):
             sm["tips"].append("This was a preview: nothing was copied, moved or deleted.")
         with LOCK:
             STATE.update(state="done", report=str(report), summary=sm, message="Finished", phase=None)
+    except Cancelled:
+        try:
+            fx.close_all()
+        except Exception:
+            pass
+        stopped_state("Files already placed stay put; run it again with the same settings to carry on.")
     except Exception as e:
         with LOCK:
             STATE.update(state="error", message=str(e))
@@ -1474,7 +1515,7 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
     <button class="tab" data-tab="clean" role="tab"><b>3</b> Clean up</button>
     <button class="tab" data-tab="convert" role="tab"><b>4</b> Convert videos</button>
   </nav>
-  <div class="status"><div class="srow"><span id="msg">Ready. Choose a tab, set it up and press Start.</span><a href="#" id="goto" style="display:none">View results &rarr;</a></div>
+  <div class="status"><div class="srow"><span id="msg">Ready. Choose a tab, set it up and press Start.</span><a href="#" id="goto" style="display:none">View results &rarr;</a><button id="stopall" class="sm" style="display:none;margin-left:10px">Stop</button></div>
   <div class="bar" id="bar"><i id="fill"></i><span id="pct">0%</span></div></div>
 </div>
 <section class="pane" id="pane-fix">
@@ -1701,6 +1742,7 @@ function updGoto(){const a=$('goto');const cur=TABS.find(x=>$('pane-'+x).style.d
   const has=$('prog').style.display!=='none'||$('sum').style.display!=='none';
   a.style.display=(has&&cur!==tabOf(jobKind)&&jobKind!=='clean')?'inline':'none'}
 $('goto').onclick=e=>{e.preventDefault();showTab(tabOf(jobKind));$('results').scrollIntoView({behavior:'smooth'})};
+$('stopall').onclick=async()=>{const b=$('stopall');b.disabled=true;b.textContent='Stopping...';await post('/api/cancel')};
 document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
 function placeResults(kind){const pane=$('pane-'+(kind==='clean'?'fix':tabOf(kind)));if(pane&&$('results').parentNode!==pane)pane.appendChild($('results'))}
 let startTab='fix';try{startTab=location.hash.slice(1)||localStorage.getItem('tab')||'fix'}catch(e){}
@@ -1865,6 +1907,7 @@ let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   $('recent').innerHTML=(s.recent||[]).map(r=>`${esc(r.name)} &rarr; ${r.status==='duplicate'?'duplicate (skipped)':esc(r.to)+' ['+esc(r.status)+(r.live==='paired'?', live paired':'')+']'}`).reverse().join('<br>');
   if(s.state==='done'&&s.summary)showSummary(s.summary);
   renderCvLive(s);updGoto();
+  {const sb=$('stopall');const showStop=run&&!(s.kind==='convert'&&s.cv);sb.style.display=showStop?'inline-block':'none';if(!s.cancel){sb.disabled=false;sb.textContent='Stop'}else{sb.disabled=true;sb.textContent='Stopping...'}}
   if(['done','error','idle'].includes(s.state))clearInterval(timer);
 },500)}
 (async function(){try{const s=await (await fetch('/api/status')).json();if(s.state&&s.state!=='idle'){jobKind=s.kind||'fix';placeResults(jobKind);$('prog').style.display='block';poll()}}catch(e){}})();
