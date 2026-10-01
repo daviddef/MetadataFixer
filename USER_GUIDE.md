@@ -130,6 +130,17 @@ Takeout splits a Live Photo into a still (`IMG_1234.HEIC`) and a video (`IMG_123
 - Works only where the still still has its Apple ID. Others are counted as "Still has no Apple ID" or "No matching still" and remain separate videos.
 - Check a few pairs in the Photos app after importing.
 
+## Cleaning up the .json files
+
+The output folder contains only photos and videos; the fixer **does not copy the `.json` files**. Your Takeout folders keep theirs. When you are happy with the result, use the **Clean up** panel at the bottom of the app to delete the leftover `.json` files (for example in the Takeout folders, or in your output folder if you moved files).
+
+1. Click **Add folders...** and choose the folders to clean (very broad folders such as `/` or your home folder are refused).
+2. Click **Scan**. You see how many files of each kind would be deleted and their size: Google Photos sidecars, album/memory data files (`metadata.json` and similar), and other `.json` files.
+3. By default only the first two kinds are removed. Tick **Also remove other .json files** to remove every `.json` in those folders.
+4. Click **Delete .json files** and type `DELETE` to confirm. Progress is shown live.
+
+Deletion is permanent (no Trash). The `.json` files are the only source of the original dates and locations, so run the fix and check your photos first. Photos and videos are never touched by the cleanup.
+
 ## Command line
 
 ```

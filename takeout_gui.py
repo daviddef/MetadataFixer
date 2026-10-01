@@ -23,7 +23,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}, "recent": []}
+STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}, "recent": [], "clean": {"state": "idle"}}
 LOCK = threading.Lock()
 
 
@@ -261,6 +261,81 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
             STATE.update(state="error", message=str(e))
 
 
+AUX_JSON = {"metadata.json", "print-subscriptions.json", "shared_album_comments.json",
+            "user-generated-memory-titles.json"}
+
+
+def classify_json(p):
+    if p.name.lower() in AUX_JSON:
+        return "album"
+    return "photo" if is_media_sidecar(p) else "other"
+
+
+def check_clean_folders(folders):
+    out = []
+    for f in folders:
+        p = Path(f).expanduser()
+        if not p.is_dir():
+            raise ValueError(f"Not a folder: {p}")
+        if p.resolve() in (Path("/"), Path.home().resolve()) or len(p.resolve().parts) <= 2:
+            raise ValueError(f"Too broad to clean safely: {p}. Choose the specific folder.")
+        out.append(p)
+    if not out:
+        raise ValueError("Add at least one folder")
+    return out
+
+
+def find_json(folders, include_other):
+    cats = defaultdict(lambda: [0, 0])
+    files = []
+    seen = set()
+    for f in folders:
+        for dirpath, _, names in os.walk(f):
+            for n in names:
+                if not n.lower().endswith(".json"):
+                    continue
+                p = Path(dirpath) / n
+                if p.is_symlink() or str(p) in seen:
+                    continue
+                seen.add(str(p))
+                c = classify_json(p)
+                try:
+                    size = p.stat().st_size
+                except OSError:
+                    size = 0
+                cats[c][0] += 1
+                cats[c][1] += size
+                if c != "other" or include_other:
+                    files.append((p, size))
+    return {k: {"files": v[0], "bytes": v[1]} for k, v in cats.items()}, files
+
+
+def run_clean(folders, include_other):
+    with LOCK:
+        STATE["clean"] = {"state": "running", "total": 0, "done": 0, "deleted": 0, "errors": 0, "bytes": 0, "message": "Scanning..."}
+    try:
+        _, files = find_json(check_clean_folders(folders), include_other)
+        with LOCK:
+            STATE["clean"]["total"] = len(files)
+        for p, size in files:
+            try:
+                os.remove(p)
+                with LOCK:
+                    STATE["clean"]["deleted"] += 1
+                    STATE["clean"]["bytes"] += size
+            except OSError:
+                with LOCK:
+                    STATE["clean"]["errors"] += 1
+            with LOCK:
+                STATE["clean"]["done"] += 1
+        with LOCK:
+            STATE["clean"]["state"] = "done"
+            STATE["clean"]["message"] = "Finished"
+    except Exception as e:
+        with LOCK:
+            STATE["clean"].update(state="error", message=str(e))
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -299,6 +374,21 @@ class Handler(BaseHTTPRequestHandler):
                 body.get("roots", []), body.get("out", ""),
                 bool(body.get("dry_run")), bool(body.get("overwrite")), bool(body.get("pair_live")),
                 bool(body.get("dedupe")), bool(body.get("move")))).start()
+            self._send(200, "{}")
+        elif self.path == "/api/clean_scan":
+            try:
+                cats, files = find_json(check_clean_folders(body.get("folders", [])), bool(body.get("include_other")))
+                self._send(200, json.dumps({"cats": cats, "will_delete": len(files),
+                                            "bytes": sum(s for _, s in files)}))
+            except ValueError as e:
+                self._send(200, json.dumps({"error": str(e)}))
+        elif self.path == "/api/clean_run":
+            with LOCK:
+                busy = STATE["clean"].get("state") == "running" or STATE["state"] in ("scanning", "running")
+            if busy:
+                return self._send(409, json.dumps({"error": "A job is already running"}))
+            threading.Thread(target=run_clean, daemon=True,
+                             args=(body.get("folders", []), bool(body.get("include_other")))).start()
             self._send(200, "{}")
         elif self.path == "/api/reveal":
             with LOCK:
@@ -362,6 +452,13 @@ table{width:100%;border-collapse:collapse;font-size:14px;font-variant-numeric:ta
 <div class="card" id="sum" style="display:none"><h2 style="margin-top:0">Summary</h2><div id="sumbody"></div>
 <div style="margin-top:12px"><button id="rev">Show reports in Finder</button></div></div>
 
+<div class="card" style="margin-top:22px"><label class="t">Clean up: remove .json files (do this last)</label>
+<small style="margin-top:0">Once you're happy with the fixed photos, delete the leftover Google .json files. They are no longer needed, but they are the only source of the date and location data, so run the fix first. Deleted files do not go to the Trash.</small>
+<textarea id="cleanroots" placeholder="Folders to clean (one per line)" spellcheck="false" style="margin-top:8px;width:100%"></textarea>
+<div class="row" style="margin-top:8px"><button id="cb1">Add folders...</button><button id="cscan">Scan</button></div>
+<div class="opt"><input type="checkbox" id="cother"><div>Also remove other .json files<small>Off = only Google Photos sidecars and album/memory data files. On = every .json in the folders.</small></div></div>
+<div id="cres" style="margin-top:8px"></div>
+<button id="cdel" disabled style="margin-top:8px;border-color:var(--bad);color:var(--bad)">Delete .json files</button></div>
 <script>
 const $=id=>document.getElementById(id), esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const roots=()=>$('roots').value.split('\n').map(x=>x.trim()).filter(Boolean);
@@ -404,6 +501,27 @@ function showSummary(s){
   if((s.samples||[]).length)h+='<h2>Sample of changes (first 15)</h2>'+tbl(['File','Date taken','Location','Description'],s.samples.map(x=>[esc(x.file),fmt(x.date),fmt(x.gps),fmt(x.desc)]));
   h+='<small>Saved: full report CSV (with before/after values per file), a changes-only CSV, a CSV of just the no-JSON files, and a text summary.</small>';
   $('sumbody').innerHTML=h;$('sum').style.display='block'}
+const croots=()=>$('cleanroots').value.split('\n').map(x=>x.trim()).filter(Boolean);
+const fmtBytes=b=>b>1e9?(b/1e9).toFixed(2)+' GB':b>1e6?(b/1e6).toFixed(1)+' MB':Math.round(b/1e3)+' KB';
+$('cb1').onclick=async()=>{const r=await post('/api/choose',{prompt:'Choose folders to remove .json files from'});if(r.paths){const have=new Set(croots());r.paths.forEach(p=>have.add(p));$('cleanroots').value=[...have].join('\n')}};
+$('cscan').onclick=async()=>{
+  $('cdel').disabled=true;$('cres').textContent='Scanning...';
+  const r=await post('/api/clean_scan',{folders:croots(),include_other:$('cother').checked});
+  if(r.error){$('cres').innerHTML='<span class="err">'+esc(r.error)+'</span>';return}
+  const L={photo:'Google Photos sidecars',album:'Album / memory data files',other:'Other .json files'};
+  $('cres').innerHTML=tbl(['Kind','Files','Size'],Object.entries(r.cats).map(([k,v])=>[L[k]||k,v.files.toLocaleString(),fmtBytes(v.bytes)]))+`<div style="margin-top:6px"><b>${r.will_delete.toLocaleString()}</b> files (${fmtBytes(r.bytes)}) would be deleted.</div>`;
+  $('cdel').disabled=!r.will_delete;$('cdel').dataset.n=r.will_delete};
+$('cdel').onclick=async()=>{
+  const n=$('cdel').dataset.n;
+  const t=prompt(`This permanently deletes ${n} .json files and cannot be undone.\nType DELETE to confirm.`);
+  if(t!=='DELETE')return;
+  const r=await post('/api/clean_run',{folders:croots(),include_other:$('cother').checked});
+  if(r.error){alert(r.error);return}
+  $('cdel').disabled=true;
+  const tm=setInterval(async()=>{const s=(await (await fetch('/api/status')).json()).clean;
+    $('cres').innerHTML=s.state==='error'?'<span class="err">'+esc(s.message)+'</span>':`${s.state==='done'?'<span class="ok">Finished.</span> ':''}Deleted ${s.deleted.toLocaleString()} of ${s.total.toLocaleString()} (${fmtBytes(s.bytes)})${s.errors?`, <span class="err">${s.errors} errors</span>`:''}`;
+    if(s.state!=='running')clearInterval(tm)},500)};
+
 let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   const s=await (await fetch('/api/status')).json();$('prog').style.display='block';
   const run=s.state==='scanning'||s.state==='running';$('go').disabled=run;
