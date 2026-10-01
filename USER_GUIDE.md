@@ -43,7 +43,7 @@ Or download `takeout_fix_metadata.py` and `takeout_gui.py` from the repo into on
 
 ## Layout
 
-The app has four tabs: **1 Fix metadata**, **2 Sort**, **3 Clean up** and **4 Convert videos**. A bar with a moving percentage stays at the top of the window on every tab, showing whatever job is running; if you switch to another tab, a **View results** link takes you back. Only one job runs at a time.
+The app has five tabs: **1 Fix metadata**, **2 Sort**, **3 Clean up** (remove `.json` files), **4 Convert videos** and **5 Empty folders**. A bar with a moving percentage stays at the top of the window on every tab, showing whatever job is running; if you switch to another tab, a **View results** link takes you back. Only one job runs at a time.
 
 ## Using the app (recommended)
 
@@ -195,6 +195,25 @@ How it works:
 - Progress is shown by video length, so the percentage moves smoothly through long conversions.
 
 Suggested order: run Part 1 (it creates the Live Photo `.MOV` files), then Part 4 for your other videos.
+
+## Part 5: Remove empty folders
+
+The **Empty folders** tab checks a whole folder tree and removes every folder that is **properly empty**, however deep. Handy after sorting or moving, which leave lots of empty folders behind.
+
+1. Add the folders to check. Leave **Preview only** ticked and press **Start**: you see how many folders would be removed and a list of the top-level ones (each with the number of empty folders inside it).
+2. Untick Preview and press **Start** again; confirm the prompt.
+
+What counts as empty:
+- A folder is empty only if it contains **no files at all** and **every folder inside it is empty too**. A folder with one file in it, or a subfolder (at any depth) with one file, is kept. Chains such as `a/b/c/d` are removed from the bottom up.
+- **System leftovers** (`.DS_Store`, `Thumbs.db`, `desktop.ini`, `._something`) are ignored by default, so a folder holding only those counts as empty and they are deleted with it. Untick **Treat system leftovers as empty** to keep such folders.
+- Any other hidden file counts as a real file.
+
+Safety:
+- Only folders are removed, using a delete that refuses if anything is inside. No photo or other file is ever deleted.
+- The folders you choose are always kept, even if everything inside them goes (tick the third option to remove them too if they end up empty).
+- Shortcuts and aliases (symbolic links), app and library bundles (such as `.photoslibrary` and `.app`) and unreadable folders are never entered or removed.
+- Very broad folders such as `/` or your home folder are refused.
+- Removal is permanent (no Trash). A CSV of every folder is saved to your Desktop.
 
 ## Cleaning up the .json files
 

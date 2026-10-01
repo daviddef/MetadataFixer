@@ -520,6 +520,79 @@ def run_convert(roots, dry_run, exts, include_live, quality, action):
             STATE.update(state="error", message=str(e))
 
 
+def run_empty(roots, dry_run, ignore_junk, remove_top):
+    with LOCK:
+        STATE.update(state="scanning", total=0, done=0, counts={}, message="Scanning folders...", report="",
+                     summary=None, scan=None, extra={}, recent=[], phase=None, kind="empty")
+    try:
+        folders = check_clean_folders(roots)
+        found, junk, scanned, skipped = [], [], 0, 0
+        for i, f in enumerate(folders, 1):
+            with LOCK:
+                STATE["message"] = f"Scanning {f.name} ({i} of {len(folders)})..."
+            e, j, n, k = fx.find_empty_dirs(f, ignore_junk)
+            top = str(f)
+            found += [(p, str(f)) for p in e if remove_top or p != top]
+            junk += j
+            scanned += n
+            skipped += k
+        found.sort(key=lambda t: -len(Path(t[0]).parts))
+        empties = {p for p, _ in found}
+        with LOCK:
+            STATE.update(state="running", total=len(found), done=0,
+                         message=f"Found {len(found):,} empty folders" if dry_run else f"Removing {len(found):,} empty folders...",
+                         scan={"media": scanned, "json": 0, "folders": len(folders)})
+        removed, failed, recent = 0, [], []
+        rows = []
+        for i, (p, root) in enumerate(found, 1):
+            if dry_run:
+                ok, err = True, ""
+            else:
+                ok, err = fx.remove_empty_dir(p, ignore_junk)
+            removed += 1 if ok else 0
+            if not ok:
+                failed.append({"path": p, "detail": err})
+            rows.append({"path": p, "status": ("would-remove" if dry_run else "removed") if ok else "failed", "detail": err})
+            recent.append({"name": os.path.relpath(p, root) if p != root else Path(p).name,
+                           "status": rows[-1]["status"], "to": "", "live": ""})
+            del recent[:-12]
+            if i % 20 == 0 or i == len(found):
+                with LOCK:
+                    STATE["done"] = i
+                    STATE["counts"] = {"removed" if not dry_run else "would-remove": removed, "failed": len(failed)}
+                    STATE["extra"] = {"empty_found": len(found), "errors": len(failed)}
+                    STATE["recent"] = list(recent)
+        # topmost empty folders (parent is not itself empty) with how many folders each hides
+        groups = []
+        for p, root in sorted(found, key=lambda t: t[0]):
+            if str(Path(p).parent) not in empties:
+                nested = sum(1 for q, _ in found if q != p and q.startswith(p + os.sep))
+                groups.append({"path": os.path.relpath(p, root) if p != root else ".", "root": Path(root).name, "nested": nested})
+        report_dir = Path.home() / "Desktop"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        report = report_dir / ("takeout_empty_preview.csv" if dry_run else "takeout_empty_report.csv")
+        with open(report, "w", newline="", encoding="utf-8") as fh:
+            w = csv.DictWriter(fh, fieldnames=["path", "status", "detail"])
+            w.writeheader()
+            w.writerows(rows)
+        sm = {"kind": "empty", "dry_run": dry_run, "scanned": scanned, "empty": len(found), "removed": removed,
+              "kept": scanned - len(found), "junk": len(junk), "skipped": skipped, "failed": len(failed),
+              "groups": groups[:150], "group_count": len(groups), "tips": []}
+        if not found:
+            sm["tips"].append("No empty folders were found.")
+        if skipped:
+            sm["tips"].append("%d shortcuts, app/library bundles or unreadable folders were left alone and never entered." % skipped)
+        if failed:
+            sm["tips"].append("%d folders could not be removed (see the report)." % len(failed))
+        if dry_run:
+            sm["tips"].append("This was a preview: nothing was removed. Untick Preview only to remove them.")
+        with LOCK:
+            STATE.update(state="done", report=str(report), summary=sm, message="Finished", phase=None)
+    except Exception as e:
+        with LOCK:
+            STATE.update(state="error", message=str(e))
+
+
 AUX_JSON = {"metadata.json", "print-subscriptions.json", "shared_album_comments.json",
             "user-generated-memory-titles.json"}
 
@@ -701,6 +774,15 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, "{}")
         elif self.path == "/api/update":
             self._send(200, json.dumps(apply_update()))
+        elif self.path == "/api/empty_start":
+            with LOCK:
+                busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
+            if busy:
+                return self._send(409, json.dumps({"error": "A job is already running"}))
+            threading.Thread(target=run_empty, daemon=True, args=(
+                body.get("roots", []), bool(body.get("dry_run")), bool(body.get("ignore_junk")),
+                bool(body.get("remove_top")))).start()
+            self._send(200, "{}")
         elif self.path == "/api/convert_start":
             with LOCK:
                 busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
@@ -819,6 +901,7 @@ code{background:var(--bg);padding:1px 5px;border-radius:5px;font-size:12px}
     <button class="tab" data-tab="sort" role="tab"><b>2</b> Sort</button>
     <button class="tab" data-tab="clean" role="tab"><b>3</b> Clean up</button>
     <button class="tab" data-tab="convert" role="tab"><b>4</b> Convert videos</button>
+    <button class="tab" data-tab="empty" role="tab"><b>5</b> Empty folders</button>
   </nav>
   <div class="status"><div class="srow"><span id="msg">Ready. Choose a tab, set it up and press Start.</span><a href="#" id="goto" style="display:none">View results &rarr;</a></div>
   <div class="bar" id="bar"><i id="fill"></i><span id="pct">0%</span></div></div>
@@ -881,6 +964,18 @@ code{background:var(--bg);padding:1px 5px;border-radius:5px;font-size:12px}
 <div id="cres" style="margin-top:8px"></div>
 <button id="cdel" disabled style="margin-top:8px;border-color:var(--bad);color:var(--bad)">Delete .json files</button></div>
 </section>
+<section class="pane" id="pane-empty">
+<h2 class="ph">Remove empty folders</h2>
+<div class="card"><small style="margin-top:0">Checks the whole folder tree and removes every folder that is <b>properly empty</b>, however deep: a folder only counts if it holds no files at all, and every folder inside it is empty too. A folder with even one file in it, or a subfolder with one file, is kept. Only folders are removed; <b>no file is ever deleted</b>, apart from invisible system leftovers (below) if you leave that option on.</small>
+<label class="t" style="margin-top:12px">Folders to check (one per line)</label>
+<textarea id="eroots" placeholder="/Volumes/Drive/Photos" spellcheck="false"></textarea>
+<div class="row" style="margin-top:8px"><button id="eb1">Add folders...</button></div>
+<div class="opt"><input type="checkbox" id="edry" checked><div>Preview only<small>On by default. Lists the empty folders it would remove and removes nothing.</small></div></div>
+<div class="opt"><input type="checkbox" id="ejunk" checked><div>Treat system leftovers as empty<small>Finder and Windows leave invisible files such as <i>.DS_Store</i>, <i>Thumbs.db</i>, <i>desktop.ini</i> and <i>._something</i>. A folder holding only those still counts as empty, and those files are deleted with it. Off = such a folder is kept.</small></div></div>
+<div class="opt"><input type="checkbox" id="etop"><div>Also remove the folders you chose, if they end up empty<small>Off by default: the folders you add are always kept, even if everything inside them is removed.</small></div></div>
+<small>Never entered or removed: shortcuts/aliases (symbolic links), app and library bundles (such as <i>.photoslibrary</i> and <i>.app</i>), and folders it is not allowed to read.</small>
+<button class="p" id="ego" style="margin-top:10px">Start</button></div>
+</section>
 <section class="pane" id="pane-convert">
 <h2 class="ph">Convert old videos to MP4</h2>
 <div class="card"><small style="margin-top:0">Turns <b>.avi</b> and <b>.mov</b> videos into <b>.mp4</b>, which plays on every phone, TV and app. Videos that are already H.264 or HEVC are simply re-wrapped (fast, no quality loss); others are re-encoded. Dates and locations are carried across. Needs <b>ffmpeg</b> (in Terminal: <code>brew install ffmpeg</code>).</small>
@@ -924,6 +1019,7 @@ const tile=(n,l,c)=>`<div class="tile ${c||''}"><b>${n.toLocaleString()}</b><spa
 function tbl(head,rows){return `<table><tr>${head.map((h,i)=>`<th class="${i?'n':''}">${h}</th>`).join('')}</tr>${rows.map(r=>`<tr>${r.map((c,i)=>`<td class="${i?'n':''}">${c}</td>`).join('')}</tr>`).join('')}</table>`}
 function bars(rows){const m=Math.max(1,...rows.map(r=>r[2]));return rows.map(r=>[esc(r[0]||'(none)'),r[1].toLocaleString(),r[2].toLocaleString()+`<span class="mini" style="width:${Math.round(60*r[2]/m)}px"></span>`])}
 function showSummary(s){
+  if(s.kind==='empty'){showEmpty(s);return}
   if(s.kind==='convert'){showConvert(s);return}
   if(s.kind==='sort'){showSort(s);return}
   let h=`<div class="tiles">${tile(s.total,'media files')}${tile(s.duplicates,'exact duplicates skipped')}${tile(s.matched,'unique files matched ('+s.pct_matched+'%)','ok')}${tile(s.no_json,'no JSON found',s.no_json?'bad':'ok')}${tile(s.orphans,'JSON with no photo')}</div>`;
@@ -1010,7 +1106,7 @@ function setBar(barId,fillId,pctId,pct,indet){
   pct=Math.max(0,Math.min(100,pct));fill.style.width=pct+'%';lab.textContent=Math.floor(pct)+'%';
   if(pct>=12){lab.className='';lab.style.left='calc('+pct+'% - 44px)'}else{lab.className='out';lab.style.left='calc('+pct+'% + 8px)'}}
 
-const TABS=['fix','sort','clean','convert'];let jobKind='fix';
+const TABS=['fix','sort','clean','convert','empty'];let jobKind='fix';
 function showTab(t){if(!TABS.includes(t))t='fix';
   TABS.forEach(x=>{$('pane-'+x).style.display=x===t?'block':'none';document.querySelector('.tab[data-tab="'+x+'"]').classList.toggle('on',x===t)});
   try{localStorage.setItem('tab',t)}catch(e){}
@@ -1048,9 +1144,27 @@ function showConvert(s){
 
 function liveTiles(s,c,done,nj){
   if(!s.total)return '';const x=s.extra||{};const err=(x.errors?tile(x.errors,'files with errors','bad'):'');
+  if(jobKind==='empty')return tile(s.total,'empty folders found')+tile(done,'processed so far','ok')+((s.extra||{}).errors?tile(s.extra.errors,'could not remove','bad'):'');
   if(jobKind==='convert')return tile(s.total,'videos found')+tile(done,'checked so far')+tile(x.converted||0,'converted','ok')+tile(x.skipped_live||0,'Live Photo videos skipped')+(x.errors?tile(x.errors,'could not convert','bad'):'');
   if(jobKind==='sort')return tile(s.total,'files found')+tile(x.duplicates||0,'duplicates skipped')+tile(x.written||0,'files placed','ok')+tile(x.merged_from||0,'source folders')+tile(x.folders||0,'folders after merging')+(x.json_along?tile(x.json_along,'.json brought along'):'')+err;
   return tile(s.total,'media files')+tile(done-nj,'matched so far','ok')+tile(nj,'no JSON so far',nj?'bad':'')+tile(x.dates_changed||0,'dates changed')+tile(x.gps_changed||0,'locations changed')+tile(x.desc_changed||0,'captions changed')+tile(x.replaced_files||0,'files with info replaced')+tile(x.live_paired||0,'Live Photos paired')+tile(x.duplicates||0,'duplicates skipped')+tile(x.written||0,'files placed')+tile(x.folders||0,'output folders')+err+(s.scan?tile(s.scan.json,'JSON files found'):'')}
+
+// ---- Part 5: remove empty folders
+const eroots=()=>$('eroots').value.split('\n').map(x=>x.trim()).filter(Boolean);
+$('eb1').onclick=async()=>{const r=await post('/api/choose',{prompt:'Choose the folders to check for empty folders'});if(r.paths){const have=new Set(eroots());r.paths.forEach(p=>have.add(p));$('eroots').value=[...have].join('\n')}};
+$('ego').onclick=async()=>{
+  if(!eroots().length){alert('Add the folders to check first');return}
+  if(!$('edry').checked&&!confirm('This will permanently remove every folder that is completely empty (no files inside, at any depth). No files are deleted. Continue?'))return;
+  $('sum').style.display='none';
+  const r=await post('/api/empty_start',{roots:eroots(),dry_run:$('edry').checked,ignore_junk:$('ejunk').checked,remove_top:$('etop').checked});
+  if(r.error)alert(r.error);else{jobKind='empty';placeResults('empty');$('prog').style.display='block';poll()}};
+function showEmpty(s){
+  const w=s.dry_run?'would be ':'';
+  let h=`<div class="tiles">${tile(s.scanned,'folders checked')}${tile(s.dry_run?s.empty:s.removed,'empty folders '+w+'removed','ok')}${tile(s.kept,'folders kept (have files)')}${tile(s.junk,'system leftovers '+w+'deleted')}${tile(s.skipped,'left alone (links, bundles)')}${tile(s.failed,'could not remove',s.failed?'bad':'')}</div>`;
+  h+=s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
+  if((s.groups||[]).length)h+=`<h2>Empty folders ${s.dry_run?'that would be':'that were'} removed (${s.group_count.toLocaleString()} top-level, each with everything inside it)</h2>`+tbl(['Folder','Folders inside'],s.groups.map(g=>[esc(g.root+'/'+g.path),g.nested.toLocaleString()]))+(s.group_count>s.groups.length?'<small>Showing '+s.groups.length+' of '+s.group_count+'. See the CSV for all.</small>':'');
+  h+='<small>Saved: a CSV listing every folder (on your Desktop).</small>';
+  $('sumbody').innerHTML=h;$('sum').style.display='block'}
 
 let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   const s=await (await fetch('/api/status')).json();$('prog').style.display='block';
@@ -1063,7 +1177,7 @@ let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   else if(s.phase&&s.phase.total){pct=100*s.phase.done/s.phase.total}
   else if(s.state==='scanning'||s.state==='running'){indet=true}
   setBar('bar','fill','pct',pct,indet);
-  const LBL={fix:'Part 1 Fix',sort:'Part 2 Sort',convert:'Part 4 Convert'}[jobKind]||'';
+  const LBL={fix:'Part 1 Fix',sort:'Part 2 Sort',convert:'Part 4 Convert',empty:'Part 5 Empty folders'}[jobKind]||'';
   $('msg').innerHTML=(LBL?'<b>'+LBL+'</b> &middot; ':'')+(s.state==='error'?'<span class="err">'+esc(s.message)+'</span>':s.state==='done'?'<span class="ok">Finished.</span>':esc(s.message)+(s.done?` (${s.done.toLocaleString()} / ${s.total.toLocaleString()})`:''));
   const c=s.counts||{},done=s.done||0,nj=c['no-json']||0;
   $('tiles').innerHTML=liveTiles(s,c,done,nj);

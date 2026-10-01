@@ -964,6 +964,63 @@ def convert_file(src, root, opts, progress=None):
     return row
 
 
+# ---------------------------------------------------------------- Part 5: remove empty folders
+JUNK_NAMES = {".ds_store", "thumbs.db", "desktop.ini", "icon\r", ".localized"}
+BUNDLE_SUFFIXES = (".photoslibrary", ".app", ".imovielibrary", ".fcpbundle", ".fcpxlibrary", ".bundle",
+                   ".framework", ".lrdata", ".lrcat-data", ".xcodeproj", ".pkg", ".plugin", ".git")
+
+
+def is_junk(name, ignore_junk):
+    low = name.lower()
+    return ignore_junk and (low in JUNK_NAMES or name.startswith("._"))
+
+
+def is_bundle(name):
+    return name.lower().endswith(BUNDLE_SUFFIXES)
+
+
+def find_empty_dirs(root, ignore_junk=True):
+    """Folders below root that hold no files at all, however deep (a folder is empty only if everything in it is).
+
+    Symbolic links, app/library bundles and unreadable folders count as content and are never entered.
+    Returns (empty_dirs deepest-first, junk_files, scanned_count, skipped_count)."""
+    order, content, blocked = [], set(), set()
+
+    def onerror(e):
+        blocked.add(getattr(e, "filename", None))
+    for dirpath, dirs, files in os.walk(root, topdown=True, followlinks=False, onerror=onerror):
+        all_dirs, keep = list(dirs), []
+        for d in dirs:
+            p = os.path.join(dirpath, d)
+            if os.path.islink(p) or is_bundle(d):
+                content.add(p)
+            else:
+                keep.append(d)
+        dirs[:] = keep
+        order.append((dirpath, all_dirs, files))
+    empty, junk = set(), []
+    for dirpath, all_dirs, files in reversed(order):
+        if any(not is_junk(f, ignore_junk) for f in files):
+            continue
+        if all(os.path.join(dirpath, d) in empty for d in all_dirs):
+            empty.add(dirpath)
+            junk += [os.path.join(dirpath, f) for f in files]
+    ordered = sorted(empty, key=lambda p: -len(Path(p).parts))
+    return ordered, junk, len(order), len(content) + len([b for b in blocked if b])
+
+
+def remove_empty_dir(path, ignore_junk=True):
+    """Remove one folder if (and only if) it is still empty. Never deletes real files."""
+    try:
+        for n in os.listdir(path):
+            if is_junk(n, ignore_junk) and not os.path.isdir(os.path.join(path, n)):
+                os.remove(os.path.join(path, n))
+        os.rmdir(path)  # refuses if anything is left
+        return True, ""
+    except OSError as e:
+        return False, str(e)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("root", type=Path, help="folder containing all extracted 'Takeout N' folders")
