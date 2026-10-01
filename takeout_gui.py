@@ -26,7 +26,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.01-k"
+VERSION = "2026.10.01-l"
 STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}, "recent": [], "clean": {"state": "idle"}, "update": {"state": "idle", "files": []}, "phase": None, "kind": "fix", "version": VERSION, "boot": time.time()}
 LOCK = threading.Lock()
 
@@ -872,7 +872,22 @@ UPDATE_FILES = ["takeout_gui.py", "takeout_fix_metadata.py"]
 HERE = Path(__file__).resolve().parent
 
 
+API_BASE = "https://api.github.com/repos/daviddef/MetadataFixer/contents/"
+
+
 def _fetch(name):
+    """Latest published file. Uses GitHub's API (fresh) and falls back to the raw download address,
+    which GitHub caches for about 5 minutes. A custom METADATAFIXER_UPDATE_BASE (testing) skips the API."""
+    if not os.environ.get("METADATAFIXER_UPDATE_BASE"):
+        try:
+            req = urllib.request.Request(API_BASE + name + "?ref=main", headers={
+                "User-Agent": "MetadataFixer-updater", "Accept": "application/vnd.github.raw"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                data = r.read()
+            if data:
+                return data
+        except Exception:
+            pass  # rate-limited or offline: try the raw address
     req = urllib.request.Request(UPDATE_BASE + name, headers={"User-Agent": "MetadataFixer-updater"})
     with urllib.request.urlopen(req, timeout=10) as r:
         return r.read()
