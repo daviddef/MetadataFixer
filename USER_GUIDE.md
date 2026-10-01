@@ -289,7 +289,7 @@ The command line takes one folder; put your batches under a common parent folder
 | **Kept** counts are high | Tick **Replace information already stored in the photo** |
 | Folder buttons do nothing | Type or paste the paths instead |
 | `Input/output error` (Errno 5) on a file | The drive could not read or write that file (a failing drive, loose cable or power, or a damaged file). The tool skips the file, records it as `copy-error` in the report and carries on. Check the drive in Disk Utility (First Aid), try copying that file in Finder, then run the same job again |
-| A run stopped or was interrupted | Run it again with the **same output folder**. Files already placed are skipped (the tool keeps a hidden `.metadatafixer_progress.jsonl` log in the output folder, and for sorting it also recognises identical files already there), so you get no `_1` copies |
+| A run stopped or was interrupted | Run it again with the **same output folder**. Files already placed are skipped (the tool keeps a hidden progress log (`.metadatafixer_fix.jsonl`, `.metadatafixer_sort.jsonl` or `.metadatafixer_merge.jsonl`, one per tab) in the output folder, and for sorting it also recognises identical files already there), so you get no `_1` copies |
 | `exiftool-error` rows | See the `detail` column in the report |
 | Live Photo not recognised in Photos | The still probably lost its Apple ID; see the Live Photos section |
 

@@ -26,7 +26,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.01-q"
+VERSION = "2026.10.01-r"
 STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}, "recent": [], "clean": {"state": "idle"}, "update": {"state": "idle", "files": []}, "phase": None, "kind": "fix", "cv": None, "cancel": False, "version": VERSION, "boot": time.time()}
 LOCK = threading.Lock()
 
@@ -340,7 +340,8 @@ def run_sort(roots, out, dry_run, dedupe, move, bring_json):
             sidecars += [x for x in sc if x.resolve() not in sseen and not sseen.add(x.resolve())]
         idx = fx.build_index(sidecars) if bring_json else None
         args = argparse.Namespace(dry_run=dry_run, dedupe=dedupe, move=move, bring_json=bring_json,
-                                  pair_live=False, overwrite=False, out_root=out, roots=resolved)
+                                  pair_live=False, overwrite=False, out_root=out, roots=resolved,
+                                  manifest_file=fx.MANIFEST_SORT)
         with LOCK:
             STATE.update(state="running", total=len(media), scan={"media": len(media), "json": len(sidecars), "folders": len(resolved)},
                          message=f"Checking {len(media):,} files for exact duplicates..." if dedupe else "Preparing...")

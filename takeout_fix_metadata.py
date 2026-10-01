@@ -597,13 +597,15 @@ def place_file(src, dest, move):
             time.sleep(1)
 
 
-MANIFEST = ".metadatafixer_progress.jsonl"
+MANIFEST = ".metadatafixer_fix.jsonl"   # one progress log per job type, so Sort or Merge never makes Fix skip files
+MANIFEST_SORT = ".metadatafixer_sort.jsonl"
+MANIFEST_MERGE = ".metadatafixer_merge.jsonl"
 
 
-def load_manifest(out_root):
+def load_manifest(out_root, name=None):
     done = {}
     try:
-        with open(Path(out_root) / MANIFEST, encoding="utf-8") as fh:
+        with open(Path(out_root) / (name or MANIFEST), encoding="utf-8") as fh:
             for line in fh:
                 try:
                     d = json.loads(line)
@@ -621,7 +623,7 @@ def record_progress(args, src, dest):
     if not root or getattr(args, "dry_run", False):
         return
     with args.lock:
-        with open(Path(root) / MANIFEST, "a", encoding="utf-8") as fh:
+        with open(Path(root) / getattr(args, "manifest_file", MANIFEST), "a", encoding="utf-8") as fh:
             fh.write(json.dumps({"src": str(src), "dest": str(dest)}, ensure_ascii=False) + "\n")
         args.manifest[str(src)] = str(dest)
 
@@ -649,7 +651,8 @@ def prepare(args, media, progress=None):
     """progress(stage, done, total) is called as work proceeds."""
     args.lock, args.claimed = threading.Lock(), set()
     root = getattr(args, "out_root", None)
-    args.manifest = load_manifest(root) if root and not getattr(args, "dry_run", False) else {}
+    args.manifest = (load_manifest(root, getattr(args, "manifest_file", MANIFEST))
+                     if root and not getattr(args, "dry_run", False) else {})
     dedupe_progress = (lambda d, t: progress("dedupe", d, t)) if progress else None
     args.dupes, args.dupe_bytes = (plan_duplicates(media, dedupe_progress) if getattr(args, "dedupe", False) else ({}, 0))
     args.live_plan = plan_live(media, progress) if getattr(args, "pair_live", False) else {}
@@ -747,10 +750,21 @@ def process(m, idx, args, out_root):
     dest, at_dest = None, False
     if out_root:
         first = dest_dir_for(m, taken, args, out_root) / m.name
+        adopt = False
+        if str(first) != str(m):
+            try:  # an identical copy was already placed here (for example by Sort): fix that one instead of copying again
+                adopt = first.exists() and first.stat().st_size == m.stat().st_size and file_hash(first) == file_hash(m)
+            except OSError:
+                adopt = False
         if str(first) == str(m):  # already where it belongs (output folder is one of the sources): fix it in place
             dest, at_dest = m, True
             with args.lock:
                 args.claimed.add(str(m))
+        elif adopt:
+            dest, at_dest = first, True
+            with args.lock:
+                args.claimed.add(str(first))
+            row["detail"] = "identical copy already in the destination: fixed there"
         else:
             dest = claim_dest(first, args)
         row["output"] = str(dest)
@@ -758,7 +772,7 @@ def process(m, idx, args, out_root):
         row["status"] = "would-update" if d else status0
         row["detail"] = " ".join(exif_args)[:200] if d else ""
         return row
-    target = m
+    target = dest if (out_root and at_dest) else m
     if out_root and not at_dest:
         dest.parent.mkdir(parents=True, exist_ok=True)
         place_file(m, dest, getattr(args, "move", False))
@@ -1415,9 +1429,9 @@ def merge_trees(roots, dest, opts, dry_run=False, on_progress=None, on_item=None
     total = len(items)
     manifest = {}
     lock = threading.Lock()
-    prog = argparse.Namespace(lock=lock, out_root=str(dest), dry_run=dry_run, manifest=manifest)
+    prog = argparse.Namespace(lock=lock, out_root=str(dest), dry_run=dry_run, manifest=manifest, manifest_file=MANIFEST_MERGE)
     if not dry_run:
-        manifest.update(load_manifest(dest))
+        manifest.update(load_manifest(dest, MANIFEST_MERGE))
 
     def aside(base, rel_dir, name):
         d = dest / base / Path(*rel_dir) if rel_dir else dest / base
@@ -1548,6 +1562,8 @@ def main():
     print(f"  {len(media)} media files, {len(sidecars)} json files")
     idx = build_index(sidecars)
     args.bring_json = not args.no_json
+    if args.sort_only:
+        args.manifest_file = MANIFEST_SORT
     args.out_root = args.out
     args.roots = [args.root]
     prepare(args, media)
