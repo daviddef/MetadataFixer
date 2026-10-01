@@ -102,7 +102,7 @@ def summarise(rows, sidecars, roots, dry_run):
     base = os.path.commonpath(list(folders)) if folders else ""
     tips = []
     if nj and not orphans:
-        tips.append("Every sidecar in these folders was used, so the %d files with no JSON have none in the folders "
+        tips.append("Every Google info file (.json) in these folders was used, so the %d files with no JSON have none in the folders "
                     "you added. Their JSON is probably in other Takeout batches: add those folders and run again." % nj)
     elif nj and orphans:
         tips.append("%d sidecars matched no photo while %d photos matched no sidecar. That can mean a naming "
@@ -112,7 +112,7 @@ def summarise(rows, sidecars, roots, dry_run):
     kept = sum(fields[k].get("kept", 0) for k in fields)
     if kept:
         tips.append("%d existing date/location/description values differ from Google's but were left alone. "
-                    "Tick 'Overwrite existing EXIF values' to replace them." % kept)
+                    "Tick 'Replace information already stored in the photo' to replace them." % kept)
     if live.get("no-id") or live.get("no-still"):
         tips.append("Live Photos: %d videos had a still but no Apple ID to copy, %d had no matching still; those stay as separate videos."
                     % (live.get("no-id", 0), live.get("no-still", 0)))
@@ -440,11 +440,11 @@ table{width:100%;border-collapse:collapse;font-size:14px;font-variant-numeric:ta
 <small>Recommended: a new folder, so originals stay untouched. Reports are saved here too (or on your Desktop if empty).</small></div>
 
 <div class="card"><label class="t">3. Options</label>
-<div class="opt"><input type="checkbox" id="dry" checked><div>Preview only (dry run)<small>On by default. Matches files and reports counts; changes nothing.</small></div></div>
+<div class="opt"><input type="checkbox" id="dry" checked><div>Preview only<small>On by default. Works out what it would do and reports the numbers, but changes nothing. Untick to do it for real.</small></div></div>
 <div class="opt"><input type="checkbox" id="dedupe" checked><div>Remove exact duplicates<small>Skips byte-identical copies (the same photo repeated across Takeouts or albums). Keeps the copy in 'Photos from YYYY'. Needs an extra read pass over files that share a size.</small></div></div>
 <div class="opt"><input type="checkbox" id="move"><div>Move files instead of copying<small>Saves disk space but empties your Takeout folders as it goes. Off = safe copy (needs roughly as much free space again).</small></div></div>
 <div class="opt"><input type="checkbox" id="live"><div>Re-pair Live Photos<small>Copies each still's Apple ID onto its video and saves the video as .MOV so Photos can treat them as one Live Photo. Needs an output folder.</small></div></div>
-<div class="opt"><input type="checkbox" id="ow"><div>Overwrite existing EXIF values<small>Off = only fill in missing tags.</small></div></div></div>
+<div class="opt"><input type="checkbox" id="ow"><div>Replace information already stored in the photo<small>Every photo has a hidden label of facts saved inside the file itself (called EXIF): when it was taken, where, and a caption. Google&#39;s export often leaves these blank or wrong. <b>Off</b>: only fill in facts that are missing and never change ones already there. <b>On</b>: replace what is there with Google&#39;s version (recommended if your dates look wrong). Your pictures themselves are never altered.</small></div></div></div>
 
 <button class="p" id="go">Start</button>
 
@@ -493,7 +493,7 @@ function showSummary(s){
   let h=`<div class="tiles">${tile(s.total,'media files')}${tile(s.duplicates,'exact duplicates skipped')}${tile(s.matched,'unique files matched ('+s.pct_matched+'%)','ok')}${tile(s.no_json,'no JSON found',s.no_json?'bad':'ok')}${tile(s.orphans,'JSON with no photo')}</div>`;
   h+=s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
   h+=`<div class="tiles">${tile(s.replaced_files,'files with a value replaced')}${tile((s.live||{}).paired||0,'Live Photos paired')}</div>`;
-  h+='<h2>EXIF values</h2>'+tbl(['Field','Added','Replaced','Kept (not overwritten)','Already correct'],[['date','Date taken'],['gps','Location'],['desc','Description']].map(([k,l])=>{const f=s.fields[k]||{};return [l,(f.added||0).toLocaleString(),(f.replaced||0).toLocaleString(),(f.kept||0).toLocaleString(),(f.same||0).toLocaleString()]}));
+  h+='<h2>Information stored in the photos</h2>'+tbl(['Field','Added','Replaced','Left alone (different)','Already correct'],[['date','Date taken'],['gps','Location'],['desc','Description']].map(([k,l])=>{const f=s.fields[k]||{};return [l,(f.added||0).toLocaleString(),(f.replaced||0).toLocaleString(),(f.kept||0).toLocaleString(),(f.same||0).toLocaleString()]}));
   h+='<h2>Result</h2>'+tbl(['Status','Files'],Object.entries(s.status).map(([k,v])=>[k,v.toLocaleString()]));
   h+='<h2>How files were matched</h2>'+tbl(['Match type','Files'],Object.entries(s.match).map(([k,v])=>[({folder:'Same album folder',tree:'Another folder / batch','tree-ambiguous':'Another folder, several candidates (closest date chosen)',stem:'Same name, other extension (RAW+JPG, live photo)'})[k]||k,v.toLocaleString()]));
   h+='<h2>By file type</h2>'+tbl(['Type','With JSON','No JSON'],bars(s.ext));
@@ -512,7 +512,7 @@ $('cscan').onclick=async()=>{
   $('cdel').disabled=true;$('cres').textContent='Scanning...';
   const r=await post('/api/clean_scan',{folders:croots(),include_other:$('cother').checked});
   if(r.error){$('cres').innerHTML='<span class="err">'+esc(r.error)+'</span>';return}
-  const L={photo:'Google Photos sidecars',album:'Album / memory data files',other:'Other .json files'};
+  const L={photo:'Google info files for photos',album:'Album / memory data files',other:'Other .json files'};
   $('cres').innerHTML=tbl(['Kind','Files','Size'],Object.entries(r.cats).map(([k,v])=>[L[k]||k,v.files.toLocaleString(),fmtBytes(v.bytes)]))+`<div style="margin-top:6px"><b>${r.will_delete.toLocaleString()}</b> files (${fmtBytes(r.bytes)}) would be deleted.</div>`;
   $('cdel').disabled=!r.will_delete;$('cdel').dataset.n=r.will_delete};
 $('cdel').onclick=async()=>{
@@ -532,7 +532,7 @@ let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   const pct=s.total?Math.round(100*s.done/s.total):0;$('fill').style.width=pct+'%';
   $('msg').innerHTML=s.state==='error'?'<span class="err">'+esc(s.message)+'</span>':s.state==='done'?'<span class="ok">Finished.</span>':esc(s.message)+(s.done?` (${s.done.toLocaleString()} / ${s.total.toLocaleString()})`:'');
   const c=s.counts||{},done=s.done||0,nj=c['no-json']||0;
-  $('tiles').innerHTML=s.total?tile(s.total,'media files')+tile(done-nj,'matched so far','ok')+tile(nj,'no JSON so far',nj?'bad':'')+tile((s.extra||{}).replaced_files||0,'files with EXIF replaced')+tile((s.extra||{}).live_paired||0,'Live Photos paired')+tile((s.extra||{}).duplicates||0,'duplicates skipped')+tile((s.extra||{}).written||0,'files placed')+tile((s.extra||{}).folders||0,'output folders')+(s.scan?tile(s.scan.json,'JSON files found'):''):'';
+  $('tiles').innerHTML=s.total?tile(s.total,'media files')+tile(done-nj,'matched so far','ok')+tile(nj,'no JSON so far',nj?'bad':'')+tile((s.extra||{}).replaced_files||0,'files with info replaced')+tile((s.extra||{}).live_paired||0,'Live Photos paired')+tile((s.extra||{}).duplicates||0,'duplicates skipped')+tile((s.extra||{}).written||0,'files placed')+tile((s.extra||{}).folders||0,'output folders')+(s.scan?tile(s.scan.json,'JSON files found'):''):'';
   $('recent').innerHTML=(s.recent||[]).map(r=>`${esc(r.name)} &rarr; ${r.status==='duplicate'?'duplicate (skipped)':esc(r.to)+' ['+esc(r.status)+(r.live==='paired'?', live paired':'')+']'}`).reverse().join('<br>');
   if(s.state==='done'&&s.summary)showSummary(s.summary);
   if(['done','error','idle'].includes(s.state))clearInterval(timer);

@@ -6,6 +6,16 @@ Restores the real date, location, description and people to photos and videos ex
 
 A Takeout export gives you photos and videos plus a `.json` file for each one. The date, GPS location, description and tagged people live **only in the `.json`**, not in the photo, and the `.json` can be in a different folder or a different `Takeout N` batch from its photo. This tool finds the right `.json` for every file and writes the information back.
 
+## Plain-language glossary
+
+- **EXIF (the photo's hidden label):** facts saved *inside* every photo or video file, separate from the picture: the date and time taken, the GPS location, the camera, and an optional caption. Apps like Photos and Lightroom read it to sort your library by date and show it on a map. Google's export often leaves this blank or wrong, which is the problem this tool fixes. It never changes the picture itself.
+- **.json file (Google's info file):** a small text file Google gives each photo in a Takeout, holding the real date, location, caption and people. This is where the facts come back from.
+- **Sidecar:** any extra file that travels alongside a photo and describes it. The `.json` files are sidecars.
+- **Preview only (dry run):** a rehearsal. It does all the matching and counting but changes nothing.
+- **Replace / overwrite:** off means "only fill in what is missing"; on means "use Google's version even if the photo already has something".
+- **Live Photo:** an iPhone photo with a 2-3 second video. Takeout splits it into a still and a video; the pairing option links them again.
+- **Duplicate:** a byte-for-byte identical copy of the same file.
+
 ## What you need
 
 - A Mac (the app's folder pickers use macOS; the command line also works on Linux/Windows)
@@ -44,13 +54,13 @@ Pick a new empty folder. Fixed copies and reports are saved there, and your Take
 | Remove exact duplicates | **on** | Skips byte-identical copies of the same photo (repeated across Takeouts or albums); keeps the one in `Photos from YYYY`. |
 | Move instead of copy | off | Moves files into the output folder instead of copying. Saves disk space but empties your Takeout folders as it goes. |
 | Re-pair Live Photos | off | Re-links iPhone Live Photo videos to their still (see below). |
-| Overwrite existing EXIF values | off | Off: only fill in missing values. On: replace existing values with Google's. |
+| Replace information already stored in the photo (overwrite EXIF) | off | Off: only fill in missing values. On: replace existing values with Google's. |
 
 ### 4. Run a preview first
 Leave Preview on and press **Start**. Read the summary (below). If **No JSON found** is high, add more Takeout folders and preview again.
 
 ### 5. Run it for real
-Untick **Preview only**. Because Google's exports often carry wrong dates, tick **Overwrite existing EXIF values** too. Press **Start**. Large libraries take a while; the progress bar and live counts show how far along it is.
+Untick **Preview only**. Because Google's exports often carry wrong dates, tick **Replace information already stored in the photo** too. Press **Start**. Large libraries take a while; the progress bar and live counts show how far along it is.
 
 ### 6. Check the result
 Use **Show reports in Finder**, and spot-check a few files:
@@ -168,7 +178,7 @@ The command line takes one folder; put your batches under a common parent folder
 | "exiftool not found" | `brew install exiftool` |
 | Lots of **No JSON** | Add the other Takeout batches and preview again. If *JSON with no photo* is also zero, the missing sidecars were not in your export |
 | Dates look wrong by some hours | Timezone: Google's times are UTC |
-| **Kept** counts are high | Tick **Overwrite existing EXIF values** |
+| **Kept** counts are high | Tick **Replace information already stored in the photo** |
 | Folder buttons do nothing | Type or paste the paths instead |
 | `exiftool-error` rows | See the `detail` column in the report |
 | Live Photo not recognised in Photos | The still probably lost its Apple ID; see the Live Photos section |
