@@ -142,8 +142,12 @@ def find_sidecar(m, idx):
     folder = m.parent.name
     cands = media_candidates(m.name)
     for k in cands:
-        if by_folder.get((folder, k)):
-            return by_folder[(folder, k)][0], "folder"
+        found = by_folder.get((folder, k))
+        if found:
+            local = [p for p in found if p.parent == m.parent]  # sidecar next to the photo wins
+            if local:
+                return local[0], "folder"
+            return (found[0], "folder") if len(found) == 1 else (found, "tree-ambiguous")
     for k in cands:
         if by_key.get(k):
             found = by_key[k]
@@ -434,16 +438,7 @@ def claim_dest(dest, args):
 
 
 def dest_dir_for(m, taken, args, out_root):
-    if getattr(args, "layout", "folder") == "yearmonth":
-        t = taken
-        if not t:
-            ex = read_existing(m, m.suffix.lower() in VIDEO_EXT).get("date", "")
-            try:
-                t = datetime.strptime(ex[:19], "%Y:%m:%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
-            except ValueError:
-                return out_root / "Unknown date"
-        dt = datetime.fromtimestamp(t, timezone.utc)
-        return out_root / f"{dt:%Y}" / f"{dt:%Y-%m}"
+    """Keep Google's folder names; same-named folders from different Takeouts merge into one."""
     return out_root / m.parent.name
 
 
@@ -518,8 +513,6 @@ def main():
     ap.add_argument("--overwrite", action="store_true", help="replace existing EXIF values")
     ap.add_argument("--pair-live", action="store_true",
                     help="relink Live Photo videos to their still (needs --out); videos become .MOV")
-    ap.add_argument("--layout", choices=["folder", "yearmonth"], default="folder",
-                    help="output layout: keep Google's folder names (merged), or YYYY/YYYY-MM by date taken")
     ap.add_argument("--dedupe", action="store_true", help="skip byte-identical duplicate files")
     ap.add_argument("--move", action="store_true", help="move files into --out instead of copying (frees space)")
     ap.add_argument("--workers", type=int, default=4)
@@ -530,8 +523,8 @@ def main():
         sys.exit("exiftool not found. macOS: brew install exiftool | Windows: https://exiftool.org")
     if args.pair_live and not (args.out or args.dry_run):
         sys.exit("--pair-live renames videos, so it needs --out (or --dry-run)")
-    if (args.layout == "yearmonth" or args.move) and not args.out:
-        sys.exit("--layout yearmonth and --move need --out")
+    if args.move and not args.out:
+        sys.exit("--move needs --out")
     if not args.root.is_dir():
         sys.exit(f"{args.root} is not a folder")
 

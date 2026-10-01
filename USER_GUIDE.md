@@ -42,7 +42,6 @@ Pick a new empty folder. Fixed copies and reports are saved there, and your Take
 |---|---|---|
 | Preview only (dry run) | **on** | Matches files and reports counts. Changes nothing. |
 | Remove exact duplicates | **on** | Skips byte-identical copies of the same photo (repeated across Takeouts or albums); keeps the one in `Photos from YYYY`. |
-| Output layout | merge folders | *Merge folders*: all `Photos from 2012` folders become one. *Year / Month*: `2012/2012-07` by date taken; files with no date go to `Unknown date`. |
 | Move instead of copy | off | Moves files into the output folder instead of copying. Saves disk space but empties your Takeout folders as it goes. |
 | Re-pair Live Photos | off | Re-links iPhone Live Photo videos to their still (see below). |
 | Overwrite existing EXIF values | off | Off: only fill in missing values. On: replace existing values with Google's. |
@@ -64,7 +63,7 @@ Keep your Takeout folders until you are happy with the output.
 
 With an output folder the tool **builds a new, merged library there and leaves your Takeout folders untouched** (a second copy, so you need roughly as much free space again). Tick **Move** to relocate files instead; it uses no extra space but empties the Takeout folders, so have another backup first.
 
-Every file is placed, including those with no JSON (they keep their existing data). If two different files share a name, the second becomes `name_1`. Exact duplicates are detected by content, not name. Because duplicate album copies are skipped, **album membership is not preserved**; the photo stays in its `Photos from YYYY` folder. Use a fresh output folder each run: re-running into the same one creates `_1` copies.
+Every file is placed, including those with no JSON (they keep their existing data). Folder names stay exactly as Google exported them: same-named folders from different Takeouts merge into one, and album folders stay as albums. If two different images land in the same folder with the same name (iPhones restart numbering), nothing is overwritten: the second is saved as `name_1.ext`. Each image is matched to its own JSON (the one in its own folder first, then the one with the closest date), so each keeps its own date and location. Exact duplicates are detected by content, not name. Because duplicate album copies are skipped, **album membership is not preserved**; the photo stays in its `Photos from YYYY` folder. Use a fresh output folder each run: re-running into the same one creates `_1` copies.
 
 While it runs you see live counts (duplicates skipped, files placed, output folders) and the last dozen files with where each went. The summary ends with a table of the output folders.
 
@@ -145,7 +144,6 @@ python3 takeout_fix_metadata.py "/path/to/Takeouts" --out "/path/to/Fixed" --ove
 | `--overwrite` | Replace existing EXIF values |
 | `--pair-live` | Re-pair Live Photos (needs `--out`) |
 | `--dedupe` | Skip byte-identical duplicate files |
-| `--layout folder\|yearmonth` | Merge same-named folders (default) or `YYYY/YYYY-MM` by date taken (needs `--out`) |
 | `--move` | Move into `--out` instead of copying (needs `--out`) |
 | `--report FILE` | Where to save the CSV (default `takeout_report.csv`) |
 | `--workers N` | Parallel workers (default 4) |

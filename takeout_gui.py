@@ -158,7 +158,7 @@ def write_text_summary(path, sm):
     Path(path).write_text("\n".join(L) + "\n", encoding="utf-8")
 
 
-def run_job(roots, out, dry_run, overwrite, pair_live=False, layout="folder", dedupe=False, move=False):
+def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=False):
     with LOCK:
         STATE.update(state="scanning", total=0, done=0, counts={}, message="Scanning folders...",
                      report="", summary=None, scan=None, extra={}, recent=[])
@@ -174,8 +174,8 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, layout="folder", de
                 resolved.append(p)
         if not resolved:
             raise ValueError("Add at least one folder")
-        if (pair_live or move or layout == "yearmonth") and not out and not dry_run:
-            raise ValueError("Live Photo pairing, moving and the year/month layout need an output folder")
+        if (pair_live or move) and not out and not dry_run:
+            raise ValueError("Live Photo pairing and moving need an output folder")
         if not dry_run and not shutil.which("exiftool"):
             raise ValueError("exiftool not found. In Terminal run: brew install exiftool")
         media, sidecars, mseen, sseen = [], [], set(), set()
@@ -189,7 +189,7 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, layout="folder", de
                          scan={"media": len(media), "json": len(sidecars), "folders": len(resolved)},
                          message=f"{len(media)} media files, {len(sidecars)} json files")
         args = argparse.Namespace(dry_run=dry_run, overwrite=overwrite, pair_live=pair_live,
-                                  layout=layout, dedupe=dedupe, move=move)
+                                  dedupe=dedupe, move=move)
         with LOCK:
             STATE["message"] = "Finding exact duplicates..." if dedupe else "Preparing..."
 
@@ -297,7 +297,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(409, json.dumps({"error": "A job is already running"}))
             threading.Thread(target=run_job, daemon=True, args=(
                 body.get("roots", []), body.get("out", ""),
-                bool(body.get("dry_run")), bool(body.get("overwrite")), bool(body.get("pair_live")), body.get("layout", "folder"),
+                bool(body.get("dry_run")), bool(body.get("overwrite")), bool(body.get("pair_live")),
                 bool(body.get("dedupe")), bool(body.get("move")))).start()
             self._send(200, "{}")
         elif self.path == "/api/reveal":
@@ -348,9 +348,6 @@ table{width:100%;border-collapse:collapse;font-size:14px;font-variant-numeric:ta
 <div class="card"><label class="t">3. Options</label>
 <div class="opt"><input type="checkbox" id="dry" checked><div>Preview only (dry run)<small>On by default. Matches files and reports counts; changes nothing.</small></div></div>
 <div class="opt"><input type="checkbox" id="dedupe" checked><div>Remove exact duplicates<small>Skips byte-identical copies (the same photo repeated across Takeouts or albums). Keeps the copy in 'Photos from YYYY'. Needs an extra read pass over files that share a size.</small></div></div>
-<div class="opt"><div style="flex:1"><label for="layout" style="font-weight:600">Output layout</label>
-<select id="layout" style="margin-left:8px;padding:6px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink)"><option value="folder">Merge same-named folders (Photos from 2012...)</option><option value="yearmonth">Year / Month by date taken (2012/2012-07)</option></select>
-<small>Both need an output folder.</small></div></div>
 <div class="opt"><input type="checkbox" id="move"><div>Move files instead of copying<small>Saves disk space but empties your Takeout folders as it goes. Off = safe copy (needs roughly as much free space again).</small></div></div>
 <div class="opt"><input type="checkbox" id="live"><div>Re-pair Live Photos<small>Copies each still's Apple ID onto its video and saves the video as .MOV so Photos can treat them as one Live Photo. Needs an output folder.</small></div></div>
 <div class="opt"><input type="checkbox" id="ow"><div>Overwrite existing EXIF values<small>Off = only fill in missing tags.</small></div></div></div>
@@ -384,7 +381,7 @@ $('go').onclick=async()=>{
   if(!$('dry').checked&&!$('out').value.trim()&&!confirm('No output folder: files will be edited IN PLACE. Continue?'))return;
   if($('move').checked&&!$('dry').checked&&!confirm('MOVE will take files out of your Takeout folders. Make sure you have another backup. Continue?'))return;
   $('sum').style.display='none';
-  const r=await post('/api/start',{roots:roots(),out:$('out').value.trim(),dry_run:$('dry').checked,overwrite:$('ow').checked,pair_live:$('live').checked,dedupe:$('dedupe').checked,layout:$('layout').value,move:$('move').checked});
+  const r=await post('/api/start',{roots:roots(),out:$('out').value.trim(),dry_run:$('dry').checked,overwrite:$('ow').checked,pair_live:$('live').checked,dedupe:$('dedupe').checked,move:$('move').checked});
   if(r.error)alert(r.error);else poll();
 };
 $('rev').onclick=()=>post('/api/reveal');
