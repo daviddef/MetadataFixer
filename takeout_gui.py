@@ -26,7 +26,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.01-d"
+VERSION = "2026.10.01-e"
 STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}, "recent": [], "clean": {"state": "idle"}, "update": {"state": "idle", "files": []}, "phase": None, "kind": "fix", "version": VERSION, "boot": time.time()}
 LOCK = threading.Lock()
 
@@ -879,6 +879,15 @@ textarea{width:100%}
 .pane{display:none}.ph{font-size:18px;margin:4px 0 12px}
 .sel{margin-left:8px;padding:6px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink);max-width:100%}
 code{background:var(--bg);padding:1px 5px;border-radius:5px;font-size:12px}
+.fbar{margin-top:8px}.fhead{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px}.flabel{color:var(--mute)}.flabel b{color:var(--ink)}
+button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
+.fchips{display:flex;gap:6px;overflow-x:auto;margin-top:6px;scrollbar-width:none}.fchips:empty{display:none}.fchips::-webkit-scrollbar{display:none}
+.fchip{display:inline-flex;align-items:center;padding:2px 2px 2px 10px;border:1px solid var(--line);border-radius:999px;background:var(--card);font-size:12px;white-space:nowrap;max-width:260px;overflow:hidden;text-overflow:ellipsis;flex:none}
+.fx{border:0;background:transparent;padding:0 7px;font-size:15px;line-height:1;cursor:pointer;color:var(--mute)}
+.fbar.over{outline:2px dashed var(--acc);border-radius:10px}
+.usef{padding:10px 12px;border:1px dashed var(--line);border-radius:10px;color:var(--mute);font-size:13px;margin-bottom:12px;background:var(--bg)}.usef b{color:var(--ink)}
+#fall{min-height:80px}
+.sm2{display:none}@media(max-width:560px){.lg{display:none}.sm2{display:inline}.fhead{gap:6px}button.sm{padding:3px 8px;font-size:12px}#frame{padding-top:8px}.hero{padding:14px 14px 12px}.hero .logo{width:44px;height:44px}}
 </style></head><body><main>
 <div id="upd" style="display:none" class="card"><b>A newer version is available.</b> <span id="updmsg"></span>
 <div style="margin-top:8px"><button class="p" id="updgo">Update now</button> <button id="updno">Not now</button></div></div>
@@ -909,15 +918,17 @@ code{background:var(--bg);padding:1px 5px;border-radius:5px;font-size:12px}
     <button class="tab" data-tab="convert" role="tab"><b>4</b> Convert videos</button>
     <button class="tab" data-tab="empty" role="tab"><b>5</b> Empty folders</button>
   </nav>
+  <div class="fbar" id="fbar">
+    <div class="fhead"><span class="flabel">&#128193; <span class="lg">Folders for every tab: </span><span class="sm2">Folders: </span><b id="fsum"></b></span><button id="fadd" class="sm">Add folders...</button><button id="fedit" class="sm">Edit list</button></div>
+    <div class="fchips" id="fchips"></div>
+    <div id="fpanel" style="display:none"><textarea id="fall" placeholder="One folder path per line (drag folders here too)" spellcheck="false"></textarea><div class="row" style="margin-top:6px"><button id="fdone" class="p sm">Done</button><button id="fclear" class="sm">Clear all</button></div></div>
+  </div>
   <div class="status"><div class="srow"><span id="msg">Ready. Choose a tab, set it up and press Start.</span><a href="#" id="goto" style="display:none">View results &rarr;</a></div>
   <div class="bar" id="bar"><i id="fill"></i><span id="pct">0%</span></div></div>
 </div>
 <section class="pane" id="pane-fix">
 <h2 class="ph">Fix dates, locations and captions</h2>
-<div class="card"><label class="t">1. Takeout folders (one per line, as many as you like)</label>
-<textarea id="roots" placeholder="/Volumes/Drive/2024-08-07 1-50&#10;/Volumes/Drive/2024-08-07 51-80" spellcheck="false"></textarea>
-<div class="row" style="margin-top:8px"><button id="b1">Add folders...</button><button id="clr">Clear</button></div>
-<small>Add every batch. Sidecars are looked up across all of them, so a photo in one batch finds its JSON in another. You can also drop folders from Finder onto the box; if your browser doesn't pass the path, use Add folders.</small></div>
+<div class="card usefcard"><b>1. Takeout folders</b><div class="usef" style="margin:8px 0 0"><span class="fnote"></span>. Add every Takeout batch: a photo in one batch finds its JSON in another.</div></div>
 
 <div class="card"><label class="t">2. Where to put the fixed copies</label>
 <div class="row"><input type="text" id="out" placeholder="Leave empty to fix files in place"><button id="b2">Choose folder</button></div>
@@ -949,9 +960,7 @@ code{background:var(--bg);padding:1px 5px;border-radius:5px;font-size:12px}
 <section class="pane" id="pane-sort">
 <h2 class="ph">Sort only: merge folders, remove duplicates</h2>
 <div class="card"><small style="margin-top:0">Tidies the folder structure and nothing else: no dates, locations or captions are touched. All the same-named folders (every <i>Photos from 2012</i>) are merged into one, and identical duplicate photos are skipped. Use it on its own, or before Part 1.</small>
-<label class="t" style="margin-top:12px">Folders to sort (one per line)</label>
-<textarea id="sroots" placeholder="/Volumes/Drive/Takeouts" spellcheck="false" style="width:100%"></textarea>
-<div class="row" style="margin-top:8px"><button id="sb1">Add folders...</button></div>
+<div class="usef" style="margin-top:12px"><b>Folders to sort:</b> <span class="fnote"></span> (the first one in the list is where everything merges when you sort in place)</div>
 <label class="t" style="margin-top:12px">Output folder <span style="font-weight:400;color:var(--mute)">(optional when moving)</span></label>
 <div class="row"><input type="text" id="sout" placeholder="Where the sorted library goes"><button id="sb2">Choose folder</button></div>
 <small>When you tick <b>Move</b> you can leave this empty: everything is then merged into the <b>first folder in the list above</b>, so you can sort in place. Folders with the same path (for example <i>2014/08</i> in two different folders, or every <i>Photos from 2012</i>) are merged into one; <i>Takeout N / Google Photos</i> wrappers are ignored.</small>
@@ -966,8 +975,8 @@ code{background:var(--bg);padding:1px 5px;border-radius:5px;font-size:12px}
 <h2 class="ph">Clean up</h2>
 <div class="card"><label class="t">Remove the leftover .json files (do this last)</label>
 <small style="margin-top:0">Once you're happy with the fixed photos, delete the leftover Google .json files. They are no longer needed, but they are the only source of the date and location data, so run the fix first. Deleted files do not go to the Trash.</small>
-<textarea id="cleanroots" placeholder="Folders to clean (one per line)" spellcheck="false" style="margin-top:8px;width:100%"></textarea>
-<div class="row" style="margin-top:8px"><button id="cb1">Add folders...</button><button id="cscan">Scan</button></div>
+<div class="usef" style="margin-top:8px"><b>Folders to clean:</b> <span class="fnote"></span></div>
+<div class="row" style="margin-top:8px"><button id="cscan">Scan</button></div>
 <div class="opt"><input type="checkbox" id="cother"><div>Also remove other .json files<small>Off = only Google Photos sidecars and album/memory data files. On = every .json in the folders.</small></div></div>
 <div class="bar" id="cbar" style="display:none"><i id="cfill"></i><span id="cpct">0%</span></div>
 <div id="cres" style="margin-top:8px"></div>
@@ -976,9 +985,7 @@ code{background:var(--bg);padding:1px 5px;border-radius:5px;font-size:12px}
 <section class="pane" id="pane-empty">
 <h2 class="ph">Remove empty folders</h2>
 <div class="card"><small style="margin-top:0">Checks the whole folder tree and removes every folder that is <b>properly empty</b>, however deep: a folder only counts if it holds no files at all, and every folder inside it is empty too. A folder with even one file in it, or a subfolder with one file, is kept. Only folders are removed; <b>no file is ever deleted</b>, apart from invisible system leftovers (below) if you leave that option on.</small>
-<label class="t" style="margin-top:12px">Folders to check (one per line)</label>
-<textarea id="eroots" placeholder="/Volumes/Drive/Photos" spellcheck="false"></textarea>
-<div class="row" style="margin-top:8px"><button id="eb1">Add folders...</button></div>
+<div class="usef" style="margin-top:12px"><b>Folders to check:</b> <span class="fnote"></span></div>
 <div class="opt"><input type="checkbox" id="edry" checked><div>Preview only<small>On by default. Lists the empty folders it would remove and removes nothing.</small></div></div>
 <div class="opt"><input type="checkbox" id="ejunk" checked><div>Treat system leftovers as empty<small>Finder and Windows leave invisible files such as <i>.DS_Store</i>, <i>Thumbs.db</i>, <i>desktop.ini</i> and <i>._something</i>. A folder holding only those still counts as empty, and those files are deleted with it. Off = such a folder is kept.</small></div></div>
 <div class="opt"><input type="checkbox" id="etop"><div>Also remove the folders you chose, if they end up empty<small>Off by default: the folders you add are always kept, even if everything inside them is removed.</small></div></div>
@@ -988,9 +995,7 @@ code{background:var(--bg);padding:1px 5px;border-radius:5px;font-size:12px}
 <section class="pane" id="pane-convert">
 <h2 class="ph">Convert old videos to MP4</h2>
 <div class="card"><small style="margin-top:0">Turns <b>.avi</b> and <b>.mov</b> videos into <b>.mp4</b>, which plays on every phone, TV and app. Videos that are already H.264 or HEVC are simply re-wrapped (fast, no quality loss); others are re-encoded. Dates and locations are carried across. Needs <b>ffmpeg</b> (in Terminal: <code>brew install ffmpeg</code>).</small>
-<label class="t" style="margin-top:12px">Folders to scan (one per line)</label>
-<textarea id="vroots" placeholder="/Volumes/Drive/Sorted" spellcheck="false"></textarea>
-<div class="row" style="margin-top:8px"><button id="vb1">Add folders...</button></div>
+<div class="usef" style="margin-top:12px"><b>Folders to scan:</b> <span class="fnote"></span></div>
 <div class="opt"><input type="checkbox" id="vdry" checked><div>Preview only<small>On by default. Counts what would be converted (and how), changes nothing.</small></div></div>
 <div class="opt"><div><b>Convert these types</b><br><label><input type="checkbox" id="vavi" checked> .avi</label> &nbsp; <label><input type="checkbox" id="vmov" checked> .mov</label></div></div>
 <div class="opt"><input type="checkbox" id="vlive"><div>Also convert Live Photo videos<small>Off by default. An iPhone Live Photo is a still picture plus a short .MOV video that Apple Photos links together. If a .MOV sits next to a photo with the same name, it is treated as a Live Photo video and left alone, because converting it to .mp4 would break the link. Your ordinary .mov and .avi videos are converted as normal.</small></div></div>
@@ -1003,20 +1008,36 @@ code{background:var(--bg);padding:1px 5px;border-radius:5px;font-size:12px}
 </section>
 <script>
 const $=id=>document.getElementById(id), esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-const roots=()=>$('roots').value.split('\n').map(x=>x.trim()).filter(Boolean);
 async function post(u,b){const r=await fetch(u,{method:'POST',body:JSON.stringify(b||{})});return r.json()}
-function addRoots(list){const have=new Set(roots());list.forEach(p=>have.add(p));$('roots').value=[...have].join('\n')}
-$('b1').onclick=async()=>{const r=await post('/api/choose',{prompt:'Choose one or more Takeout folders (hold Cmd to select several)'});if(r.paths)addRoots(r.paths)};
-$('clr').onclick=()=>{$('roots').value=''};
-$('b2').onclick=async()=>{const r=await post('/api/choose',{prompt:'Choose where to save the fixed files'});if(r.paths&&r.paths[0])$('out').value=r.paths[0]};
-const box=$('roots');
-box.ondragover=e=>{e.preventDefault();box.classList.add('over')};box.ondragleave=()=>box.classList.remove('over');
-box.ondrop=e=>{e.preventDefault();box.classList.remove('over');
+
+// ---- shared folder list (header bar, applies to every tab)
+let FOLDERS=[];try{FOLDERS=JSON.parse(localStorage.getItem('folders')||'[]').filter(x=>typeof x==='string')}catch(e){}
+const roots=()=>FOLDERS.slice(),sroots=roots,croots=roots,vroots=roots,eroots=roots;
+function renderFolders(){
+  const box=$('fchips');box.innerHTML='';
+  FOLDERS.forEach((p,i)=>{const c=document.createElement('span');c.className='fchip';c.title=p;
+    const nm=p.split('/').filter(Boolean).pop()||p;c.appendChild(document.createTextNode(nm));
+    const x=document.createElement('button');x.textContent='\u00d7';x.className='fx';x.setAttribute('aria-label','Remove '+nm);x.onclick=()=>{FOLDERS.splice(i,1);saveFolders()};c.appendChild(x);box.appendChild(c)});
+  $('fsum').textContent=FOLDERS.length?FOLDERS.length+(FOLDERS.length===1?' folder':' folders'):'none chosen yet';
+  const note=FOLDERS.length?'using the '+(FOLDERS.length===1?'folder':FOLDERS.length+' folders')+' chosen at the top':'none chosen yet. Add folders in the bar at the top';
+  document.querySelectorAll('.fnote').forEach(e=>{e.textContent=note});
+  $('fall').value=FOLDERS.join('\n')}
+function saveFolders(){try{localStorage.setItem('folders',JSON.stringify(FOLDERS))}catch(e){};renderFolders()}
+function addFolders(list){list.forEach(p=>{p=(p||'').trim().replace(/\/+$/,'');if(p&&!FOLDERS.includes(p))FOLDERS.push(p)});saveFolders()}
+$('fadd').onclick=async()=>{const r=await post('/api/choose',{prompt:'Choose one or more folders (hold Cmd to select several)'});if(r.paths)addFolders(r.paths)};
+$('fedit').onclick=()=>{const p=$('fpanel');p.style.display=p.style.display==='none'?'block':'none'};
+$('fdone').onclick=()=>{FOLDERS=[];addFolders($('fall').value.split('\n'));$('fpanel').style.display='none'};
+$('fclear').onclick=()=>{FOLDERS=[];saveFolders()};
+const fbar=$('fbar');
+fbar.ondragover=e=>{e.preventDefault();fbar.classList.add('over')};fbar.ondragleave=()=>fbar.classList.remove('over');
+fbar.ondrop=e=>{e.preventDefault();fbar.classList.remove('over');
   const t=(e.dataTransfer.getData('text/uri-list')||e.dataTransfer.getData('text/plain')||'').split(/\r?\n/).filter(Boolean);
-  const paths=t.filter(x=>x.startsWith('file://')||x.startsWith('/')).map(x=>x.startsWith('file://')?decodeURIComponent(x.replace(/^file:\/\/[^\/]*/,'')):x).map(x=>x.replace(/\/$/,''));
-  if(paths.length)addRoots(paths);else alert('Your browser did not share the folder path. Use "Add folders..." instead.')};
+  const paths=t.filter(x=>x.startsWith('file://')||x.startsWith('/')).map(x=>x.startsWith('file://')?decodeURIComponent(x.replace(/^file:\/\/[^\/]*/,'')):x);
+  if(paths.length)addFolders(paths);else alert('Your browser did not share the folder path. Use "Add folders..." or paste the paths into Edit list.')};
+renderFolders();
+$('b2').onclick=async()=>{const r=await post('/api/choose',{prompt:'Choose where to save the fixed files'});if(r.paths&&r.paths[0])$('out').value=r.paths[0]};
 $('go').onclick=async()=>{
-  if(!roots().length){alert('Add at least one Takeout folder first');return}
+  if(!roots().length){alert('Add your folders in the bar at the top first');return}
   if(!$('dry').checked&&!$('out').value.trim()&&!confirm('No output folder: files will be edited IN PLACE. Continue?'))return;
   if($('move').checked&&!$('dry').checked&&!confirm('MOVE will take files out of your Takeout folders. Make sure you have another backup. Continue?'))return;
   $('sum').style.display='none';
@@ -1049,9 +1070,7 @@ function showSummary(s){
   if((s.samples||[]).length)h+='<h2>Sample of changes (first 15)</h2>'+tbl(['File','Date taken','Location','Description'],s.samples.map(x=>[esc(x.file),fmt(x.date),fmt(x.gps),fmt(x.desc)]));
   h+='<small>Saved: full report CSV (with before/after values per file), a changes-only CSV, a CSV of just the no-JSON files, and a text summary.</small>';
   $('sumbody').innerHTML=h;$('sum').style.display='block'}
-const croots=()=>$('cleanroots').value.split('\n').map(x=>x.trim()).filter(Boolean);
 const fmtBytes=b=>b>1e9?(b/1e9).toFixed(2)+' GB':b>1e6?(b/1e6).toFixed(1)+' MB':Math.round(b/1e3)+' KB';
-$('cb1').onclick=async()=>{const r=await post('/api/choose',{prompt:'Choose folders to remove .json files from'});if(r.paths){const have=new Set(croots());r.paths.forEach(p=>have.add(p));$('cleanroots').value=[...have].join('\n')}};
 $('cscan').onclick=async()=>{
   $('cdel').disabled=true;$('cres').textContent='Scanning...';
   const r=await post('/api/clean_scan',{folders:croots(),include_other:$('cother').checked});
@@ -1061,7 +1080,7 @@ $('cscan').onclick=async()=>{
   $('cdel').disabled=!r.will_delete;$('cdel').dataset.n=r.will_delete};
 $('cdel').onclick=async()=>{
   const n=$('cdel').dataset.n;
-  const t=prompt(`This permanently deletes ${n} .json files and cannot be undone.\nType DELETE to confirm.`);
+  const t=prompt(`This permanently deletes ${n} .json files in:\n${croots().join('\n')}\nIt cannot be undone.\nType DELETE to confirm.`);
   if(t!=='DELETE')return;
   const r=await post('/api/clean_run',{folders:croots(),include_other:$('cother').checked});
   if(r.error){alert(r.error);return}
@@ -1072,11 +1091,9 @@ $('cdel').onclick=async()=>{
     $('cres').innerHTML=s.state==='error'?'<span class="err">'+esc(s.message)+'</span>':`${s.state==='done'?'<span class="ok">Finished.</span> ':''}Deleted ${s.deleted.toLocaleString()} of ${s.total.toLocaleString()} (${fmtBytes(s.bytes)})${s.errors?`, <span class="err">${s.errors} errors</span>`:''}`;
     if(s.state!=='running')clearInterval(tm)},500)};
 
-const sroots=()=>$('sroots').value.split('\n').map(x=>x.trim()).filter(Boolean);
-$('sb1').onclick=async()=>{const r=await post('/api/choose',{prompt:'Choose the folders to sort'});if(r.paths){const have=new Set(sroots());r.paths.forEach(p=>have.add(p));$('sroots').value=[...have].join('\n')}};
 $('sb2').onclick=async()=>{const r=await post('/api/choose',{prompt:'Choose where the sorted library goes'});if(r.paths&&r.paths[0])$('sout').value=r.paths[0]};
 $('sgo').onclick=async()=>{
-  if(!sroots().length){alert('Add the folders to sort first');return}
+  if(!sroots().length){alert('Add your folders in the bar at the top first');return}
   const inPlace=!$('sout').value.trim();
   if(inPlace&&!$('smove').checked){alert('Choose an output folder, or tick "Move" to merge everything into the first folder in the list');return}
   if($('smove').checked&&!$('sdry').checked&&!confirm(inPlace?'MOVE will merge everything into '+sroots()[0]+' and take files out of the other folders. Make sure you have another backup. Continue?':'MOVE takes files out of your source folders. Make sure you have another backup. Continue?'))return;
@@ -1131,10 +1148,8 @@ let startTab='fix';try{startTab=location.hash.slice(1)||localStorage.getItem('ta
 showTab(startTab);
 
 // ---- Part 4: convert
-const vroots=()=>$('vroots').value.split('\n').map(x=>x.trim()).filter(Boolean);
-$('vb1').onclick=async()=>{const r=await post('/api/choose',{prompt:'Choose the folders to scan for .avi and .mov videos'});if(r.paths){const have=new Set(vroots());r.paths.forEach(p=>have.add(p));$('vroots').value=[...have].join('\n')}};
 $('vgo').onclick=async()=>{
-  if(!vroots().length){alert('Add the folders to scan first');return}
+  if(!vroots().length){alert('Add your folders in the bar at the top first');return}
   const exts=[$('vavi').checked?'.avi':null,$('vmov').checked?'.mov':null].filter(Boolean);
   if(!exts.length){alert('Tick .avi and/or .mov');return}
   const act=$('vact').value;
@@ -1159,10 +1174,8 @@ function liveTiles(s,c,done,nj){
   return tile(s.total,'media files')+tile(done-nj,'matched so far','ok')+tile(nj,'no JSON so far',nj?'bad':'')+tile(x.dates_changed||0,'dates changed')+tile(x.gps_changed||0,'locations changed')+tile(x.desc_changed||0,'captions changed')+tile(x.replaced_files||0,'files with info replaced')+tile(x.live_paired||0,'Live Photos paired')+tile(x.duplicates||0,'duplicates skipped')+tile(x.written||0,'files placed')+tile(x.folders||0,'output folders')+err+(s.scan?tile(s.scan.json,'JSON files found'):'')}
 
 // ---- Part 5: remove empty folders
-const eroots=()=>$('eroots').value.split('\n').map(x=>x.trim()).filter(Boolean);
-$('eb1').onclick=async()=>{const r=await post('/api/choose',{prompt:'Choose the folders to check for empty folders'});if(r.paths){const have=new Set(eroots());r.paths.forEach(p=>have.add(p));$('eroots').value=[...have].join('\n')}};
 $('ego').onclick=async()=>{
-  if(!eroots().length){alert('Add the folders to check first');return}
+  if(!eroots().length){alert('Add your folders in the bar at the top first');return}
   if(!$('edry').checked&&!confirm('This will permanently remove every folder that is completely empty (no files inside, at any depth). No files are deleted. Continue?'))return;
   $('sum').style.display='none';
   const r=await post('/api/empty_start',{roots:eroots(),dry_run:$('edry').checked,ignore_junk:$('ejunk').checked,remove_top:$('etop').checked});

@@ -45,6 +45,16 @@ Or download `takeout_fix_metadata.py` and `takeout_gui.py` from the repo into on
 
 The app has five tabs: **1 Fix metadata**, **2 Sort**, **3 Clean up** (remove `.json` files), **4 Convert videos** and **5 Empty folders**. A bar with a moving percentage stays at the top of the window on every tab, showing whatever job is running; if you switch to another tab, a **View results** link takes you back. Only one job runs at a time.
 
+## Choosing your folders (once, for every tab)
+
+The **Folders bar** at the top of the window holds the folders every tab works on, so you only choose them once.
+
+- Press **Add folders...** (hold Cmd in the Finder dialog to pick several), or press **Edit list** and type or paste one path per line, or drag folders onto the bar. Each folder appears as a chip; press the **x** on a chip to remove it.
+- Your list is remembered in your browser, so it is still there next time you open the app.
+- Each tab shows which folders it is using. Output folders (where the fixed or sorted copies go) are still chosen on their own tab.
+- **Order matters in one place:** when you sort in place (Move with no output folder), everything merges into the **first** folder in the list. Use **Edit list** to reorder.
+- Because the same list is used everywhere, check it before a destructive step: the Clean-up tab and the confirmation prompts list the folders they will act on.
+
 ## Using the app (recommended)
 
 ```
@@ -55,7 +65,7 @@ python3 takeout_gui.py
 A page opens at `http://127.0.0.1:8765`. It runs only on your computer. Leave Terminal open while you use it; press Ctrl+C there to quit.
 
 ### 1. Add your Takeout folders
-Click **Add folders...** and Cmd-click to select several, or type paths one per line. Add **every** Takeout batch. A photo in one batch can find its `.json` in another, so the more batches you include, the fewer files are left unmatched. Dropping folders from Finder onto the box works only if your browser passes the path; otherwise use the button.
+Use the **Folders bar** at the top (see above). Add **every** Takeout batch. A photo in one batch can find its `.json` in another, so the more batches you include, the fewer files are left unmatched. Dropping folders from Finder onto the box works only if your browser passes the path; otherwise use the button.
 
 ### 2. Choose an output folder
 Pick a new empty folder. Fixed copies and reports are saved there, and your Takeout originals are not touched. If you leave it empty, files are edited in place (you are asked to confirm). Live Photo repair needs an output folder.
