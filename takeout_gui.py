@@ -9,6 +9,7 @@ server only listens on localhost. Needs exiftool (brew install exiftool).
 import argparse
 import csv
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -22,7 +23,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}}
+STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}, "recent": []}
 LOCK = threading.Lock()
 
 
@@ -66,6 +67,8 @@ def summarise(rows, sidecars, roots, dry_run):
     for r in rows:
         ok = r["status"] != "no-json"
         st[r["status"]] += 1
+        if r["status"] == "duplicate":
+            continue
         if r["match"]:
             match[r["match"]] += 1
         e = Path(r["file"]).suffix.lower()
@@ -86,8 +89,17 @@ def summarise(rows, sidecars, roots, dry_run):
         if r.get("live"):
             live[r["live"]] += 1
     used = {r["sidecar"] for r in rows if r["sidecar"]}
-    orphans = [p for p in sidecars if str(p) not in used and is_media_sidecar(p)]
+    used_keys = {(Path(u).parent.name, fx.json_key(Path(u))) for u in used}
+    orphans = [p for p in sidecars if str(p) not in used and is_media_sidecar(p)
+               and (p.parent.name, fx.json_key(p)) not in used_keys]
     nj = st.get("no-json", 0)
+    dup = st.get("duplicate", 0)
+    unique = total - dup
+    folders = defaultdict(int)
+    for r in rows:
+        if r.get("output"):
+            folders[str(Path(r["output"]).parent)] += 1
+    base = os.path.commonpath(list(folders)) if folders else ""
     tips = []
     if nj and not orphans:
         tips.append("Every sidecar in these folders was used, so the %d files with no JSON have none in the folders "
@@ -106,11 +118,16 @@ def summarise(rows, sidecars, roots, dry_run):
                     % (live.get("no-id", 0), live.get("no-still", 0)))
     if st.get("exiftool-error"):
         tips.append("%d files hit an exiftool error; see the 'detail' column in the report." % st["exiftool-error"])
+    if dup:
+        tips.append("%d byte-identical duplicates were skipped, keeping the copy in the 'Photos from YYYY' folder. "
+                    "Album copies of the same photo are not repeated, so album membership is not preserved." % dup)
     if dry_run:
         tips.append("This was a preview: nothing was changed. Untick 'Preview only' to apply.")
     return {
-        "total": total, "matched": total - nj, "no_json": nj,
-        "pct_matched": round(100 * (total - nj) / total, 1) if total else 0,
+        "total": total, "unique": unique, "duplicates": dup, "matched": unique - nj, "no_json": nj,
+        "pct_matched": round(100 * (unique - nj) / unique, 1) if unique else 0,
+        "out_folders": sorted(([os.path.relpath(k, base) if k != base else ".", v] for k, v in folders.items())),
+        "out_base": base,
         "status": dict(st), "match": dict(match), "orphans": len(orphans),
         "ext": sorted(([k, v[0], v[1]] for k, v in ext.items()), key=lambda x: -(x[1] + x[2])),
         "batch": sorted(([k, v[0], v[1]] for k, v in batch.items()),
@@ -122,7 +139,8 @@ def summarise(rows, sidecars, roots, dry_run):
 def write_text_summary(path, sm):
     L = ["TAKEOUT METADATA FIXER SUMMARY", "Mode: " + ("preview (no changes)" if sm["dry_run"] else "applied"),
          "Folders: " + "; ".join(sm["roots"]), "",
-         f"Media files: {sm['total']}", f"With JSON: {sm['matched']} ({sm['pct_matched']}%)",
+         f"Media files: {sm['total']}", f"Exact duplicates skipped: {sm['duplicates']} ({sm.get('dupe_bytes', 0) / 1e9:.1f} GB)",
+         f"Unique files with JSON: {sm['matched']} ({sm['pct_matched']}%)",
          f"No JSON: {sm['no_json']}", f"Sidecars with no photo: {sm['orphans']}", "", "Status:"]
     L += [f"  {k}: {v}" for k, v in sm["status"].items()]
     L += ["", "By file type (with JSON / no JSON):"] + [f"  {e or '(none)'}: {a} / {b}" for e, a, b in sm["ext"]]
@@ -134,14 +152,16 @@ def write_text_summary(path, sm):
         L.append(f"  {label}: " + " / ".join(str(f.get(x, 0)) for x in ("added", "replaced", "kept", "same", "none")))
     if sm.get("live"):
         L += ["", "Live Photo pairing:"] + [f"  {k}: {v}" for k, v in sm["live"].items()]
+    if sm.get("out_folders"):
+        L += ["", f"Output folders (under {sm['out_base']}):"] + [f"  {k}: {v}" for k, v in sm["out_folders"]]
     L += [""] + sm["tips"]
     Path(path).write_text("\n".join(L) + "\n", encoding="utf-8")
 
 
-def run_job(roots, out, dry_run, overwrite, pair_live=False):
+def run_job(roots, out, dry_run, overwrite, pair_live=False, layout="folder", dedupe=False, move=False):
     with LOCK:
         STATE.update(state="scanning", total=0, done=0, counts={}, message="Scanning folders...",
-                     report="", summary=None, scan=None, extra={})
+                     report="", summary=None, scan=None, extra={}, recent=[])
     try:
         resolved, seen = [], set()
         for r in roots:
@@ -154,8 +174,8 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False):
                 resolved.append(p)
         if not resolved:
             raise ValueError("Add at least one folder")
-        if pair_live and not out and not dry_run:
-            raise ValueError("Live Photo pairing renames videos to .MOV, so choose an output folder")
+        if (pair_live or move or layout == "yearmonth") and not out and not dry_run:
+            raise ValueError("Live Photo pairing, moving and the year/month layout need an output folder")
         if not dry_run and not shutil.which("exiftool"):
             raise ValueError("exiftool not found. In Terminal run: brew install exiftool")
         media, sidecars, mseen, sseen = [], [], set(), set()
@@ -168,9 +188,20 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False):
             STATE.update(state="running", total=len(media),
                          scan={"media": len(media), "json": len(sidecars), "folders": len(resolved)},
                          message=f"{len(media)} media files, {len(sidecars)} json files")
-        args = argparse.Namespace(dry_run=dry_run, overwrite=overwrite, pair_live=pair_live)
+        args = argparse.Namespace(dry_run=dry_run, overwrite=overwrite, pair_live=pair_live,
+                                  layout=layout, dedupe=dedupe, move=move)
+        with LOCK:
+            STATE["message"] = "Finding exact duplicates..." if dedupe else "Preparing..."
+
+        def hashing(done, todo):
+            with LOCK:
+                STATE["message"] = f"Finding exact duplicates... ({done:,}/{todo:,} files compared)"
+        fx.prepare(args, media, hashing)
+        with LOCK:
+            STATE["message"] = f"{len(media)} media files, {len(sidecars)} json files"
         out_root = Path(out) if out else None
         rows, counts, extra = [], defaultdict(int), defaultdict(int)
+        out_dirs, recent = set(), []
         with ThreadPoolExecutor(max_workers=4) as ex:
             for row in ex.map(lambda m: fx.process(m, idx, args, out_root), media):
                 rows.append(row)
@@ -181,10 +212,21 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False):
                     extra["fields_replaced"] += [row["date"], row["gps"], row["desc"]].count("replaced")
                 if row["live"] == "paired":
                     extra["live_paired"] += 1
+                if row["status"] == "duplicate":
+                    extra["duplicates"] += 1
+                if row["output"]:
+                    extra["written"] += 1
+                    out_dirs.add(str(Path(row["output"]).parent))
+                    extra["folders"] = len(out_dirs)
+                recent.append(row)
+                del recent[:-12]
                 with LOCK:
                     STATE["done"] = len(rows)
                     STATE["counts"] = dict(counts)
                     STATE["extra"] = dict(extra)
+                    STATE["recent"] = [{"name": Path(r["file"]).name, "status": r["status"],
+                                        "to": (Path(r["output"]).parent.name + "/" if r["output"] else ""),
+                                        "live": r["live"]} for r in recent]
         report_dir = out_root or Path.home() / "Desktop"
         report_dir.mkdir(parents=True, exist_ok=True)
         tag = "dryrun" if dry_run else "report"
@@ -205,6 +247,7 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False):
             w.writeheader()
             w.writerows(changed)
         sm = summarise(rows, sidecars, resolved, dry_run)
+        sm["dupe_bytes"] = getattr(args, "dupe_bytes", 0)
         sm["samples"] = [{"file": Path(r["file"]).name, "date": [r["date"], r["date_before"], r["date_google"]],
                           "gps": [r["gps"], r["gps_before"], r["gps_google"]],
                           "desc": [r["desc"], r["desc_before"], r["desc_google"]]}
@@ -254,7 +297,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(409, json.dumps({"error": "A job is already running"}))
             threading.Thread(target=run_job, daemon=True, args=(
                 body.get("roots", []), body.get("out", ""),
-                bool(body.get("dry_run")), bool(body.get("overwrite")), bool(body.get("pair_live")))).start()
+                bool(body.get("dry_run")), bool(body.get("overwrite")), bool(body.get("pair_live")), body.get("layout", "folder"),
+                bool(body.get("dedupe")), bool(body.get("move")))).start()
             self._send(200, "{}")
         elif self.path == "/api/reveal":
             with LOCK:
@@ -303,6 +347,11 @@ table{width:100%;border-collapse:collapse;font-size:14px;font-variant-numeric:ta
 
 <div class="card"><label class="t">3. Options</label>
 <div class="opt"><input type="checkbox" id="dry" checked><div>Preview only (dry run)<small>On by default. Matches files and reports counts; changes nothing.</small></div></div>
+<div class="opt"><input type="checkbox" id="dedupe" checked><div>Remove exact duplicates<small>Skips byte-identical copies (the same photo repeated across Takeouts or albums). Keeps the copy in 'Photos from YYYY'. Needs an extra read pass over files that share a size.</small></div></div>
+<div class="opt"><div style="flex:1"><label for="layout" style="font-weight:600">Output layout</label>
+<select id="layout" style="margin-left:8px;padding:6px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink)"><option value="folder">Merge same-named folders (Photos from 2012...)</option><option value="yearmonth">Year / Month by date taken (2012/2012-07)</option></select>
+<small>Both need an output folder.</small></div></div>
+<div class="opt"><input type="checkbox" id="move"><div>Move files instead of copying<small>Saves disk space but empties your Takeout folders as it goes. Off = safe copy (needs roughly as much free space again).</small></div></div>
 <div class="opt"><input type="checkbox" id="live"><div>Re-pair Live Photos<small>Copies each still's Apple ID onto its video and saves the video as .MOV so Photos can treat them as one Live Photo. Needs an output folder.</small></div></div>
 <div class="opt"><input type="checkbox" id="ow"><div>Overwrite existing EXIF values<small>Off = only fill in missing tags.</small></div></div></div>
 
@@ -310,7 +359,8 @@ table{width:100%;border-collapse:collapse;font-size:14px;font-variant-numeric:ta
 
 <div class="card" id="prog" style="display:none;margin-top:14px">
 <div id="msg"></div><div class="bar"><i id="fill"></i></div>
-<div class="tiles" id="tiles"></div></div>
+<div class="tiles" id="tiles"></div>
+<div id="recent" style="font:12px ui-monospace,Menlo,monospace;color:var(--mute);line-height:1.6;overflow:hidden"></div></div>
 
 <div class="card" id="sum" style="display:none"><h2 style="margin-top:0">Summary</h2><div id="sumbody"></div>
 <div style="margin-top:12px"><button id="rev">Show reports in Finder</button></div></div>
@@ -332,8 +382,9 @@ box.ondrop=e=>{e.preventDefault();box.classList.remove('over');
 $('go').onclick=async()=>{
   if(!roots().length){alert('Add at least one Takeout folder first');return}
   if(!$('dry').checked&&!$('out').value.trim()&&!confirm('No output folder: files will be edited IN PLACE. Continue?'))return;
+  if($('move').checked&&!$('dry').checked&&!confirm('MOVE will take files out of your Takeout folders. Make sure you have another backup. Continue?'))return;
   $('sum').style.display='none';
-  const r=await post('/api/start',{roots:roots(),out:$('out').value.trim(),dry_run:$('dry').checked,overwrite:$('ow').checked,pair_live:$('live').checked});
+  const r=await post('/api/start',{roots:roots(),out:$('out').value.trim(),dry_run:$('dry').checked,overwrite:$('ow').checked,pair_live:$('live').checked,dedupe:$('dedupe').checked,layout:$('layout').value,move:$('move').checked});
   if(r.error)alert(r.error);else poll();
 };
 $('rev').onclick=()=>post('/api/reveal');
@@ -341,7 +392,7 @@ const tile=(n,l,c)=>`<div class="tile ${c||''}"><b>${n.toLocaleString()}</b><spa
 function tbl(head,rows){return `<table><tr>${head.map((h,i)=>`<th class="${i?'n':''}">${h}</th>`).join('')}</tr>${rows.map(r=>`<tr>${r.map((c,i)=>`<td class="${i?'n':''}">${c}</td>`).join('')}</tr>`).join('')}</table>`}
 function bars(rows){const m=Math.max(1,...rows.map(r=>r[2]));return rows.map(r=>[esc(r[0]||'(none)'),r[1].toLocaleString(),r[2].toLocaleString()+`<span class="mini" style="width:${Math.round(60*r[2]/m)}px"></span>`])}
 function showSummary(s){
-  let h=`<div class="tiles">${tile(s.total,'media files')}${tile(s.matched,'matched ('+s.pct_matched+'%)','ok')}${tile(s.no_json,'no JSON found',s.no_json?'bad':'ok')}${tile(s.orphans,'JSON with no photo')}</div>`;
+  let h=`<div class="tiles">${tile(s.total,'media files')}${tile(s.duplicates,'exact duplicates skipped')}${tile(s.matched,'unique files matched ('+s.pct_matched+'%)','ok')}${tile(s.no_json,'no JSON found',s.no_json?'bad':'ok')}${tile(s.orphans,'JSON with no photo')}</div>`;
   h+=s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
   h+=`<div class="tiles">${tile(s.replaced_files,'files with a value replaced')}${tile((s.live||{}).paired||0,'Live Photos paired')}</div>`;
   h+='<h2>EXIF values</h2>'+tbl(['Field','Added','Replaced','Kept (not overwritten)','Already correct'],[['date','Date taken'],['gps','Location'],['desc','Description']].map(([k,l])=>{const f=s.fields[k]||{};return [l,(f.added||0).toLocaleString(),(f.replaced||0).toLocaleString(),(f.kept||0).toLocaleString(),(f.same||0).toLocaleString()]}));
@@ -350,6 +401,7 @@ function showSummary(s){
   h+='<h2>By file type</h2>'+tbl(['Type','With JSON','No JSON'],bars(s.ext));
   h+='<h2>By Takeout batch</h2>'+tbl(['Batch','With JSON','No JSON'],bars(s.batch));
   if(s.live&&Object.keys(s.live).length)h+='<h2>Live Photo pairing</h2>'+tbl(['Result','Videos'],Object.entries(s.live).map(([k,v])=>[({paired:'Paired with its still','no-id':'Still has no Apple ID','no-still':'No matching still','pair-error':'Error'})[k]||k,v.toLocaleString()]));
+  if((s.out_folders||[]).length)h+='<h2>Output folders</h2>'+tbl(['Folder','Files'],s.out_folders.slice(0,80).map(r=>[esc(r[0]),r[1].toLocaleString()]))+(s.out_folders.length>80?'<small>Showing 80 of '+s.out_folders.length+'; see the summary .txt for all.</small>':'');
   if(s.album_no_json.length)h+='<h2>Albums with the most no-JSON files</h2>'+tbl(['Album','No JSON'],s.album_no_json.map(r=>[esc(r[0]),r[1].toLocaleString()]));
   const fmt=([o,b,g])=>o==='same'?'<span style="color:var(--mute)">already correct</span>':o==='none'||!o?'-':`${esc(b||'(none)')} &rarr; <b>${esc(g)}</b> <small style="display:inline">(${o})</small>`;
   if((s.samples||[]).length)h+='<h2>Sample of changes (first 15)</h2>'+tbl(['File','Date taken','Location','Description'],s.samples.map(x=>[esc(x.file),fmt(x.date),fmt(x.gps),fmt(x.desc)]));
@@ -361,7 +413,8 @@ let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   const pct=s.total?Math.round(100*s.done/s.total):0;$('fill').style.width=pct+'%';
   $('msg').innerHTML=s.state==='error'?'<span class="err">'+esc(s.message)+'</span>':s.state==='done'?'<span class="ok">Finished.</span>':esc(s.message)+(s.total?` (${s.done.toLocaleString()} / ${s.total.toLocaleString()})`:'');
   const c=s.counts||{},done=s.done||0,nj=c['no-json']||0;
-  $('tiles').innerHTML=s.total?tile(s.total,'media files')+tile(done-nj,'matched so far','ok')+tile(nj,'no JSON so far',nj?'bad':'')+tile((s.extra||{}).replaced_files||0,'files with EXIF replaced')+tile((s.extra||{}).live_paired||0,'Live Photos paired')+(s.scan?tile(s.scan.json,'JSON files found'):''):'';
+  $('tiles').innerHTML=s.total?tile(s.total,'media files')+tile(done-nj,'matched so far','ok')+tile(nj,'no JSON so far',nj?'bad':'')+tile((s.extra||{}).replaced_files||0,'files with EXIF replaced')+tile((s.extra||{}).live_paired||0,'Live Photos paired')+tile((s.extra||{}).duplicates||0,'duplicates skipped')+tile((s.extra||{}).written||0,'files placed')+tile((s.extra||{}).folders||0,'output folders')+(s.scan?tile(s.scan.json,'JSON files found'):''):'';
+  $('recent').innerHTML=(s.recent||[]).map(r=>`${esc(r.name)} &rarr; ${r.status==='duplicate'?'duplicate (skipped)':esc(r.to)+' ['+esc(r.status)+(r.live==='paired'?', live paired':'')+']'}`).reverse().join('<br>');
   if(s.state==='done'&&s.summary)showSummary(s.summary);
   if(['done','error','idle'].includes(s.state))clearInterval(timer);
 },500)}

@@ -30,8 +30,10 @@ import json
 import os
 import re
 import shutil
+import hashlib
 import subprocess
 import sys
+import threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -335,7 +337,7 @@ def pick_closest(m, candidates):
     return best
 
 
-REPORT_FIELDS = ["file", "sidecar", "match", "status", "detail", "live",
+REPORT_FIELDS = ["file", "sidecar", "match", "status", "detail", "live", "output",
                  "date", "date_before", "date_google",
                  "gps", "gps_before", "gps_google",
                  "desc", "desc_before", "desc_google",
@@ -368,54 +370,144 @@ def pair_live(target, cid):
     return target, ""
 
 
+def file_hash(path):
+    h = hashlib.sha1()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def keep_rank(p):
+    """Which copy of an exact duplicate to keep: year folders before albums, then lowest Takeout number."""
+    m = re.search(r"Takeout (\d+)", str(p))
+    return (0 if p.parent.name.startswith("Photos from") else 1, int(m.group(1)) if m else 0, str(p))
+
+
+def plan_duplicates(media, progress=None):
+    """Find byte-identical files. Returns ({duplicate_path: kept_path}, bytes_saved)."""
+    by_size = defaultdict(list)
+    for m in media:
+        try:
+            by_size[m.stat().st_size].append(m)
+        except OSError:
+            pass
+    candidates = [g for sz, g in by_size.items() if sz and len(g) > 1]
+    todo, done = sum(len(g) for g in candidates), 0
+    dupes, saved = {}, 0
+    for g in candidates:
+        by_hash = defaultdict(list)
+        for m in g:
+            by_hash[file_hash(m)].append(m)
+            done += 1
+            if progress:
+                progress(done, todo)
+        for same in by_hash.values():
+            if len(same) > 1:
+                same.sort(key=keep_rank)
+                for other in same[1:]:
+                    dupes[str(other)] = str(same[0])
+                    saved += other.stat().st_size
+    return dupes, saved
+
+
+def plan_live(media):
+    """Read each Live Photo video's still-image ID up front (before any file is moved)."""
+    return {str(m): live_id(m) for m in media if m.suffix.lower() in (".mp4", ".mov")}
+
+
+def prepare(args, media, progress=None):
+    args.lock, args.claimed = threading.Lock(), set()
+    args.dupes, args.dupe_bytes = (plan_duplicates(media, progress) if getattr(args, "dedupe", False) else ({}, 0))
+    args.live_plan = plan_live(media) if getattr(args, "pair_live", False) else {}
+
+
+def claim_dest(dest, args):
+    """Reserve a unique output path (thread-safe, also avoids clashes between files in a dry run)."""
+    with args.lock:
+        cand, i = dest, 0
+        while str(cand) in args.claimed or cand.exists():
+            i += 1
+            cand = dest.with_name(f"{dest.stem}_{i}{dest.suffix}")
+        args.claimed.add(str(cand))
+        return cand
+
+
+def dest_dir_for(m, taken, args, out_root):
+    if getattr(args, "layout", "folder") == "yearmonth":
+        t = taken
+        if not t:
+            ex = read_existing(m, m.suffix.lower() in VIDEO_EXT).get("date", "")
+            try:
+                t = datetime.strptime(ex[:19], "%Y:%m:%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
+            except ValueError:
+                return out_root / "Unknown date"
+        dt = datetime.fromtimestamp(t, timezone.utc)
+        return out_root / f"{dt:%Y}" / f"{dt:%Y-%m}"
+    return out_root / m.parent.name
+
+
 def process(m, idx, args, out_root):
     sc, how = find_sidecar(m, idx)
     if how == "tree-ambiguous":
-        sc = pick_closest(m, sc)
+        sc = sc[0] if m_is_dupe(m, args) else pick_closest(m, sc)
     row = {"file": str(m), "sidecar": str(sc) if sc else "", "match": how or "", "status": "",
            **{k: "" for k in REPORT_FIELDS if k not in ("file", "sidecar", "match", "status")}}
-    cid = None
-    if getattr(args, "pair_live", False) and m.suffix.lower() in (".mp4", ".mov"):
-        cid, why = live_id(m)
-        row["live"] = "paired" if cid else why
-    if not sc:
-        row["status"] = "no-json"
-        return row
-    d = load_json(sc)
-    if not d:
-        row["status"] = "bad-json"
+    kept = (getattr(args, "dupes", None) or {}).get(str(m))
+    if kept:
+        row["status"], row["detail"] = "duplicate", f"identical to {kept}"
         return row
     ext = m.suffix.lower()
-    exif_args, taken = build_args(d, ext, args.overwrite)
-    if ext not in NO_WRITE_EXT:
+    cid = None
+    if getattr(args, "pair_live", False) and ext in (".mp4", ".mov"):
+        cid, why = (args.live_plan.get(str(m)) or live_id(m))
+        row["live"] = "paired" if cid else why
+    d = load_json(sc) if sc else None
+    status0 = "no-json" if not sc else "bad-json"
+    exif_args, taken = build_args(d, ext, args.overwrite) if d else ([], None)
+    if d and ext not in NO_WRITE_EXT:
         row.update(classify(d, ext, read_existing(m, ext in VIDEO_EXT), args.overwrite))
+    dest = None
+    if out_root:
+        dest = claim_dest(dest_dir_for(m, taken, args, out_root) / m.name, args)
+        row["output"] = str(dest)
     if args.dry_run:
-        row["status"] = "would-update"
-        row["detail"] = " ".join(exif_args)[:200]
+        row["status"] = "would-update" if d else status0
+        row["detail"] = " ".join(exif_args)[:200] if d else ""
         return row
     target = m
     if out_root:
-        dest = unique_dest(out_root / m.parent.name / m.name)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(m, dest)
+        if getattr(args, "move", False):
+            shutil.move(str(m), str(dest))
+        else:
+            shutil.copy2(m, dest)
         target = dest
-    if exif_args and ext not in NO_WRITE_EXT:
+    if d and exif_args and ext not in NO_WRITE_EXT:
         ok, msg = run_exiftool(target, exif_args, args.overwrite, sidecar_for_raw=ext in RAW_EXT)
         row["status"] = "updated" if ok else "exiftool-error"
         row["detail"] = msg[:300]
-    else:
+    elif d:
         row["status"] = "mtime-only"
-    if cid and not args.dry_run:
+    else:
+        row["status"] = status0
+    if cid:
         target, err = pair_live(target, cid)
         if err:
             row["live"] = "pair-error"
             row["detail"] = (row["detail"] + " " + err).strip()[:300]
+        elif out_root:
+            row["output"] = str(target)
     if taken:
         try:
             os.utime(target, (taken, taken))
         except OSError:
             pass
     return row
+
+
+def m_is_dupe(m, args):
+    return str(m) in (getattr(args, "dupes", None) or {})
 
 
 def main():
@@ -426,6 +518,10 @@ def main():
     ap.add_argument("--overwrite", action="store_true", help="replace existing EXIF values")
     ap.add_argument("--pair-live", action="store_true",
                     help="relink Live Photo videos to their still (needs --out); videos become .MOV")
+    ap.add_argument("--layout", choices=["folder", "yearmonth"], default="folder",
+                    help="output layout: keep Google's folder names (merged), or YYYY/YYYY-MM by date taken")
+    ap.add_argument("--dedupe", action="store_true", help="skip byte-identical duplicate files")
+    ap.add_argument("--move", action="store_true", help="move files into --out instead of copying (frees space)")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--report", type=Path, default=Path("takeout_report.csv"))
     args = ap.parse_args()
@@ -434,6 +530,8 @@ def main():
         sys.exit("exiftool not found. macOS: brew install exiftool | Windows: https://exiftool.org")
     if args.pair_live and not (args.out or args.dry_run):
         sys.exit("--pair-live renames videos, so it needs --out (or --dry-run)")
+    if (args.layout == "yearmonth" or args.move) and not args.out:
+        sys.exit("--layout yearmonth and --move need --out")
     if not args.root.is_dir():
         sys.exit(f"{args.root} is not a folder")
 
@@ -441,6 +539,9 @@ def main():
     media, sidecars = scan(args.root)
     print(f"  {len(media)} media files, {len(sidecars)} json files")
     idx = build_index(sidecars)
+    prepare(args, media)
+    if args.dedupe:
+        print(f"  {len(args.dupes)} exact duplicates will be skipped ({args.dupe_bytes / 1e9:.1f} GB)")
 
     rows = []
     with ThreadPoolExecutor(max_workers=args.workers) as ex:

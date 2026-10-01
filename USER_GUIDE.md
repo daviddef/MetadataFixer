@@ -41,6 +41,9 @@ Pick a new empty folder. Fixed copies and reports are saved there, and your Take
 | Option | Default | What it does |
 |---|---|---|
 | Preview only (dry run) | **on** | Matches files and reports counts. Changes nothing. |
+| Remove exact duplicates | **on** | Skips byte-identical copies of the same photo (repeated across Takeouts or albums); keeps the one in `Photos from YYYY`. |
+| Output layout | merge folders | *Merge folders*: all `Photos from 2012` folders become one. *Year / Month*: `2012/2012-07` by date taken; files with no date go to `Unknown date`. |
+| Move instead of copy | off | Moves files into the output folder instead of copying. Saves disk space but empties your Takeout folders as it goes. |
 | Re-pair Live Photos | off | Re-links iPhone Live Photo videos to their still (see below). |
 | Overwrite existing EXIF values | off | Off: only fill in missing values. On: replace existing values with Google's. |
 
@@ -56,6 +59,14 @@ Use **Show reports in Finder**, and spot-check a few files:
 exiftool -DateTimeOriginal -GPSPosition -ImageDescription "/path/to/output/Photos from 2012/DSC_2865.JPG"
 ```
 Keep your Takeout folders until you are happy with the output.
+
+## Restructuring: copy vs move
+
+With an output folder the tool **builds a new, merged library there and leaves your Takeout folders untouched** (a second copy, so you need roughly as much free space again). Tick **Move** to relocate files instead; it uses no extra space but empties the Takeout folders, so have another backup first.
+
+Every file is placed, including those with no JSON (they keep their existing data). If two different files share a name, the second becomes `name_1`. Exact duplicates are detected by content, not name. Because duplicate album copies are skipped, **album membership is not preserved**; the photo stays in its `Photos from YYYY` folder. Use a fresh output folder each run: re-running into the same one creates `_1` copies.
+
+While it runs you see live counts (duplicates skipped, files placed, output folders) and the last dozen files with where each went. The summary ends with a table of the output folders.
 
 ## Reading the summary
 
@@ -78,7 +89,8 @@ The app also shows a **Sample of changes** table (first 15 files) with each valu
 Saved in the output folder (or on your Desktop if none); preview runs use `takeout_dryrun*` names:
 - `takeout_report.csv`: every file. Per field it shows the outcome plus the exact values: `date` / `date_before` / `date_google`, `gps` / `gps_before` / `gps_google` (latitude, longitude), `desc` / `desc_before` / `desc_google`, plus `people`, `favourite`, `live` (Live Photo result), `match` and `status`
 - `takeout_report_changes.csv`: only files where something was added, replaced or left alone
-- `takeout_report_no_json.csv`: only unmatched files
+- `takeout_report_no_json.csv`: only unmatched files (these are still placed in the output folder)
+- the `output` column of the main report says where each file went
 - `takeout_report_summary.txt`: the totals
 
 `*_google` is the value written when the outcome is *added* or *replaced*. `*_before` is what the file held (blank if it had nothing). Dates are shown as UTC.
@@ -132,6 +144,9 @@ python3 takeout_fix_metadata.py "/path/to/Takeouts" --out "/path/to/Fixed" --ove
 | `--out DIR` | Write fixed copies here instead of editing in place |
 | `--overwrite` | Replace existing EXIF values |
 | `--pair-live` | Re-pair Live Photos (needs `--out`) |
+| `--dedupe` | Skip byte-identical duplicate files |
+| `--layout folder\|yearmonth` | Merge same-named folders (default) or `YYYY/YYYY-MM` by date taken (needs `--out`) |
+| `--move` | Move into `--out` instead of copying (needs `--out`) |
 | `--report FILE` | Where to save the CSV (default `takeout_report.csv`) |
 | `--workers N` | Parallel workers (default 4) |
 
