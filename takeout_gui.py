@@ -20,14 +20,14 @@ import sys
 import threading
 import webbrowser
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.01-l"
-STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}, "recent": [], "clean": {"state": "idle"}, "update": {"state": "idle", "files": []}, "phase": None, "kind": "fix", "version": VERSION, "boot": time.time()}
+VERSION = "2026.10.01-q"
+STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}, "recent": [], "clean": {"state": "idle"}, "update": {"state": "idle", "files": []}, "phase": None, "kind": "fix", "cv": None, "cancel": False, "version": VERSION, "boot": time.time()}
 LOCK = threading.Lock()
 
 
@@ -205,8 +205,8 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
                 resolved.append(p)
         if not resolved:
             raise ValueError("Add at least one folder")
-        if (pair_live or move) and not out and not dry_run:
-            raise ValueError("Live Photo pairing and moving need an output folder")
+        if move and not out:
+            out = str(resolved[0])  # Move with no destination: merge into the first source folder, like Sort
         if not dry_run and not shutil.which("exiftool"):
             raise ValueError("exiftool not found. In Terminal run: brew install exiftool")
         media, sidecars, mseen, sseen = [], [], set(), set()
@@ -429,10 +429,10 @@ def run_sort(roots, out, dry_run, dedupe, move, bring_json):
             STATE.update(state="error", message=str(e))
 
 
-def run_convert(roots, dry_run, exts, include_live, quality, action):
+def run_convert(roots, dry_run, exts, include_live, quality, action, estimate=False):
     with LOCK:
         STATE.update(state="scanning", total=0, done=0, counts={}, message="Looking for old videos...", report="",
-                     summary=None, scan=None, extra={}, recent=[], phase=None, kind="convert")
+                     summary=None, scan=None, extra={}, recent=[], phase=None, kind="convert", cv=None, cancel=False)
     try:
         if not fx.have_ffmpeg():
             raise ValueError("ffmpeg not found. In Terminal run: brew install ffmpeg")
@@ -452,30 +452,145 @@ def run_convert(roots, dry_run, exts, include_live, quality, action):
         items = fx.scan_legacy(folders, exts)
         if not items:
             raise ValueError("No videos of the ticked types were found in those folders")
+        n_items = len(items)
         with LOCK:
-            STATE.update(state="running", total=len(items), message=f"Reading {len(items):,} videos...",
-                         scan={"media": len(items), "json": 0, "folders": len(folders)})
-        durations = {}
+            STATE.update(state="running", total=0, done=0, message=f"Reading the details of {n_items:,} videos...",
+                         phase={"stage": "pct", "done": 0, "total": n_items},
+                         scan={"media": n_items, "json": 0, "folders": len(folders)})
+        stop = lambda: bool(STATE.get("cancel"))
+        probed, finished = {}, 0
         with ThreadPoolExecutor(max_workers=4) as ex:
-            for (p, _), info in zip(items, ex.map(lambda it: fx.probe_video(it[0]), items)):
-                durations[str(p)] = (info or {}).get("duration", 0) or 0
-        total_secs = sum(durations.values())
+            futs = {ex.submit(fx.probe_video, it[0]): it for it in items}
+            for fu in as_completed(futs):
+                probed[str(futs[fu][0])] = fu.result()
+                finished += 1
+                if finished % 8 == 0 or finished == n_items:
+                    with LOCK:
+                        STATE["phase"] = {"stage": "pct", "done": finished, "total": n_items}
+                        STATE["message"] = f"Reading the details of your videos: {finished:,} of {n_items:,}"
+                if stop():
+                    for f_ in futs:
+                        f_.cancel()
+                    raise RuntimeError("Stopped by you while reading the videos. Nothing was changed.")
+        MODE_LABEL = {"remux": "re-wrap", "audio": "audio only", "encode": "re-encode"}
+        plan = {m: {"n": 0, "dur": 0.0, "bytes": 0} for m in MODE_LABEL}
+        info_of = {}
+        for p, _ in items:
+            info = probed.get(str(p))
+            if not info or not info["has_video"]:
+                info_of[str(p)] = None
+                continue
+            skip = p.suffix.lower() == ".mov" and not include_live and fx.is_live_video(p)
+            mode = fx.convert_mode(info)
+            info_of[str(p)] = (mode, info["duration"] or 0.0, skip)
+            if not skip:
+                d_ = plan[mode]
+                d_["n"] += 1
+                d_["dur"] += info["duration"] or 0.0
+                try:
+                    d_["bytes"] += p.stat().st_size
+                except OSError:
+                    pass
+        files_total = sum(d_["n"] for d_ in plan.values())
+        total_secs = sum(d_["dur"] for d_ in plan.values())
+        t0 = time.time()
+        cv = None if dry_run else {"files_total": files_total, "files_done": 0, "secs_total": total_secs, "secs_done": 0.0,
+                                   "plan": plan, "now": None, "recent": [], "bytes_before": 0, "bytes_after": 0,
+                                   "eta": None, "elapsed": 0.0}
+        with LOCK:
+            STATE.update(total=n_items, done=0, cv=cv, phase=None if dry_run else {"stage": "convert", "done": 0, "total": max(total_secs, 1.0)},
+                         message=("Checking" if dry_run else "Starting") + f" {n_items:,} videos...")
+        opts_crf = fx.QUALITY_CRF.get(quality, 20)
         opts = {"dry_run": dry_run, "action": action, "include_live": include_live,
-                "crf": fx.QUALITY_CRF.get(quality, 20)}
-        rows, counts, extra, recent = [], defaultdict(int), defaultdict(int), []
-        secs_done = 0.0
-        for i, (p, root) in enumerate(items, 1):
-            dur = durations.get(str(p), 0)
-            with LOCK:
-                STATE["message"] = f"{'Checking' if dry_run else 'Converting'} {i:,} of {len(items):,}: {p.name}"
-                if not dry_run:
-                    STATE["phase"] = {"stage": "convert", "done": secs_done, "total": total_secs}
-
-            def cb(secs, base=secs_done):
+                "crf": opts_crf, "should_stop": stop}
+        est_ratio, est_info = {}, {"samples": 0, "failed": 0}
+        if dry_run and estimate and plan["encode"]["n"]:
+            by_ext = defaultdict(list)
+            for p, _ in items:
+                meta = info_of.get(str(p))
+                if meta and meta[0] == "encode" and not meta[2] and meta[1] >= 3:
+                    by_ext[p.suffix.lower()].append(p)
+            picks = []
+            for e, lst in by_ext.items():
+                lst = sorted(lst, key=lambda q: q.stat().st_size)
+                step = max(1, len(lst) // 3)
+                picks += [(e, q) for q in lst[::step][:3]]
+            ratios = defaultdict(list)
+            for k, (e, q) in enumerate(picks, 1):
+                if stop():
+                    raise RuntimeError("Stopped by you. Nothing was changed.")
                 with LOCK:
-                    STATE["phase"] = {"stage": "convert", "done": base + max(0.0, secs), "total": total_secs}
+                    STATE["phase"] = {"stage": "pct", "done": k - 1, "total": max(1, len(picks))}
+                    STATE["message"] = f"Estimating the new sizes: test-encoding a short sample ({k} of {len(picks)}): {q.name}"
+                r_ = fx.sample_encode_ratio(q, probed[str(q)], opts_crf)
+                if r_ is None:
+                    est_info["failed"] += 1
+                else:
+                    ratios[e].append(r_)
+                    est_info["samples"] += 1
+            est_ratio = {e: sum(v) / len(v) for e, v in ratios.items()}
+            with LOCK:
+                STATE["phase"] = None
+        rate = {m: [0.0, 0.0] for m in MODE_LABEL}      # mode -> [seconds of footage processed, wall seconds spent]
+        done_by_mode = {m: 0.0 for m in MODE_LABEL}
+        default_speed = {"remux": 40.0, "audio": 25.0, "encode": 1.5}
+
+        def eta_secs(cur_mode=None, cur_secs=0.0):
+            rem = 0.0
+            for m, d_ in plan.items():
+                left = max(0.0, d_["dur"] - done_by_mode[m] - (cur_secs if m == cur_mode else 0.0))
+                sp = (rate[m][0] / rate[m][1]) if rate[m][1] > 5 else default_speed[m]
+                rem += left / max(sp, 0.05)
+            return rem
+
+        rows, counts, extra, recent = [], defaultdict(int), defaultdict(int), []
+        secs_done, stopped = 0.0, False
+        for i, (p, root) in enumerate(items, 1):
+            if stop():
+                stopped = True
+                break
+            meta = info_of.get(str(p))
+            mode, dur, skip = meta if meta else (None, 0.0, False)
+            real = (not dry_run) and meta is not None and not skip
+            try:
+                size = p.stat().st_size
+            except OSError:
+                size = 0
+            now = {"name": p.name, "dir": p.parent.name, "ext": p.suffix.lower(), "mode": mode, "size": size,
+                   "dur": dur, "secs": 0.0, "speed": None} if real else None
+            with LOCK:
+                if real:
+                    STATE["cv"]["now"] = dict(now)
+                    STATE["cv"]["eta"] = eta_secs()
+                    STATE["cv"]["elapsed"] = time.time() - t0
+                    STATE["message"] = (f"Converting video {STATE['cv']['files_done'] + 1:,} of {files_total:,}: {p.name} "
+                                        f"({MODE_LABEL[mode]}) · about {fmt_dur(STATE['cv']['eta'])} left")
+                elif dry_run:
+                    STATE["message"] = f"Checking {i:,} of {n_items:,}: {p.name}"
+
+            def cb(secs, speed=None, _now=now, _mode=mode, _base=secs_done):
+                if _now is None:
+                    return
+                _now["secs"], _now["speed"] = max(0.0, secs), speed
+                with LOCK:
+                    c = STATE["cv"]
+                    c["now"] = dict(_now)
+                    c["secs_done"] = _base + _now["secs"]
+                    c["elapsed"] = time.time() - t0
+                    c["eta"] = eta_secs(_mode, _now["secs"])
+                    STATE["phase"] = {"stage": "convert", "done": c["secs_done"], "total": max(total_secs, 1.0)}
+                    pct = int(100 * _now["secs"] / _now["dur"]) if _now["dur"] else 0
+                    STATE["message"] = (f"Converting video {c['files_done'] + 1:,} of {files_total:,}: {_now['name']} "
+                                        f"({MODE_LABEL[_mode]} {pct}%) · about {fmt_dur(c['eta'])} left")
+            w0 = time.time()
             row = fx.convert_file(p, root, opts, cb)
-            secs_done += dur
+            wall = time.time() - w0
+            if real and row["status"] in ("converted", "already-converted", "failed"):
+                secs_done += dur
+                done_by_mode[mode] += dur
+                if row["status"] == "converted":
+                    rate[mode][0] += dur
+                    rate[mode][1] += wall
             rows.append(row)
             counts[row["status"]] += 1
             if row["status"] in ("converted", "already-converted"):
@@ -489,11 +604,29 @@ def run_convert(roots, dry_run, exts, include_live, quality, action):
             recent.append(row)
             del recent[:-12]
             with LOCK:
+                if cv is not None and row["status"] in ("converted", "already-converted"):
+                    c = STATE["cv"]
+                    c["files_done"] += 1
+                    c["bytes_before"] += int(row["size_before"] or 0)
+                    c["bytes_after"] += int(row["size_after"] or 0)
+                    c["recent"].append({"name": p.name, "mode": mode, "before": int(row["size_before"] or 0),
+                                        "after": int(row["size_after"] or 0), "wall": round(wall, 1)})
+                    del c["recent"][:-8]
+                    c["now"] = None
+                elif cv is not None and row["status"] == "failed":
+                    STATE["cv"]["files_done"] += 1
+                    STATE["cv"]["now"] = None
                 STATE["done"] = i
                 STATE["counts"] = dict(counts)
                 STATE["extra"] = dict(extra)
                 STATE["recent"] = [{"name": Path(r["file"]).name, "status": r["status"],
                                     "to": (r["mode"] + " " if r["mode"] else ""), "live": ""} for r in recent]
+            if row["status"] == "cancelled":
+                stopped = True
+                break
+        with LOCK:
+            if STATE.get("cv"):
+                STATE["cv"]["now"] = None
         fx.close_all()
         report_dir = Path.home() / "Desktop"
         report_dir.mkdir(parents=True, exist_ok=True)
@@ -529,15 +662,42 @@ def run_convert(roots, dry_run, exts, include_live, quality, action):
             d["bytes"] += int(r["size_before"] or 0)
             if r["status"] in ("converted", "already-converted", "would-convert", "would-finish"):
                 d["converted"] += 1
+                d["conv_before"] = d.get("conv_before", 0) + int(r["size_before"] or 0)
             elif r["status"] == "skipped-live":
                 d["live"] += 1
             else:
                 d["failed"] += 1
         sm["types"] = types
+        for e, d in types.items():
+            d["after"] = sum(int(r["size_after"] or 0) for r in done_rows if Path(r["file"]).suffix.lower() == e)
+        if dry_run:
+            est_total = 0
+            have_est = bool(est_ratio)
+            for e, d in types.items():
+                tot = 0
+                for r in todo_rows:
+                    if Path(r["file"]).suffix.lower() != e:
+                        continue
+                    sz = int(r["size_before"] or 0)
+                    if r["mode"] == "encode":
+                        tot += sz * est_ratio.get(e, 0) if e in est_ratio else 0
+                    else:
+                        tot += sz
+                d["est_after"] = int(tot) if (e in est_ratio or not any(r["mode"] == "encode" and Path(r["file"]).suffix.lower() == e for r in todo_rows)) else None
+                d["est_ratio"] = est_ratio.get(e)
+            sm["est"] = {"samples": est_info["samples"], "failed": est_info["failed"],
+                         "after": sum(d["est_after"] or 0 for d in types.values()),
+                         "complete": all(d.get("est_after") is not None for d in types.values() if d["converted"]),
+                         "asked": bool(estimate)}
         sm["remux"] = sm["remux"] + sum(1 for r in done_rows + todo_rows if r["mode"] == "audio")
         sm["top"] = [{"file": Path(r["file"]).name, "mode": r["mode"], "before": int(r["size_before"] or 0), "after": int(r["size_after"] or 0)}
                      for r in sorted(sized, key=lambda r: -(int(r["size_before"] or 0) - int(r["size_after"] or 0)) if done_rows
                                      else -int(r["size_before"] or 0))[:15]]
+        sm["elapsed"] = round(time.time() - t0)
+        sm["stopped"] = stopped
+        if stopped:
+            sm["tips"].append("Stopped by you after %d videos. Nothing is half-done: press Start again with the same settings and "
+                              "the videos already converted are recognised and skipped." % sm["converted"])
         if sm["skipped_live"]:
             sm["tips"].append("%d Live Photo videos were left as .MOV so Apple Photos keeps them paired with their stills. "
                               "Tick 'Also convert Live Photo videos' only if you do not need that." % sm["skipped_live"])
@@ -788,8 +948,99 @@ def run_cleanup(roots, dry_run, opts):
             STATE.update(state="error", message=str(e))
 
 
+def fmt_dur(s):
+    s = int(max(0, s))
+    h, r = divmod(s, 3600)
+    m, sec = divmod(r, 60)
+    return f"{h}h {m:02d}m" if h else (f"{m}m {sec:02d}s" if m else f"{sec}s")
+
+
 def fmt_bytes(b):
     return f"{b / 1e9:.2f} GB" if b > 1e9 else f"{b / 1e6:.1f} MB" if b > 1e6 else f"{round(b / 1e3)} KB"
+
+
+def run_merge(roots, dest, opts, dry_run):
+    with LOCK:
+        STATE.update(state="scanning", total=0, done=0, counts={}, message="Looking through the folders...", report="",
+                     summary=None, scan=None, extra={}, recent=[], phase=None, kind="merge")
+    try:
+        resolved, seen = [], set()
+        for r in roots:
+            p = Path(r).expanduser()
+            if not p.is_dir():
+                raise ValueError(f"Not a folder: {p}")
+            if p.resolve() not in seen:
+                seen.add(p.resolve())
+                resolved.append(p)
+        if not resolved:
+            raise ValueError("Add the folders to merge in the bar at the top")
+        fx.check_merge_roots([str(p) for p in resolved], dest or None, bool(opts.get("move")))
+        in_place = not dest
+        counts, extra, recent = defaultdict(int), defaultdict(int), []
+
+        def prog(done, total):
+            with LOCK:
+                STATE.update(state="running", total=total, done=done,
+                             message=f"{'Checking' if dry_run else 'Merging'} {done:,} of {total:,} files")
+
+        def item(row):
+            counts[row["status"]] += 1
+            if row["status"] in ("placed", "kept-both", "replaced", "kept-existing"):
+                extra["placed"] += 1
+            if row["status"] in ("kept-both", "replaced", "kept-existing"):
+                extra["clashes"] += 1
+            if row["status"] == "identical":
+                extra["identical"] += 1
+            if row["status"] == "failed":
+                extra["errors"] += 1
+            recent.append({"name": os.path.basename(row["src"]), "status": row["status"],
+                           "to": (Path(row["dest"]).parent.name + "/") if row["dest"] else "", "live": ""})
+            del recent[:-12]
+            with LOCK:
+                STATE["counts"] = dict(counts)
+                STATE["extra"] = dict(extra)
+                STATE["recent"] = list(recent)
+        rows, per_root, merged = fx.merge_trees([str(p) for p in resolved], dest or None, opts, dry_run, prog, item)
+        report_dir = Path.home() / "Desktop"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        report = report_dir / ("takeout_merge_preview.csv" if dry_run else "takeout_merge_report.csv")
+        with open(report, "w", newline="", encoding="utf-8") as fh:
+            w = csv.DictWriter(fh, fieldnames=["root", "src", "dest", "status", "detail"])
+            w.writeheader()
+            w.writerows(rows)
+        st = defaultdict(int)
+        for r in rows:
+            st[r["status"]] += 1
+        base = str(Path(dest or resolved[0]))
+        sm = {"kind": "merge", "dry_run": dry_run, "move": bool(opts.get("move")), "in_place": in_place, "dest": base,
+              "total": len(rows), "brought": st["placed"] + st["kept-both"] + st["replaced"] + st["kept-existing"],
+              "in_place_files": st["in-place"] + st["already-done"], "identical": st["identical"],
+              "clashes": st["kept-both"] + st["replaced"] + st["kept-existing"], "failed": st["failed"],
+              "merged_dirs": len(merged),
+              "per_root": per_root,
+              "merged": [[os.path.relpath(d, base) if d != base else ".", len(v)] for d, v in sorted(merged.items())][:60],
+              "clash_rows": [{"file": os.path.relpath(r["src"], r["root"]), "status": r["status"], "detail": r["detail"]}
+                             for r in rows if r["status"] in ("kept-both", "replaced", "kept-existing", "failed")][:60],
+              "tips": []}
+        c = opts.get("conflict", "both")
+        if sm["clashes"]:
+            sm["tips"].append(("%d different files shared a name and a folder. " % sm["clashes"]) +
+                               ("Both were kept: the second one is named name_1." if c == "both" else
+                                "The %s file kept the name; the other was set aside in the _merge_conflicts folder inside the destination, so nothing was lost." % c))
+        if sm["identical"]:
+            sm["tips"].append("%d identical copies were kept once%s." % (sm["identical"],
+                              (" (the extra copy was " + ("deleted" if opts.get("dupes") == "delete" else "moved to a _duplicates folder") + ")") if opts.get("move") and not dry_run else ""))
+        if in_place:
+            sm["tips"].append("Merged in place: everything was brought into %s, the first folder in your list." % base)
+        if opts.get("move") and not dry_run:
+            sm["tips"].append("Folders left empty by the move were removed.")
+        if dry_run:
+            sm["tips"].append("This was a preview: nothing was copied, moved or deleted.")
+        with LOCK:
+            STATE.update(state="done", report=str(report), summary=sm, message="Finished", phase=None)
+    except Exception as e:
+        with LOCK:
+            STATE.update(state="error", message=str(e))
 
 
 AUX_JSON = {"metadata.json", "print-subscriptions.json", "shared_album_comments.json",
@@ -990,6 +1241,22 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, "{}")
         elif self.path == "/api/update":
             self._send(200, json.dumps(apply_update()))
+        elif self.path == "/api/cancel":
+            with LOCK:
+                if STATE["state"] in ("scanning", "running"):
+                    STATE["cancel"] = True
+            self._send(200, "{}")
+        elif self.path == "/api/merge_start":
+            with LOCK:
+                busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
+            if busy:
+                return self._send(409, json.dumps({"error": "A job is already running"}))
+            o = body.get("opts", {})
+            opts = {"move": bool(o.get("move")), "conflict": o.get("conflict", "both"), "dupes": o.get("dupes", "delete"),
+                    "tidy": bool(o.get("tidy")), "nocase": bool(o.get("nocase", True)), "prune": True}
+            threading.Thread(target=run_merge, daemon=True, args=(
+                body.get("roots", []), body.get("dest", ""), opts, bool(body.get("dry_run")))).start()
+            self._send(200, "{}")
         elif self.path == "/api/convert_scan":
             try:
                 folders = check_clean_folders(body.get("roots", []))
@@ -1023,7 +1290,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(409, json.dumps({"error": "A job is already running"}))
             threading.Thread(target=run_convert, daemon=True, args=(
                 body.get("roots", []), bool(body.get("dry_run")), body.get("exts", []),
-                bool(body.get("include_live")), body.get("quality", "high"), body.get("action", "move"))).start()
+                bool(body.get("include_live")), body.get("quality", "high"), body.get("action", "move"), bool(body.get("estimate")))).start()
             self._send(200, "{}")
         elif self.path == "/api/sort_start":
             with LOCK:
@@ -1119,6 +1386,14 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 .frow .fchips{flex:1 1 160px;margin-top:0;min-width:0}.frow:not(:first-child) input[type=text]{flex:1 1 160px;min-width:0;padding:5px 8px;font-size:12px}
 .sub{display:block;margin-top:7px;font-size:13px;color:var(--ink);line-height:1.4}.sub input{margin-right:6px}
 .vtypes{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:8px}.vt{font-size:13px;white-space:nowrap}.vt .vc{color:var(--mute)}
+.cvbox{border:1px solid var(--line);border-radius:12px;padding:12px;margin:0 0 12px;background:var(--bg)}
+.cvhead{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.cvhead .mode{padding:2px 9px;border-radius:999px;background:var(--acc);color:#fff;font-size:12px}
+.cvname{font-weight:600;margin:6px 0 2px;word-break:break-all}.cvmeta{color:var(--mute);font-size:13px;margin-top:6px}
+.mbar{height:16px;background:var(--line);border-radius:9px;overflow:hidden;position:relative}.mbar>i{display:block;height:100%;background:linear-gradient(90deg,var(--acc),#7c5cff);transition:width .3s}.mbar>span{position:absolute;right:8px;top:0;line-height:16px;font-size:11px;font-weight:700;color:var(--ink)}
+.cvgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:10px}.cvgrid>div{border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:var(--card)}.cvgrid b{display:block;font-size:16px;font-variant-numeric:tabular-nums}.cvgrid span{color:var(--mute);font-size:12px}
+.cvrecent{font-size:13px;margin-top:10px}.cvrecent>div{padding:2px 0;display:flex;gap:8px;flex-wrap:wrap}
+.hero .fbar{margin-top:14px;padding-top:10px;border-top:1px solid var(--line)}
+.opt>div{min-width:0}.sel{max-width:100%}
 </style></head><body><main>
 <div id="upd" style="display:none" class="card"><b>A newer version is available.</b> <span id="updmsg"></span>
 <div style="margin-top:8px"><button class="p" id="updgo">Update now</button> <button id="updno">Not now</button></div></div>
@@ -1138,22 +1413,21 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
       <p class="tag">Put the right date, place and caption back on your Google Photos export. <span id="ver" style="opacity:.6;white-space:nowrap"></span> <a href="#" id="vercheck" style="font-size:13px;white-space:nowrap">Check for updates</a> <span id="vermsg" style="font-size:13px;white-space:nowrap"></span></p>
     </div>
   </div>
-  <div class="chips"><span class="chip priv">&#128274; Runs only on your computer: nothing is uploaded</span></div>
+  <div class="fbar" id="fbar">
+    <div class="frow" id="frs"><span class="flabel">&#128193; Source <b id="fsum"></b></span><div class="fchips" id="fchips"></div><button id="fadd" class="sm">Add folders...</button><button id="fedit" class="sm">Edit list</button></div>
+    <div id="fpanel" style="display:none"><textarea id="fall" placeholder="One folder path per line (drag folders here too)" spellcheck="false"></textarea><div class="row" style="margin-top:6px"><button id="fdone" class="p sm">Done</button><button id="fclear" class="sm">Clear all</button></div></div>
+    <div class="frow" id="frd"><span class="flabel">&#127919; Destination</span><input type="text" id="fdest" placeholder="Where fixed or sorted copies go (optional when moving)" spellcheck="false"><button id="fdbtn" class="sm">Choose...</button><button id="fdclr" class="sm">Clear</button></div>
+  </div>
 </header>
 
 <div id="frame">
   <nav class="tabs" role="tablist">
     <button class="tab" data-tab="fix" role="tab"><b>1</b> Fix metadata</button>
     <button class="tab" data-tab="sort" role="tab"><b>2</b> Sort</button>
-    <button class="tab" data-tab="clean" role="tab"><b>3</b> Clean up</button>
-    <button class="tab" data-tab="convert" role="tab"><b>4</b> Convert videos</button>
+    <button class="tab" data-tab="merge" role="tab"><b>3</b> Merge folders</button>
+    <button class="tab" data-tab="clean" role="tab"><b>4</b> Clean up</button>
+    <button class="tab" data-tab="convert" role="tab"><b>5</b> Convert videos</button>
   </nav>
-  <div class="fbar" id="fbar">
-    <div class="frow" id="frs"><span class="flabel">&#128193; Source <b id="fsum"></b></span><div class="fchips" id="fchips"></div><button id="fadd" class="sm">Add folders...</button><button id="fedit" class="sm">Edit list</button></div>
-    <div id="fpanel" style="display:none"><textarea id="fall" placeholder="One folder path per line (drag folders here too)" spellcheck="false"></textarea><div class="row" style="margin-top:6px"><button id="fdone" class="p sm">Done</button><button id="fclear" class="sm">Clear all</button></div></div>
-    <div class="frow" id="frd"><span class="flabel">&#127919; Destination</span><input type="text" id="fdest" placeholder="Where fixed or sorted copies go (optional when moving)" spellcheck="false"><button id="fdbtn" class="sm">Choose...</button><button id="fdclr" class="sm">Clear</button><button id="fcollapse" class="sm" title="Hide the folder boxes">&#9650;</button></div>
-    <div class="frow" id="fcol" style="display:none"><span class="flabel" id="fcolt"></span><button id="fexpand" class="sm" title="Show the folder boxes">&#9660; Show</button></div>
-  </div>
   <div class="status"><div class="srow"><span id="msg">Ready. Choose a tab, set it up and press Start.</span><a href="#" id="goto" style="display:none">View results &rarr;</a></div>
   <div class="bar" id="bar"><i id="fill"></i><span id="pct">0%</span></div></div>
 </div>
@@ -1167,7 +1441,7 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 <div class="opt"><input type="checkbox" id="dry" checked><div>Preview only<small>On by default. Works out what it would do and reports the numbers, but changes nothing. Untick to do it for real.</small></div></div>
 <div class="opt"><input type="checkbox" id="dedupe" checked><div>Remove exact duplicates<small>Skips byte-identical copies (the same photo repeated across Takeouts or albums). Keeps the copy in 'Photos from YYYY'. Needs an extra read pass over files that share a size.</small></div></div>
 <div class="opt"><input type="checkbox" id="move"><div>Move files instead of copying<small>Saves disk space but empties your Takeout folders as it goes. Off = safe copy (needs roughly as much free space again).</small></div></div>
-<div class="opt"><input type="checkbox" id="live" checked><div>Re-pair Live Photos<small>Copies each still's Apple ID onto its video and saves the video as .MOV so Photos can treat them as one Live Photo. Needs an output folder.</small></div></div>
+<div class="opt"><input type="checkbox" id="live" checked><div>Re-pair Live Photos<small>Copies each still's Apple ID onto its video and saves the video as .MOV so Photos can treat them as one Live Photo. Works in place too: the video is renamed to .MOV beside its photo.</small></div></div>
 <div class="opt"><div style="flex:1"><label for="datepol" style="font-weight:600">When a photo already has a date and Google&#39;s is different</label>
 <select id="datepol" class="sel"><option value="earlier" selected>Keep the earlier date (recommended)</option><option value="photo">Keep the photo&#39;s own date</option><option value="google">Use Google&#39;s date</option></select>
 <small>Google sometimes records the day a photo was uploaded or re-saved instead of the day it was taken, and that day is always later. Keeping the earlier of the two is usually right. A photo with no date at all always gets Google&#39;s.</small></div></div>
@@ -1177,6 +1451,7 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 
 <div id="results">
 <div class="card" id="prog" style="display:none;margin-top:14px">
+<div id="cvlive" style="display:none"></div>
 <div class="tiles" id="tiles"></div>
 <div id="recent" style="font:12px ui-monospace,Menlo,monospace;color:var(--mute);line-height:1.6;overflow:hidden"></div></div>
 
@@ -1188,7 +1463,7 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 </section>
 <section class="pane" id="pane-sort">
 <h2 class="ph">Sort only: merge folders, remove duplicates</h2>
-<div class="card"><small style="margin-top:0">Tidies the folder structure and nothing else: no dates, locations or captions are touched. All the same-named folders (every <i>Photos from 2012</i>) are merged into one, and identical duplicate photos are skipped. Use it on its own, or before Part 1.</small>
+<div class="card"><small style="margin-top:0">Tidies the folder structure and nothing else: no dates, locations or captions are touched. All the same-named folders (every <i>Photos from 2012</i>) are merged into one, and identical duplicate photos are skipped. Use it on its own, or before Part 1. To merge ordinary folders and decide what happens to name clashes, use the <b>Merge folders</b> tab.</small>
 <div class="usef" style="margin-top:12px"><b>Folders to sort:</b> <span class="fnote"></span> (the first one in the list is where everything merges when you sort in place)</div>
 <div class="usef" style="margin-top:12px"><b>Destination:</b> <span class="dnote" data-empty="none chosen: with Move, everything merges into the first source folder"></span></div>
 <small>When you tick <b>Move</b> you can leave this empty: everything is then merged into the <b>first source folder in the header</b>, so you can sort in place. Folders with the same path (for example <i>2014/08</i> in two different folders, or every <i>Photos from 2012</i>) are merged into one; <i>Takeout N / Google Photos</i> wrappers are ignored.</small>
@@ -1198,6 +1473,24 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 <div class="opt"><input type="checkbox" id="smove"><div>Move instead of copy<small>Saves disk space but empties the source folders as it goes. Off = copy (needs about as much free space again).</small></div></div>
 <button class="p" id="sgo" style="margin-top:6px">Start sorting</button></div>
 
+</section>
+<section class="pane" id="pane-merge">
+<h2 class="ph">Merge folders</h2>
+<div class="card"><small style="margin-top:0">Brings two or more folders together into one. Folders with the same name at any depth are merged, their files are combined, identical files are kept once, and different files with the same name are handled the way you choose below. Unlike <i>Sort</i> (which is built around Google Takeout), this works on any folders and gives you control over name clashes.</small>
+<div class="usef" style="margin-top:10px"><b>Folders to merge (the Source list):</b> <span class="fnote"></span></div>
+<div class="usef"><b>Merge into (the Destination):</b> <span class="dnote" data-empty="none chosen: with Move ticked, everything is merged into the first source folder"></span></div>
+<div class="opt"><input type="checkbox" id="mgdry" checked><div>Preview only<small>On by default. Shows which folders would merge, how many files, identical copies and name clashes, and changes nothing.</small></div></div>
+<div class="opt"><input type="checkbox" id="mgmove"><div>Move instead of copy<small>Takes the files out of the source folders and empties them (needs no extra space). With no destination chosen, everything is merged into the <b>first</b> source folder. Off = copy into the Destination, leaving your sources untouched (needs about as much free space again).</small></div></div>
+<div class="opt"><div style="flex:1"><label for="mgconf" style="font-weight:600">When two different files have the same name in the same folder</label>
+<select id="mgconf" class="sel"><option value="both" selected>Keep both (the second is named name_1)</option><option value="newer">The newer file keeps the name</option><option value="larger">The larger file keeps the name</option><option value="first">The file from the first source folder keeps the name</option></select>
+<small>With the last three, the other file is not deleted: it is set aside in a <i>_merge_conflicts</i> folder inside the destination so you can review it.</small></div></div>
+<div class="opt"><div style="flex:1"><label for="mgdup" style="font-weight:600">Identical files (same content)</label>
+<select id="mgdup" class="sel"><option value="delete" selected>Keep one copy; when moving, delete the extra copy</option><option value="aside">Keep one copy; when moving, move the extra to a _duplicates folder</option></select>
+<small>Files are compared by their content, not just their names. When copying, identical files are simply not copied twice.</small></div></div>
+<div class="opt"><input type="checkbox" id="mgtidy" checked><div>Treat <i>Folder (1)</i>, <i>Folder copy</i> and extra spaces as the same folder as <i>Folder</i><small>Real names such as <i>Summer (2019)</i> are not changed. Applies to folder names only.</small></div></div>
+<div class="opt"><input type="checkbox" id="mgcase" checked><div>Ignore upper and lower case in folder names<small>So <i>photos</i> and <i>Photos</i> become one folder (the first spelling found is used).</small></div></div>
+<small>Not touched: shortcuts. App and library bundles (such as <i>.photoslibrary</i>) are moved as a single item. Invisible system files (.DS_Store and the like) are left out.</small>
+<button class="p" id="mgo" style="margin-top:10px">Start</button></div>
 </section>
 <section class="pane" id="pane-clean">
 <h2 class="ph">Clean up</h2>
@@ -1232,6 +1525,7 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 <div class="card"><small style="margin-top:0">Turns older video formats (<b>.avi</b>, <b>.mov</b>, <b>.mpg</b>, <b>.wmv</b>, <b>.3gp</b> and more) into <b>.mp4</b>, which plays on every phone, TV and app. Videos that are already H.264 or HEVC are simply re-wrapped (fast, no quality loss); others are re-encoded. Dates and locations are carried across. Needs <b>ffmpeg</b> (in Terminal: <code>brew install ffmpeg</code>).</small>
 <div class="usef" style="margin-top:12px"><b>Folders to scan:</b> <span class="fnote"></span></div>
 <div class="opt"><input type="checkbox" id="vdry" checked><div>Preview only<small>On by default. Counts what would be converted (and how), changes nothing.</small></div></div>
+<div class="opt"><input type="checkbox" id="vest" checked><div>Estimate the new sizes in the preview<small>Test-encodes a few short samples (about 8 seconds each, up to 3 per video type) with your quality setting, and uses the result to predict the size after conversion. Adds a minute or two to a preview of videos that need re-encoding.</small></div></div>
 <div class="opt"><div style="flex:1"><b>Video types to convert</b> <button id="vscan" class="sm" style="margin-left:8px">Scan folders for counts</button>
 <div id="vtypes" class="vtypes"></div>
 <div id="vscansum" class="tip" style="display:none;margin-top:8px"></div>
@@ -1278,16 +1572,13 @@ const dest=()=>$('fdest').value.trim().replace(/\/+$/,'');
 function renderDest(){
   document.querySelectorAll('.dnote').forEach(e=>{e.textContent=dest()||e.dataset.empty||'none chosen'});
   const nm=p=>p.split('/').filter(Boolean).pop()||p;
-  $('fcolt').textContent='\u{1F4C1} '+(FOLDERS.length||'no')+(FOLDERS.length===1?' source':' sources')+'  \u2192  \u{1F3AF} '+(dest()?nm(dest()):'no destination')}
+}
 function saveDest(){try{localStorage.setItem('dest',dest())}catch(e){};renderDest()}
 $('fdest').value=DEST;
 $('fdest').oninput=saveDest;
 $('fdbtn').onclick=async()=>{const r=await post('/api/choose',{prompt:'Choose the destination folder'});if(r.paths&&r.paths[0]){$('fdest').value=r.paths[0].replace(/\/+$/,'');saveDest()}};
 $('fdclr').onclick=()=>{$('fdest').value='';saveDest()};
-function setCollapsed(c){['frs','frd'].forEach(i=>$(i).style.display=c?'none':'flex');$('fcol').style.display=c?'flex':'none';if(c)$('fpanel').style.display='none';try{localStorage.setItem('fcollapsed',c?'1':'')}catch(e){}}
-$('fcollapse').onclick=()=>setCollapsed(true);$('fexpand').onclick=()=>setCollapsed(false);
-let col=false;try{col=!!localStorage.getItem('fcollapsed')}catch(e){}
-renderDest();setCollapsed(col);
+renderDest();
 renderFolders();
 
 $('go').onclick=async()=>{
@@ -1304,6 +1595,7 @@ function tbl(head,rows){return `<table><tr>${head.map((h,i)=>`<th class="${i?'n'
 function bars(rows){const m=Math.max(1,...rows.map(r=>r[2]));return rows.map(r=>[esc(r[0]||'(none)'),r[1].toLocaleString(),r[2].toLocaleString()+`<span class="mini" style="width:${Math.round(60*r[2]/m)}px"></span>`])}
 function showSummary(s){
   if(s.kind==='cleanup'){showCleanup(s);return}
+  if(s.kind==='merge'){showMerge(s);return}
   if(s.kind==='convert'){showConvert(s);return}
   if(s.kind==='sort'){showSort(s);return}
   let h=`<div class="tiles">${tile(s.total,'media files')}${tile(s.duplicates,'exact duplicates skipped')}${tile(s.matched,'unique files matched ('+s.pct_matched+'%)','ok')}${tile(s.no_json,'no JSON found',s.no_json?'bad':'ok')}${tile(s.orphans,'JSON with no photo')}</div>`;
@@ -1377,7 +1669,7 @@ function setBar(barId,fillId,pctId,pct,indet){
   pct=Math.max(0,Math.min(100,pct));fill.style.width=pct+'%';lab.textContent=Math.floor(pct)+'%';
   if(pct>=12){lab.className='';lab.style.left='calc('+pct+'% - 44px)'}else{lab.className='out';lab.style.left='calc('+pct+'% + 8px)'}}
 
-const TABS=['fix','sort','clean','convert'];const tabOf=k=>({cleanup:'clean'}[k]||k);let jobKind='fix';
+const TABS=['fix','sort','merge','clean','convert'];const tabOf=k=>({cleanup:'clean'}[k]||k);let jobKind='fix';
 function showTab(t){if(!TABS.includes(t))t='fix';
   TABS.forEach(x=>{$('pane-'+x).style.display=x===t?'block':'none';document.querySelector('.tab[data-tab="'+x+'"]').classList.toggle('on',x===t)});
   try{localStorage.setItem('tab',t)}catch(e){}
@@ -1400,11 +1692,13 @@ $('vgo').onclick=async()=>{
   const act=$('vact').value;
   if(act==='delete'&&!$('vdry').checked){const t=prompt('This permanently deletes each original video after its .mp4 is verified. It cannot be undone.\nType DELETE to confirm.');if(t!=='DELETE')return}
   $('sum').style.display='none';
-  const r=await post('/api/convert_start',{roots:vroots(),dry_run:$('vdry').checked,exts:exts,include_live:$('vlive').checked,quality:$('vq').value,action:act});
+  const r=await post('/api/convert_start',{roots:vroots(),dry_run:$('vdry').checked,exts:exts,include_live:$('vlive').checked,quality:$('vq').value,action:act,estimate:$('vest').checked});
   if(r.error)alert(r.error);else{jobKind='convert';placeResults('convert');$('prog').style.display='block';poll()}};
 
-const VT=[['.avi',1],['.mov',1],['.mpg',1],['.mpeg',1],['.wmv',1],['.3gp',1],['.flv',1],['.mkv',0],['.mts',0],['.m2ts',0],['.vob',0]];
-$('vtypes').innerHTML=VT.map(([e,d])=>`<label class="vt"><input type="checkbox" data-ext="${e}" ${d?'checked':''}> ${e} <span class="vc" data-ext="${e}"></span></label>`).join('');
+const VT=[['.avi',1],['.mov',0],['.mpg',1],['.mpeg',1],['.wmv',1],['.3gp',1],['.flv',1],['.mkv',1],['.mts',1],['.m2ts',1],['.vob',1]];
+let vsaved=null;try{vsaved=JSON.parse(localStorage.getItem('vtypes')||'null')}catch(e){}
+$('vtypes').innerHTML=VT.map(([e,d])=>`<label class="vt"><input type="checkbox" data-ext="${e}" ${(vsaved?vsaved.includes(e):d)?'checked':''}> ${e} <span class="vc" data-ext="${e}"></span></label>`).join('');
+$('vtypes').onchange=()=>{try{localStorage.setItem('vtypes',JSON.stringify([...document.querySelectorAll('#vtypes input:checked')].map(i=>i.dataset.ext)))}catch(e){}};
 $('vscan').onclick=async()=>{
   if(!vroots().length){alert('Add your folders in the bar at the top first');return}
   const b=$('vscan');b.disabled=true;b.textContent='Scanning...';
@@ -1416,10 +1710,58 @@ $('vscan').onclick=async()=>{
     sp.textContent=t?'('+t.n.toLocaleString()+' · '+fmtBytes(t.bytes)+(t.live?' · '+t.live.toLocaleString()+' Live Photo':'')+')':'(none)'});
   const el=$('vscansum');el.style.display='block';
   el.innerHTML=tot?`Found <b>${tot.toLocaleString()}</b> videos (${fmtBytes(bytes)}) of these types.`+(live?` <b>${live.toLocaleString()}</b> of the .mov files are <b>Live Photo videos</b> (left alone unless you tick the Live Photo option below).`:''):'No videos of these types were found in the folders at the top.'};
+
+// ---- Merge folders
+$('mgo').onclick=async()=>{
+  if(!roots().length){alert('Add the folders to merge in the bar at the top first');return}
+  const mv=$('mgmove').checked;
+  if(!mv&&!dest()){alert('Choose a Destination at the top, or tick "Move" to merge everything into the first source folder');return}
+  if(mv&&!$('mgdry').checked&&!confirm(dest()?'MOVE will take the files out of your source folders and merge them into '+dest()+'. Make sure you have a backup. Continue?':'MOVE will merge everything into '+roots()[0]+' and take files out of the other folders. Make sure you have a backup. Continue?'))return;
+  $('sum').style.display='none';
+  const r=await post('/api/merge_start',{roots:roots(),dest:dest(),dry_run:$('mgdry').checked,opts:{move:mv,conflict:$('mgconf').value,dupes:$('mgdup').value,tidy:$('mgtidy').checked,nocase:$('mgcase').checked}});
+  if(r.error)alert(r.error);else{jobKind='merge';placeResults('merge');$('prog').style.display='block';poll()}};
+function showMerge(s){
+  const w=s.dry_run?'would be ':'';
+  let h=`<div class="tiles">${tile(s.total,'files found')}${tile(s.brought,'files '+w+(s.move?'moved':'copied')+' in','ok')}${tile(s.in_place_files,'already in place')}${tile(s.identical,'identical copies (kept once)')}${tile(s.clashes,'name clashes resolved')}${tile(s.merged_dirs,'folders '+w+'merged from 2+ sources')}${tile(s.failed,'problems',s.failed?'bad':'')}</div>`;
+  h+=`<div class="tip" style="border-color:var(--acc)">Merged into <b>${esc(s.dest)}</b>${s.in_place?' (the first source folder)':''}.</div>`;
+  h+=s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
+  h+='<h2>By source folder</h2>'+tbl(['Source folder','Files','Brought in','Identical','Name clashes','Problems'],s.per_root.map(r=>[esc(r.root.split('/').filter(Boolean).pop()||r.root),r.found.toLocaleString(),r.placed.toLocaleString(),r.identical.toLocaleString(),r.conflicts.toLocaleString(),r.failed.toLocaleString()]));
+  if(s.merged.length)h+=`<h2>Folders that ${s.dry_run?'would be ':''}came together from 2 or more sources</h2>`+tbl(['Folder','Sources'],s.merged.map(m=>[esc(m[0]),m[1]]))+(s.merged_dirs>s.merged.length?'<small>Showing '+s.merged.length+' of '+s.merged_dirs+'. See the CSV for all.</small>':'');
+  if(s.clash_rows.length)h+='<h2>Name clashes and problems</h2>'+tbl(['File','Result','Detail'],s.clash_rows.map(r=>[esc(r.file),esc(r.status),esc(r.detail)]));
+  h+='<small>Saved: a CSV of every file and where it went (on your Desktop).</small>';
+  $('sumbody').innerHTML=h;$('sum').style.display='block'}
+
+function fmtDur(sec){sec=Math.max(0,Math.round(sec||0));const h=Math.floor(sec/3600),m=Math.floor(sec%3600/60),s=sec%60;return h?h+'h '+String(m).padStart(2,'0')+'m':m?m+'m '+String(s).padStart(2,'0')+'s':s+'s'}
+function renderCvLive(s){
+  const el=$('cvlive');const c=s.cv;
+  if(jobKind!=='convert'||!c||s.state!=='running'||!c.files_total){el.style.display='none';return}
+  const n=c.now,pl=c.plan||{};
+  const MODEL={remux:'Re-wrap (fast, lossless)',audio:'Audio only',encode:'Re-encode (slow)'};
+  const planTxt=Object.entries(pl).filter(([k,v])=>v.n).map(([k,v])=>`${v.n.toLocaleString()} ${({remux:'quick re-wraps',audio:'audio-only fixes',encode:'full re-encodes'})[k]} (${fmtDur(v.dur)} of footage)`).join(' &middot; ');
+  const pctAll=c.secs_total?Math.min(100,100*c.secs_done/c.secs_total):0;
+  const stopBtn=s.cancel?'<small>Stopping...</small>':'<button id="cvstop" class="sm">Stop</button>';
+  let h='<div class="cvbox">';
+  if(n){
+    const p=n.dur?Math.min(100,100*n.secs/n.dur):0,left=(n.speed&&n.speed>0)?(n.dur-n.secs)/n.speed:null;
+    h+=`<div class="cvhead"><b>Now converting</b><span class="mode">${MODEL[n.mode]||n.mode}</span><span style="flex:1"></span>${stopBtn}</div>
+    <div class="cvname">${esc(n.name)}</div><small>in ${esc(n.dir)} &middot; ${fmtBytes(n.size)} &middot; ${fmtDur(n.dur)} long</small>
+    <div class="mbar" style="margin-top:8px"><i style="width:${p}%"></i><span>${Math.floor(p)}%</span></div>
+    <div class="cvmeta">${fmtDur(n.secs)} of ${fmtDur(n.dur)} done${n.speed?` &middot; running at ${n.speed.toFixed(1)}x real time`:''}${left!==null?` &middot; about ${fmtDur(left)} left for this video`:''}</div>`;
+  }else h+=`<div class="cvhead"><b>Getting the next video ready...</b><span style="flex:1"></span>${stopBtn}</div>`;
+  h+=`<div class="cvgrid"><div><b>${c.files_done.toLocaleString()} of ${c.files_total.toLocaleString()}</b><span>videos finished</span></div>
+  <div><b>${fmtDur(c.secs_done)} of ${fmtDur(c.secs_total)}</b><span>of footage processed (${Math.floor(pctAll)}%)</span></div>
+  <div><b>${fmtDur(c.elapsed)}</b><span>elapsed</span></div>
+  <div><b>${c.eta==null?'...':'about '+fmtDur(c.eta)}</b><span>left (estimate)</span></div>
+  <div><b>${c.bytes_before?fmtBytes(Math.max(0,c.bytes_before-c.bytes_after))+' ('+Math.round(100*(1-c.bytes_after/c.bytes_before))+'%)':'-'}</b><span>space saved so far</span></div></div>`;
+  h+=`<div class="cvmeta">Plan: ${planTxt||'nothing to convert'}. The time left is an estimate: it gets better as videos finish, and re-encoding speed varies from video to video. Stopping is safe: finished videos are recognised and skipped next time.</div>`;
+  if((c.recent||[]).length)h+='<div class="cvrecent"><b>Just finished</b>'+[...c.recent].reverse().map(r=>`<div>&#10003; <span>${esc(r.name)}</span> <span style="color:var(--mute)">${fmtBytes(r.before)} &rarr; ${fmtBytes(r.after)}${r.before?' ('+Math.round(100*(1-r.after/r.before))+'% smaller)':''} &middot; took ${fmtDur(r.wall)}</span></div>`).join('')+'</div>';
+  h+='</div>';el.innerHTML=h;el.style.display='block';
+  const b=$('cvstop');if(b)b.onclick=async()=>{b.disabled=true;b.textContent='Stopping...';await post('/api/cancel')}}
 function showConvert(s){
   const w=s.dry_run?'would be ':'';
   const pc=(b,a)=>b?Math.round(100*(1-a/b)):0;
   let h=`<div class="tiles">${tile(s.total,'videos found')}${tile(s.dry_run?s.would:s.converted,'videos '+w+'converted','ok')}${tile(s.remux,'re-wrapped (lossless)')}${tile(s.encode,'re-encoded')}${tile(s.skipped_live,'Live Photo videos skipped')}${tile(s.failed,'could not convert',s.failed?'bad':'')}</div>`;
+  if(s.elapsed)h+=`<div class="tip" style="border-color:var(--acc)">${s.stopped?'<b>Stopped by you.</b> ':''}${s.dry_run?'Checked':'Ran'} for ${fmtDur(s.elapsed)}.</div>`;
   if(!s.dry_run&&s.converted){
     const saved=s.bytes_before-s.bytes_after;
     h+=`<h2>Size before and after</h2><div class="tiles">${tile(fmtBytes(s.bytes_before),'before')}${tile(fmtBytes(s.bytes_after),'after')}${tile((saved>=0?'':'+')+fmtBytes(Math.abs(saved))+' ('+(saved>=0?'':'+')+Math.abs(pc(s.bytes_before,s.bytes_after))+'%)',saved>=0?'space saved':'space used','ok')}</div>`;
@@ -1430,14 +1772,22 @@ function showConvert(s){
     if((s.top||[]).length)h+='<h2>Biggest savings</h2>'+tbl(['Video','How','Before','After','Saved'],s.top.map(t=>[esc(t.file),M[t.mode]||t.mode,fmtBytes(t.before),fmtBytes(t.after),fmtBytes(Math.max(0,t.before-t.after))+' ('+pc(t.before,t.after)+'%)']));
     h+=`<div class="tip" style="border-color:var(--acc)">Originals: ${({move:'moved to _original_videos (still using disk space until you delete that folder)',keep:'kept in place (still using disk space)',delete:'deleted, so the saving above is real free space'})[s.action]}.</div>`;
   } else if(s.dry_run){
-    h+=`<h2>Size of what would be converted</h2><div class="tiles">${tile(fmtBytes(s.bytes_before),'total size now')}</div>`;
-    const M={remux:'Re-wrapped: stays about the same size, no quality loss',audio:'Video kept, only the audio is converted: about the same size',encode:'Re-encoded: usually much smaller; the exact saving is shown after converting'};
+    const e=s.est||{},now=s.bytes_before,after=e.after||0,have=e.asked&&e.samples>0;
+    h+=`<h2>Size now and estimated size after</h2><div class="tiles">${tile(fmtBytes(now),'size now')}`
+      +(have?tile((e.complete?'':'about ')+fmtBytes(after),'estimated size after','ok')+tile(fmtBytes(Math.max(0,now-after))+' ('+pc(now,after)+'%)','estimated space saved','ok'):tile('not estimated','estimated size after'))+`</div>`;
+    h+=have?`<small>The estimate comes from test-encoding ${e.samples} short sample${e.samples===1?'':'s'} with your settings${e.failed?` (${e.failed} could not be sampled)`:''}. Re-wrapped videos are counted at about their current size. Real results vary with each video, typically within a few tens of percent.</small>`
+      :`<small>${e.asked?'No samples could be encoded, so no estimate is available.':'Tick "Estimate the new sizes in the preview" and run the preview again to see an estimated size after conversion.'}</small>`;
+    const M={remux:'Re-wrapped: stays about the same size, no quality loss',audio:'Video kept, only the audio is converted: about the same size',encode:'Re-encoded: usually much smaller (see the estimate above)'};
     const rows=Object.entries(s.by_mode||{}).map(([k,v])=>[M[k]||k,v.n.toLocaleString(),fmtBytes(v.before)]);
-    Object.entries(s.by_ext||{}).forEach(([k,v])=>rows.push([k+' files',v.n.toLocaleString(),fmtBytes(v.before)]));
     h+=tbl(['','Videos','Size now'],rows);
-    if((s.top||[]).length)h+='<h2>Largest videos to convert</h2>'+tbl(['Video','How','Size now'],s.top.map(t=>[esc(t.file),t.mode==='remux'?'Re-wrap':'Re-encode',fmtBytes(t.before)]));
+    if((s.top||[]).length)h+='<h2>Largest videos to convert</h2>'+tbl(['Video','How','Size now'],s.top.map(t=>[esc(t.file),t.mode==='remux'?'Re-wrap':t.mode==='audio'?'Audio only':'Re-encode',fmtBytes(t.before)]));
   }
-  if(Object.keys(s.types||{}).length)h+='<h2>By video type</h2>'+tbl(['Type','Found','Size now',s.dry_run?'Would convert':'Converted','Live Photo (skipped)','Problems'],Object.entries(s.types).map(([k,v])=>[k,v.found.toLocaleString(),fmtBytes(v.bytes),v.converted.toLocaleString(),v.live.toLocaleString(),v.failed.toLocaleString()]));
+  if(Object.keys(s.types||{}).length){
+    const dry=s.dry_run,pcT=(b,a)=>b?Math.round(100*(1-a/b)):0;
+    const aft=v=>dry?(v.est_after==null?'n/a':'~'+fmtBytes(v.est_after)):(v.converted?fmtBytes(v.after):'-');
+    const sav=v=>{const a=dry?v.est_after:v.after;if(a==null||!v.conv_before||!v.converted)return '-';return fmtBytes(Math.max(0,v.conv_before-a))+' ('+pcT(v.conv_before,a)+'%)'};
+    h+='<h2>By video type: size now and '+(dry?'estimated size after':'size after')+'</h2>'+tbl(['Type','Found','Size now',dry?'Est. size after':'Size after',dry?'Est. saved':'Saved',dry?'Would convert':'Converted','Live Photo (skipped)','Problems'],
+      Object.entries(s.types).map(([k,v])=>[k,v.found.toLocaleString(),fmtBytes(v.bytes),aft(v),sav(v),v.converted.toLocaleString(),v.live.toLocaleString(),v.failed.toLocaleString()]))}
   h+=s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
   if((s.failures||[]).length)h+='<h2>Problems</h2>'+tbl(['File','Result','Detail'],s.failures.map(f=>[esc(f.file),esc(f.status),esc(f.detail)]));
   h+='<small>Saved: a CSV with the before and after size of every video (on your Desktop).</small>';
@@ -1445,6 +1795,7 @@ function showConvert(s){
 
 function liveTiles(s,c,done,nj){
   if(!s.total)return '';const x=s.extra||{};const err=(x.errors?tile(x.errors,'files with errors','bad'):'');
+  if(jobKind==='merge')return tile(s.total,'files found')+tile(x.placed||0,'brought in','ok')+tile(x.identical||0,'identical (kept once)')+tile(x.clashes||0,'name clashes')+(x.errors?tile(x.errors,'problems','bad'):'');
   if(jobKind==='cleanup')return tile(x.json||0,'.json files')+tile(x.junk||0,'junk files')+tile(x.renamed||0,'folders renamed')+tile(x.merged||0,'folders merged')+tile(x.empty||0,'empty folders')+(x.errors?tile(x.errors,'errors','bad'):'');
   if(jobKind==='convert')return tile(s.total,'videos found')+tile(done,'checked so far')+tile(x.converted||0,'converted','ok')+(x.bytes_before?tile(fmtBytes(Math.max(0,x.bytes_before-x.bytes_after))+' ('+Math.round(100*(1-x.bytes_after/x.bytes_before))+'%)','space saved so far','ok'):'')+tile(x.skipped_live||0,'Live Photo videos skipped')+(x.errors?tile(x.errors,'could not convert','bad'):'');
   if(jobKind==='sort')return tile(s.total,'files found')+tile(x.duplicates||0,'duplicates skipped')+tile(x.written||0,'files placed','ok')+tile(x.merged_from||0,'source folders')+tile(x.folders||0,'folders after merging')+(x.json_along?tile(x.json_along,'.json brought along'):'')+err;
@@ -1483,13 +1834,13 @@ let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   else if(s.phase&&s.phase.total){pct=100*s.phase.done/s.phase.total}
   else if(s.state==='scanning'||s.state==='running'){indet=true}
   setBar('bar','fill','pct',pct,indet);
-  const LBL={fix:'Part 1 Fix',sort:'Part 2 Sort',convert:'Part 4 Convert',cleanup:'Part 3 Clean up'}[jobKind]||'';
+  const LBL={fix:'Part 1 Fix',sort:'Part 2 Sort',convert:'Part 5 Convert',cleanup:'Part 4 Clean up',merge:'Part 3 Merge'}[jobKind]||'';
   $('msg').innerHTML=(LBL?'<b>'+LBL+'</b> &middot; ':'')+(s.state==='error'?'<span class="err">'+esc(s.message)+'</span>':s.state==='done'?'<span class="ok">Finished.</span>':esc(s.message)+(s.done?` (${s.done.toLocaleString()} / ${s.total.toLocaleString()})`:''));
   const c=s.counts||{},done=s.done||0,nj=c['no-json']||0;
   $('tiles').innerHTML=liveTiles(s,c,done,nj);
   $('recent').innerHTML=(s.recent||[]).map(r=>`${esc(r.name)} &rarr; ${r.status==='duplicate'?'duplicate (skipped)':esc(r.to)+' ['+esc(r.status)+(r.live==='paired'?', live paired':'')+']'}`).reverse().join('<br>');
   if(s.state==='done'&&s.summary)showSummary(s.summary);
-  updGoto();
+  renderCvLive(s);updGoto();
   if(['done','error','idle'].includes(s.state))clearInterval(timer);
 },500)}
 (async function(){try{const s=await (await fetch('/api/status')).json();if(s.state&&s.state!=='idle'){jobKind=s.kind||'fix';placeResults(jobKind);$('prog').style.display='block';poll()}}catch(e){}})();

@@ -43,18 +43,18 @@ Or download `takeout_fix_metadata.py` and `takeout_gui.py` from the repo into on
 
 ## Layout
 
-The app has four tabs: **1 Fix metadata**, **2 Sort**, **3 Clean up** (`.json` files, junk, names and empty folders) and **4 Convert videos**. A bar with a moving percentage stays at the top of the window on every tab, showing whatever job is running; if you switch to another tab, a **View results** link takes you back. Only one job runs at a time.
+The app has five tabs: **1 Fix metadata**, **2 Sort**, **3 Merge folders**, **4 Clean up** (`.json` files, junk, names, empty folders) and **5 Convert videos**.
 
 ## Choosing your folders (once, for every tab)
 
-The frozen header holds two blocks that every tab uses, so you only choose them once:
+The title block at the top holds two rows that every tab uses, so you only choose them once:
 
-- **Source:** the folders to work on. Press **Add folders...** (hold Cmd in the Finder dialog to pick several), or **Edit list** to type or paste one path per line, or drag folders onto the header. Each folder shows as a chip; press the **x** on a chip to remove it.
-- **Destination:** where the fixed or sorted copies go. Type or paste a path, or press **Choose...**. Fix metadata and Sort use it; the other tabs ignore it. Leave it empty to fix files in place (Fix), or, with Move ticked, to merge everything into the first source folder (Sort).
-- Both are remembered in your browser. The **up arrow** at the end of the Destination row folds the two blocks into one line ("2 sources -> Destination") to save space; **Show** brings them back.
+- **Source:** the folders to work on. Press **Add folders...** (hold Cmd in the Finder dialog to pick several), or **Edit list** to type or paste one path per line, or drag folders onto the title block. Each folder shows as a chip; press the **x** on a chip to remove it.
+- **Destination:** where the fixed, sorted or merged copies go. Type or paste a path, or press **Choose...**. Fix, Sort and Merge use it; the other tabs ignore it. Leave it empty to fix files in place (Fix), or, with Move ticked, to merge everything into the first source folder (Sort, Merge).
+- Both are remembered in your browser. Under the title block, the tabs and the progress bar stay frozen at the top of the window as you scroll.
 - Each tab shows which folders and destination it is using.
-- **Order matters in one place:** when you sort in place, everything merges into the **first** source folder. Use **Edit list** to reorder.
-- Because the same list is used everywhere, check it before a destructive step: the Clean-up tab and the confirmation prompts list the folders they will act on.
+- **Order matters in one place:** when you merge or sort in place, everything goes into the **first** source folder. Use **Edit list** to reorder.
+- Because the same list is used everywhere, check it before a destructive step: the Clean up tab and the confirmation prompts list the folders they will act on.
 
 ## Using the app (recommended)
 
@@ -172,7 +172,7 @@ Special cases:
 
 Takeout splits a Live Photo into a still (`IMG_1234.HEIC`) and a video (`IMG_1234.MP4`) and strips the Apple ID that links them. With **Re-pair Live Photos** on, the tool copies the still's Apple ContentIdentifier onto the video and saves it as `.MOV` so Apple Photos can import the two as one Live Photo.
 
-- Needs an output folder (it renames videos).
+- Works in place or with a destination. In place, the video is renamed to `.MOV` beside its still, and its Google info file is renamed with it.
 - Works only where the still still has its Apple ID. Others are counted as "Still has no Apple ID" or "No matching still" and remain separate videos.
 - Check a few pairs in the Photos app after importing.
 
@@ -195,7 +195,7 @@ You get live counts while it runs, then a summary: files found, duplicates skipp
 
 Command line: `python3 takeout_fix_metadata.py "/path/to/Takeouts" --sort-only --dedupe --out "/path/to/Sorted"` (add `--move`, `--dry-run` or `--no-json` as needed).
 
-## Part 4: Convert old videos to MP4
+## Convert old videos to MP4 (tab 5)
 
 The **Convert videos** tab turns older video formats into `.mp4`, which plays on every phone, TV and app, and is usually smaller. It needs **ffmpeg** (`brew install ffmpeg`).
 
@@ -217,11 +217,30 @@ How it works:
 - A video that cannot be read, or whose conversion fails the check, is left untouched and listed in the report.
 - An interrupted run can be repeated: finished conversions are recognised and skipped.
 - Progress is shown by video length, so the percentage moves smoothly through long conversions.
+- **Live feedback.** While reading the videos you see a real counter and percentage. While converting, a live panel shows the video in progress (its name, how it is being converted, its own progress bar, its speed in times real time and the time left for it), the overall progress (videos finished, hours of footage processed, time elapsed and an estimated time left, which improves as videos finish), the space saved so far, the plan (how many quick re-wraps versus slow re-encodes), and a **Just finished** list showing each video's before and after size and how long it took. The frozen status line shows the same in short form. **Stop** is always safe: it ends the current conversion, removes the half-written file, and the videos already finished are recognised and skipped when you press Start again.
+- **Estimated sizes in the preview.** With **Estimate the new sizes in the preview** ticked (the default), the preview test-encodes short samples (about 8 seconds, up to 3 per video type) with your quality setting and uses them to predict the size after conversion, shown next to the current size, per type and in total. It is an estimate, not a promise: in my test it was within about 20% overall. Re-wrapped videos are counted at about their current size.
+- **Default types:** every type is ticked except `.mov` (which is often an iPhone Live Photo video or a modern phone clip). Your tick boxes are remembered.
 - **Sizes:** a preview shows how many videos (and how much space) would be re-wrapped versus re-encoded, and the largest ones; the exact saving can only be known after converting. During a real run a **space saved so far** tile updates as each video finishes. The final summary shows total size **before, after and saved** (with a percentage), a breakdown by method (re-wrapped vs re-encoded) and by file type, and a **Biggest savings** table. Re-wrapped videos stay about the same size; re-encoded ones usually shrink a lot. The saving is real free space only if the originals are deleted; if you keep them or move them to `_original_videos`, they still use disk space until you delete them.
 
 Suggested order: run Part 1 (it creates the Live Photo `.MOV` files), then Part 4 for your other videos.
 
-## Clean up (tab 3)
+## Merge folders (tab 3)
+
+Brings two or more folders together into one, for any folders (not only Google Takeout). Folders with the same name at any depth are merged, their files are combined, identical files are kept once, and different files with the same name are handled the way you choose. (The **Sort** tab is built around Takeout: it also carries `.json` files along and prefers the "Photos from YYYY" copy.)
+
+1. Put the folders to merge in the **Source** list and choose a **Destination** (or tick **Move** with no destination to merge everything into the first source folder).
+2. Leave **Preview only** ticked and press **Start**. You see how many files would come in, how many are identical, how many names clash, and which folders would come together, and nothing changes.
+3. Untick Preview and start.
+
+Choices:
+- **Copy or Move.** Copy leaves your sources untouched (needs about as much free space again). Move empties the sources, and folders left empty are removed.
+- **When two different files have the same name in the same folder:** *keep both* (the second becomes `name_1`), or *the newer*, *the larger*, or *the one from the first source folder* keeps the name. With those last three the other file is **not deleted**: it is set aside in a `_merge_conflicts` folder inside the destination for you to review.
+- **Identical files** (same content, compared by content not name) are kept once. When moving, the extra copy is deleted or moved to `_duplicates`, as you choose.
+- **Treat `Folder (1)`, `Folder copy` and extra spaces as the same folder as `Folder`**, and **ignore upper and lower case** (so `photos` and `Photos` become one folder). Real names such as `Summer (2019)` are not changed.
+
+Safety: sources that overlap, or a destination inside a source, are refused. App and library bundles (such as `.photoslibrary`) are moved as one item. Invisible system files are left out. An interrupted merge can be run again with the same settings: files already placed are skipped. A CSV of every file and where it went is saved on your Desktop; the summary shows each source folder, the folders that came together, and every name clash.
+
+## Clean up (tab 4)
 
 One tab, four optional tasks. Tick what you want; they always run in this order, so earlier steps leave work for later ones (for example, deleting cache files leaves folders empty, which the last step removes). Use **Preview only** first: it lists everything that would happen and changes nothing.
 

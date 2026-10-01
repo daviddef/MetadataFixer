@@ -772,12 +772,21 @@ def process(m, idx, args, out_root):
     else:
         row["status"] = status0
     if cid:
+        before_pair = target
         target, err = pair_live(target, cid)
         if err:
             row["live"] = "pair-error"
             row["detail"] = (row["detail"] + " " + err).strip()[:300]
-        elif out_root:
+        else:
             row["output"] = str(target)
+            if target != before_pair:  # renamed to .MOV in place: keep its Google info file attached by name
+                for sfx in (".json", ".supplemental-metadata.json"):
+                    oj, nj = Path(str(before_pair) + sfx), Path(str(target) + sfx)
+                    if oj.exists() and not nj.exists():
+                        try:
+                            oj.rename(nj)
+                        except OSError:
+                            pass
     if taken:
         try:
             os.utime(target, (taken, taken))
@@ -843,7 +852,7 @@ def m_is_dupe(m, args):
 # ---------------------------------------------------------------- Part 4: convert old videos to MP4
 CONVERT_FIELDS = ["file", "status", "mode", "output", "size_before", "size_after", "original", "detail"]
 LEGACY_EXT = (".avi", ".mov", ".mpg", ".mpeg", ".wmv", ".3gp", ".flv", ".mkv", ".mts", ".m2ts", ".vob")
-DEFAULT_EXT = (".avi", ".mov", ".mpg", ".mpeg", ".wmv", ".3gp", ".flv")
+DEFAULT_EXT = (".avi", ".mpg", ".mpeg", ".wmv", ".3gp", ".flv", ".mkv", ".mts", ".m2ts", ".vob")
 ORIGINALS_DIR = "_original_videos"
 QUALITY_CRF = {"veryhigh": 16, "high": 20, "small": 24}
 
@@ -900,6 +909,39 @@ def scan_legacy(roots, exts):
     return out
 
 
+def sample_encode_ratio(src, info, crf, seg=8.0, should_stop=None):
+    """Estimate how big the re-encoded video will be relative to the original, by test-encoding a short
+    sample from the middle with the real settings. Returns output_bytes / input_bytes_for_that_part, or None."""
+    dur = info.get("duration") or 0
+    try:
+        total = Path(src).stat().st_size
+    except OSError:
+        return None
+    if dur < 1 or total <= 0:
+        return None
+    seg = min(seg, dur)
+    start = max(0.0, dur / 2 - seg / 2)
+    fd, tmp = tempfile.mkstemp(suffix=".mp4")
+    os.close(fd)
+    try:
+        vf = ("yadif=deint=interlaced," if info.get("vcodec") == "mpeg2video" else "") + "scale=trunc(iw/2)*2:trunc(ih/2)*2"
+        cmd = ["ffmpeg", "-nostdin", "-y", "-v", "error", "-ss", f"{start:.2f}", "-t", f"{seg:.2f}", "-i", str(src),
+               "-map", "0:v:0", "-map", "0:a?", "-vf", vf, "-c:v", "libx264", "-preset", "medium", "-crf", str(crf),
+               "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-f", "mp4", tmp]
+        r = subprocess.run(cmd, capture_output=True, timeout=180)
+        out = os.path.getsize(tmp)
+        if r.returncode != 0 or out <= 0:
+            return None
+        return out / (total * seg / dur)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
 def count_legacy(roots, exts=LEGACY_EXT):
     """Quick census of convertible videos per type: count, bytes, and how many .mov are Live Photo videos."""
     out = {}
@@ -916,7 +958,7 @@ def count_legacy(roots, exts=LEGACY_EXT):
     return out
 
 
-def _run_ffmpeg(src, part, info, mode, crf, duration, progress):
+def _run_ffmpeg(src, part, info, mode, crf, duration, progress, should_stop=None):
     cmd = ["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(src), "-map", "0:v:0", "-map", "0:a?"]
     if mode == "remux":
         cmd += ["-c", "copy"] + (["-tag:v", "hvc1"] if info["vcodec"] == "hevc" else [])
@@ -929,14 +971,26 @@ def _run_ffmpeg(src, part, info, mode, crf, duration, progress):
     cmd += ["-map_metadata", "0", "-movflags", "+faststart+use_metadata_tags", "-f", "mp4",
             "-progress", "pipe:1", "-nostats", str(part)]
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
-    errs = []
+    errs, speed = [], None
     for line in p.stdout:
         line = line.strip()
+        if should_stop and should_stop():
+            p.terminate()
+            try:
+                p.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                p.kill()
+            return False, "cancelled"
         if line.startswith(("out_time_us=", "out_time_ms=")):
             try:
                 secs = int(line.split("=")[1]) / 1e6
                 if progress and duration:
-                    progress(min(secs, duration))
+                    progress(min(secs, duration), speed)
+            except ValueError:
+                pass
+        elif line.startswith("speed="):
+            try:
+                speed = float(line.split("=")[1].strip().rstrip("x"))
             except ValueError:
                 pass
         elif "=" not in line and line:
@@ -985,7 +1039,11 @@ def convert_file(src, root, opts, progress=None):
         return row
     if not resumed:
         part = src.with_name(src.name + ".part")
-        ok, err = _run_ffmpeg(src, part, info, row["mode"], opts.get("crf", 20), info["duration"], progress)
+        ok, err = _run_ffmpeg(src, part, info, row["mode"], opts.get("crf", 20), info["duration"], progress, opts.get("should_stop"))
+        if err == "cancelled":
+            part.unlink(missing_ok=True)
+            row["status"], row["detail"] = "cancelled", "stopped by you; run again to continue"
+            return row
         oi = probe_video(part) if ok and part.exists() else None
         if not (oi and oi["has_video"] and _dur_ok(info["duration"], oi["duration"])):
             part.unlink(missing_ok=True)
@@ -1289,6 +1347,172 @@ def tidy_names(roots, opts, dry_run, progress=None):
     return rows
 
 
+# ---------------------------------------------------------------- Merge folders (general purpose)
+CONFLICTS_DIR = "_merge_conflicts"
+DUPES_DIR = "_duplicates"
+MERGE_SKIP_DIRS = {CONFLICTS_DIR, DUPES_DIR}
+
+
+def check_merge_roots(roots, dest, move):
+    """Refuse setups that could loop or lose data: nested sources, destination inside a source."""
+    rs = [Path(r).resolve() for r in roots]
+    for i, a in enumerate(rs):
+        for j, b in enumerate(rs):
+            if i != j and (a == b or b in a.parents):
+                raise ValueError(f"{roots[i]} and {roots[j]} overlap (one is inside the other)")
+    if dest:
+        d = Path(dest).resolve()
+        for i, r in enumerate(rs):
+            if d != rs[0] and (d == r or r in d.parents or d in r.parents):
+                raise ValueError("The destination cannot be inside a source folder (or contain one), except the first source folder itself")
+    elif not move:
+        raise ValueError("Choose a destination, or tick Move to merge everything into the first source folder")
+    if len(rs) < 2 and not dest:
+        raise ValueError("Add at least two source folders to merge")
+
+
+def merge_trees(roots, dest, opts, dry_run=False, on_progress=None, on_item=None):
+    """Bring several folder trees together. Folders with the same path merge; identical files are kept once;
+    different files with the same name are resolved by opts['conflict'] (both|newer|larger|first); a losing
+    file is set aside in _merge_conflicts, never deleted. Returns (rows, per_root, merged_dirs)."""
+    roots = [Path(r) for r in roots]
+    dest = Path(dest) if dest else roots[0]
+    move = bool(opts.get("move"))
+    tidy, nocase = bool(opts.get("tidy")), bool(opts.get("nocase", True))
+    conflict, dupes = opts.get("conflict", "both"), opts.get("dupes", "delete")
+    name_opts = {"paren": tidy, "copy": tidy, "spaces": tidy}
+    casemap, claimed, rows = {}, {}, []
+    per_root = [{"root": str(r), "found": 0, "placed": 0, "identical": 0, "conflicts": 0, "failed": 0} for r in roots]
+    dir_sources = defaultdict(set)
+
+    def canon(parts):
+        out = []
+        for p in parts:
+            name = clean_name(p, name_opts, False) if tidy else p
+            if nocase:
+                name = casemap.setdefault((tuple(out), name.lower()), name)
+            out.append(name)
+        return out
+
+    items = []
+    for ri, root in enumerate(roots):
+        for dp, dns, fns in os.walk(root, topdown=True, followlinks=False):
+            keep = []
+            for d in dns:
+                p = os.path.join(dp, d)
+                if d in MERGE_SKIP_DIRS or os.path.islink(p):
+                    continue
+                if is_bundle(d):
+                    items.append((ri, p, Path(dp).relative_to(root).parts, d, True))
+                else:
+                    keep.append(d)
+            dns[:] = keep
+            rel = Path(dp).relative_to(root).parts
+            for f in fns:
+                if is_junk(f, True):
+                    continue
+                items.append((ri, os.path.join(dp, f), rel, f, False))
+    total = len(items)
+    manifest = {}
+    lock = threading.Lock()
+    prog = argparse.Namespace(lock=lock, out_root=str(dest), dry_run=dry_run, manifest=manifest)
+    if not dry_run:
+        manifest.update(load_manifest(dest))
+
+    def aside(base, rel_dir, name):
+        d = dest / base / Path(*rel_dir) if rel_dir else dest / base
+        d.mkdir(parents=True, exist_ok=True)
+        return _free_name(str(d / name)) if (d / name).exists() else str(d / name)
+
+    def put(src, target, is_bundle_item):
+        target = Path(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if is_bundle_item:
+            shutil.move(src, str(target)) if move else shutil.copytree(src, str(target), symlinks=True)
+        else:
+            place_file(Path(src), target, move)
+
+    for k, (ri, src, rel, name, is_b) in enumerate(items, 1):
+        per_root[ri]["found"] += 1
+        row = {"root": str(roots[ri]), "src": src, "dest": "", "status": "", "detail": ""}
+        try:
+            done = manifest.get(src)
+            if done and Path(done).exists():
+                row["status"], row["dest"] = "already-done", done
+                per_root[ri]["placed"] += 1
+            else:
+                dparts = canon(rel)
+                target = dest.joinpath(*dparts, name)
+                row["dest"] = str(target)
+                dir_key = str(dest.joinpath(*dparts))
+                if str(target) == src:
+                    row["status"] = "in-place"
+                    claimed[str(target)] = src
+                    per_root[ri]["placed"] += 1
+                    dir_sources[dir_key].add(ri)
+                else:
+                    existing = str(target) if target.exists() else claimed.get(str(target))
+                    if existing and not is_b and _same_content(src, existing):
+                        per_root[ri]["identical"] += 1
+                        dir_sources[dir_key].add(ri)
+                        row["status"] = "identical"
+                        if move and not dry_run:
+                            if dupes == "delete":
+                                os.remove(src)
+                            else:
+                                shutil.move(src, aside(DUPES_DIR, dparts, name))
+                            row["detail"] = "extra copy " + ("deleted" if dupes == "delete" else "moved to _duplicates")
+                    elif existing:
+                        per_root[ri]["conflicts"] += 1
+                        dir_sources[dir_key].add(ri)
+                        if conflict == "both" or is_b:
+                            alt = Path(_free_name(str(target)))
+                            while str(alt) in claimed:
+                                alt = Path(_free_name(str(alt)))
+                            row["status"], row["dest"], row["detail"] = "kept-both", str(alt), f"second file named {alt.name}"
+                            claimed[str(alt)] = src
+                            if not dry_run:
+                                put(src, alt, is_b)
+                        else:
+                            try:
+                                es, ss = os.stat(existing), os.stat(src)
+                            except OSError:
+                                es = ss = None
+                            incoming_wins = bool(es and ((conflict == "newer" and ss.st_mtime > es.st_mtime) or
+                                                         (conflict == "larger" and ss.st_size > es.st_size)))
+                            if incoming_wins:
+                                row["status"], row["detail"] = "replaced", f"{conflict} file takes the name; the other is in {CONFLICTS_DIR}"
+                                if not dry_run:
+                                    shutil.move(str(target), aside(CONFLICTS_DIR, dparts, name)) if target.exists() else None
+                                    put(src, target, is_b)
+                                claimed[str(target)] = src
+                            else:
+                                row["status"], row["detail"] = "kept-existing", f"this file is in {CONFLICTS_DIR}"
+                                if not dry_run:
+                                    put(src, aside(CONFLICTS_DIR, dparts, name), is_b)
+                    else:
+                        row["status"] = "placed"
+                        claimed[str(target)] = src
+                        per_root[ri]["placed"] += 1
+                        dir_sources[dir_key].add(ri)
+                        if not dry_run:
+                            put(src, target, is_b)
+                if not dry_run and row["status"] in ("placed", "kept-both", "replaced", "in-place"):
+                    record_progress(prog, src, row["dest"])
+        except OSError as e:
+            row["status"], row["detail"] = "failed", str(e)
+            per_root[ri]["failed"] += 1
+        rows.append(row)
+        if on_item:
+            on_item(row)
+        if on_progress and (k % 25 == 0 or k == total):
+            on_progress(k, total)
+    if move and not dry_run and opts.get("prune", True):
+        prune_empty_dirs(roots)
+    merged = {d: sorted(v) for d, v in dir_sources.items() if len(v) > 1}
+    return rows, per_root, merged
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("root", type=Path, help="folder containing all extracted 'Takeout N' folders")
@@ -1298,7 +1522,7 @@ def main():
     ap.add_argument("--date-policy", choices=["earlier", "photo", "google"], default="earlier",
                     help="when the photo already has a different date: keep the earlier one (default), the photo's, or Google's")
     ap.add_argument("--pair-live", action="store_true",
-                    help="relink Live Photo videos to their still (needs --out); videos become .MOV")
+                    help="relink Live Photo videos to their still; videos become .MOV (works in place or with --out)")
     ap.add_argument("--dedupe", action="store_true", help="skip byte-identical duplicate files")
     ap.add_argument("--move", action="store_true", help="move files into --out instead of copying (frees space)")
     ap.add_argument("--sort-only", action="store_true",
@@ -1314,10 +1538,8 @@ def main():
         args.out = args.root
     if not args.dry_run and not args.sort_only and not shutil.which("exiftool"):
         sys.exit("exiftool not found. macOS: brew install exiftool | Windows: https://exiftool.org")
-    if args.pair_live and not (args.out or args.dry_run):
-        sys.exit("--pair-live renames videos, so it needs --out (or --dry-run)")
     if args.move and not args.out:
-        sys.exit("--move needs --out")
+        args.out = args.root  # merge into the folder given (nothing moves if there is only one)
     if not args.root.is_dir():
         sys.exit(f"{args.root} is not a folder")
 
