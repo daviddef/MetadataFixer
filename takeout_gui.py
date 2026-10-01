@@ -26,7 +26,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.01-y"
+VERSION = "2026.10.01-z"
 class Cancelled(Exception):
     pass
 
@@ -1480,7 +1480,7 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 .info{display:inline-grid;place-items:center;width:17px;height:17px;margin-left:7px;border-radius:50%;border:1px solid var(--mute);color:var(--mute);font:700 11px/1 system-ui,sans-serif;cursor:help;background:transparent;padding:0;vertical-align:middle;flex:none}
 .info:hover,.info:focus-visible{background:var(--acc);border-color:var(--acc);color:#fff;outline:none}
 #tip{position:fixed;z-index:200;max-width:min(380px,calc(100vw - 20px));background:var(--ink);color:var(--bg);padding:10px 12px;border-radius:10px;font-size:13px;line-height:1.45;box-shadow:0 8px 28px rgba(0,0,0,.28);display:none;pointer-events:none}
-.warn{color:var(--warn);font-size:13px}.subline{margin:-6px 0 12px;color:var(--mute);font-size:14px}
+.warn{color:var(--warn);font-size:13px}.rknote{font-size:13px;color:var(--mute);margin:6px 0}.subline{margin:-6px 0 12px;color:var(--mute);font-size:14px}
 .opt>div{line-height:1.35}
 </style></head><body><main>
 <div id="upd" style="display:none" class="card"><b>A newer version is available.</b> <span id="updmsg"></span>
@@ -1527,12 +1527,12 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 <div class="card"><label class="t">3. Options</label>
 <div class="opt"><input type="checkbox" id="dry" checked><div>Preview only<small>On by default. Works out what it would do and reports the numbers, but changes nothing. Untick to do it for real.</small></div></div>
 <div class="opt"><input type="checkbox" id="dedupe" checked><div>Remove exact duplicates<small>Skips byte-identical copies (the same photo repeated across Takeouts or albums). Keeps the copy in 'Photos from YYYY'. Needs an extra read pass over files that share a size.</small></div></div>
-<div class="opt"><input type="checkbox" id="move"><div>Move files instead of copying <span class="warn">(empties the source folders)</span><small>Saves disk space but empties your Takeout folders as it goes. Off = safe copy (needs roughly as much free space again).</small></div></div>
+<div class="opt"><input type="checkbox" id="move"><div>&#9888;&#65039; Move files instead of copying <span class="warn">(empties the source folders)</span><small>Saves disk space but empties your Takeout folders as it goes. Off = safe copy (needs roughly as much free space again).</small></div></div>
 <div class="opt"><input type="checkbox" id="live" checked><div>Re-pair Live Photos<small>Copies each still's Apple ID onto its video and saves the video as .MOV so Photos can treat them as one Live Photo. Works in place too: the video is renamed to .MOV beside its photo.</small></div></div>
 <div class="opt"><div style="flex:1"><label for="datepol" style="font-weight:600">When a photo already has a date and Google&#39;s is different</label>
 <select id="datepol" class="sel"><option value="earlier" selected>Keep the earlier date (recommended)</option><option value="photo">Keep the photo&#39;s own date</option><option value="google">Use Google&#39;s date</option></select>
 <small>Google sometimes records the day a photo was uploaded or re-saved instead of the day it was taken, and that day is always later. Keeping the earlier of the two is usually right. A photo with no date at all always gets Google&#39;s.</small></div></div>
-<div class="opt"><input type="checkbox" id="ow" checked><div>Replace location and caption already stored in the photo<small>Every photo has hidden facts saved inside the file itself (called EXIF). <b>Off</b>: only fill in a location or caption that is missing. <b>On</b>: replace a different one with Google&#39;s version. Your pictures themselves are never altered.</small></div></div></div>
+<div class="opt"><input type="checkbox" id="ow" checked><div>&#9888;&#65039; Replace location and caption already stored in the photo<small>Every photo has hidden facts saved inside the file itself (called EXIF). <b>Off</b>: only fill in a location or caption that is missing. <b>On</b>: replace a different one with Google&#39;s version. Your pictures themselves are never altered.</small></div></div></div>
 
 <button class="p" id="go">Start</button>
 
@@ -1554,12 +1554,12 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 <div class="usef" style="margin-top:10px"><b>Folders to merge (the Source list):</b> <span class="fnote"></span></div>
 <div class="usef"><b>Merge into (the Destination):</b> <span class="dnote" data-empty="none chosen: with Move ticked, everything is merged into the first source folder"></span></div>
 <div class="opt"><input type="checkbox" id="mgdry" checked><div>Preview only<small>On by default. Shows which folders would merge, how many files, identical copies and name clashes, and changes nothing.</small></div></div>
-<div class="opt"><input type="checkbox" id="mgmove"><div>Move instead of copy <span class="warn">(empties the source folders)</span><small>Takes the files out of the source folders and empties them (needs no extra space). With no destination chosen, everything is merged into the <b>first</b> source folder. Off = copy into the Destination, leaving your sources untouched (needs about as much free space again).</small></div></div>
+<div class="opt"><input type="checkbox" id="mgmove"><div>&#9888;&#65039; Move instead of copy <span class="warn">(empties the source folders)</span><small>Takes the files out of the source folders and empties them (needs no extra space). With no destination chosen, everything is merged into the <b>first</b> source folder. Off = copy into the Destination, leaving your sources untouched (needs about as much free space again).</small></div></div>
 <div class="opt"><div style="flex:1"><label for="mgconf" style="font-weight:600">When two different files have the same name in the same folder</label>
 <select id="mgconf" class="sel"><option value="both" selected>Keep both (the second is named name_1)</option><option value="newer">The newer file keeps the name</option><option value="larger">The larger file keeps the name</option><option value="first">The file from the first source folder keeps the name</option></select>
 <small>With the last three, the other file is not deleted: it is set aside in a <i>_merge_conflicts</i> folder inside the destination so you can review it.</small></div></div>
-<div class="opt"><div style="flex:1"><label for="mgdup" style="font-weight:600">Identical files (same content)</label>
-<select id="mgdup" class="sel"><option value="delete" selected>Keep one copy; when moving, delete the extra copy</option><option value="aside">Keep one copy; when moving, move the extra to a _duplicates folder</option></select>
+<div class="opt"><div style="flex:1"><label for="mgdup" style="font-weight:600">&#9888;&#65039; Identical files (same content)</label>
+<select id="mgdup" class="sel"><option value="delete" selected>Keep one copy; when moving, delete the extra copy (permanent)</option><option value="aside">Keep one copy; when moving, move the extra to a _duplicates folder</option></select>
 <small>Files are compared by their content, not just their names. When copying, identical files are simply not copied twice.</small></div></div>
 <div class="opt"><input type="checkbox" id="mgtidy" checked><div>Treat <i>Folder (1)</i>, <i>Folder copy</i> and extra spaces as the same folder as <i>Folder</i><small>Real names such as <i>Summer (2019)</i> are not changed. Applies to folder names only.</small></div></div>
 <div class="opt"><input type="checkbox" id="mgcase" checked><div>Ignore upper and lower case in folder names<small>So <i>photos</i> and <i>Photos</i> become one folder (the first spelling found is used).</small></div></div>
@@ -1572,34 +1572,34 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 <h2 class="ph">Clean up</h2>
 <div class="card"><small style="margin-top:0">Tick what you want tidied. The steps run in the order shown, so removing files first lets the last step catch the folders they leave empty. <b>Preview first</b>: it lists what would happen and changes nothing.</small>
 <div class="usef" style="margin-top:10px"><b>Folders to clean:</b> <span class="fnote"></span></div>
+<div class="opt"><input type="checkbox" id="cdry" checked><div>Preview only<small>On by default. Lists what would be deleted, renamed, merged or removed, and changes nothing.</small></div></div>
 
 <div class="opt"><input type="checkbox" id="cx" checked><div><b>1. Fix files with no extension</b><small>Some photos and videos come out of Google Takeout with a name like <i>IMG_2438</i> and no <i>.jpg</i> or <i>.heic</i>, so Finder calls them "Document" and the Fix tab skips them. This reads the real type from inside each file and adds the right extension. Files that cannot be recognised (empty or damaged) are listed but not changed. Do this <b>before</b> Fix metadata.</small>
 <label class="sub" data-tip="So the Fix tab can still match each photo to its Google info file."><input type="checkbox" id="cxj" checked> Also rename each file's Google .json to match</label>
 <label class="sub" data-tip="Files that are empty or damaged are moved into an <i>_unrecognised</i> folder inside each folder you chose, so you can review or delete them. Otherwise they are only listed."><input type="checkbox" id="cxu"> Move unrecognised files into an <i>_unrecognised</i> folder</label></div></div>
 
-<div class="opt"><input type="checkbox" id="cj"><div><b>2. Remove Google .json files</b><small>The small info files Google adds to each photo. They hold the only copy of the original date and location, so do this <b>after</b> you have fixed your photos. Off by default.</small>
-<label class="sub" data-tip="Off: only Google's photo info files and album/memory data files are removed. On: every .json file in the folders."><input type="checkbox" id="cother"> Also remove other .json files</label></div></div>
+<div class="opt"><input type="checkbox" id="cj"><div>&#9888;&#65039; <b>2. Remove Google .json files</b><small>The small info files Google adds to each photo. They hold the only copy of the original date and location, so do this <b>after</b> you have fixed your photos. Off by default.</small>
+<label class="sub" data-tip="Off: only Google's photo info files and album/memory data files are removed. On: every .json file in the folders."><input type="checkbox" id="cother"> &#9888;&#65039; Also remove other .json files</label></div></div>
 
-<div class="opt"><input type="checkbox" id="cjunk" checked><div><b>3. Remove junk and cache files</b><small>Files nothing needs. Choose which kinds:</small>
+<div class="opt"><input type="checkbox" id="cjunk" checked><div>&#9888;&#65039; <b>3. Remove junk and cache files</b><small>Files nothing needs. Choose which kinds:</small>
 <label class="sub" data-tip="Invisible files Finder and Windows leave behind: .DS_Store, Thumbs.db, desktop.ini and ._ files."><input type="checkbox" id="cjs" checked> System leftovers</label>
 <label class="sub" data-tip="Thumbnail caches from iPod/iTunes photo syncing, such as T103.ithmb inside an <i>iPod Photo Cache</i> folder."><input type="checkbox" id="cji" checked> iPod/iTunes thumbnail caches (.ithmb)</label>
 <label class="sub"><input type="checkbox" id="cjp" checked> Picasa.ini files</label>
 <label class="sub"><input type="checkbox" id="cjt"> Camera video thumbnails (.thm)</label>
 <label class="sub" data-tip="Names ending in <i>.sb-12345678-AbCdEf</i> and exactly 0 bytes: macOS makes these while saving a file and sometimes leaves them behind. A leftover that still contains data is never deleted, only reported."><input type="checkbox" id="cjb" checked> Empty temporary files left by macOS saving</label>
-<label class="sub" data-tip="Zero-byte files of any name: nothing is stored in them."><input type="checkbox" id="cje" checked> Other empty files (0 bytes)</label></div></div>
+<label class="sub" data-tip="Zero-byte files of any name: nothing is stored in them."><input type="checkbox" id="cje" checked> &#9888;&#65039; Other empty files (0 bytes)</label></div></div>
 
-<div class="opt"><input type="checkbox" id="cn" checked><div><b>4. Tidy names</b><small>Fixes duplicate-style names such as <i>From Cris Drive - 2001(1)</i> to <i>From Cris Drive - 2001</i>. If a folder with the clean name already exists, the two are <b>merged</b>: identical files are kept once, and different files with the same name are both kept (the second becomes <i>name_1</i>). Real names such as <i>Summer (2019)</i> are never changed, and the folders you chose are not renamed.</small>
+<div class="opt"><input type="checkbox" id="cn" checked><div>&#9888;&#65039; <b>4. Tidy names</b><small>Fixes duplicate-style names such as <i>From Cris Drive - 2001(1)</i> to <i>From Cris Drive - 2001</i>. If a folder with the clean name already exists, the two are <b>merged</b>: identical files are kept once, and different files with the same name are both kept (the second becomes <i>name_1</i>). Real names such as <i>Summer (2019)</i> are never changed, and the folders you chose are not renamed.</small>
 <label class="sub"><input type="checkbox" id="cnp" checked> Remove " (1)", " (2)" ... from names</label>
 <label class="sub"><input type="checkbox" id="cnc" checked> Remove " copy", " copy 2" from names</label>
 <label class="sub"><input type="checkbox" id="cns" checked> Trim and collapse extra spaces</label>
-<label class="sub" data-tip="A file is only renamed when the clean name is free, and its .json is renamed with it. Best done after you have fixed your photos, because Fix matches photos to JSON by name."><input type="checkbox" id="cnf"> Also tidy file names</label>
+<label class="sub" data-tip="A file is only renamed when the clean name is free, and its .json is renamed with it. Best done after you have fixed your photos, because Fix matches photos to JSON by name."><input type="checkbox" id="cnf"> &#9888;&#65039; Also tidy file names</label>
 <label class="sub" data-tip="Used when a renamed folder is merged into one that already exists and both hold the same file.">Identical copies found while merging: <select id="cnd" class="sel"><option value="delete" selected>delete the extra copy</option><option value="aside">move it to a _duplicates folder</option></select></label></div></div>
 
-<div class="opt"><input type="checkbox" id="ce" checked><div><b>5. Remove empty folders</b><small>Removes every folder with no files in it at any depth, only after the steps above. Only folders are removed. Shortcuts, app/library bundles (such as .photoslibrary) and unreadable folders are never entered.</small>
+<div class="opt"><input type="checkbox" id="ce" checked><div>&#9888;&#65039; <b>5. Remove empty folders</b><small>Removes every folder with no files in it at any depth, only after the steps above. Only folders are removed. Shortcuts, app/library bundles (such as .photoslibrary) and unreadable folders are never entered.</small>
 <label class="sub" data-tip="So a folder containing only .DS_Store or Thumbs.db files is still removed."><input type="checkbox" id="cejunk" checked> Folders holding only system leftovers count as empty</label>
-<label class="sub" data-tip="Off by default: the folders you add at the top are always kept, even if everything inside them is removed."><input type="checkbox" id="cetop"> Also remove my chosen folders if they end up empty</label></div></div>
+<label class="sub" data-tip="Off by default: the folders you add at the top are always kept, even if everything inside them is removed."><input type="checkbox" id="cetop"> &#9888;&#65039; Also remove my chosen folders if they end up empty</label></div></div>
 
-<div class="opt"><input type="checkbox" id="cdry" checked><div>Preview only<small>On by default. Lists what would be deleted, renamed, merged or removed, and changes nothing.</small></div></div>
 <button class="p" id="cgo" style="margin-top:6px">Start</button></div>
 </section>
 <section class="pane" id="pane-convert">
@@ -1615,8 +1615,8 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 <div class="opt"><input type="checkbox" id="vlive"><div>Also convert Live Photo videos<small>Off by default. An iPhone Live Photo is a still picture plus a short .MOV video that Apple Photos links together. If a .MOV sits next to a photo with the same name, it is treated as a Live Photo video and left alone, because converting it to .mp4 would break the link. Your ordinary .mov and .avi videos are converted as normal.</small></div></div>
 <div class="opt"><div style="flex:1"><label for="vq" style="font-weight:600">Quality when re-encoding</label>
 <select id="vq" class="sel"><option value="veryhigh">Very high (largest files)</option><option value="high" selected>High (recommended)</option><option value="small">Smaller files</option></select></div></div>
-<div class="opt"><div style="flex:1"><label for="vact" style="font-weight:600">What happens to the original video</label>
-<select id="vact" class="sel"><option value="move" selected>Move to an _original_videos folder (safe)</option><option value="keep">Keep it where it is, next to the new .mp4</option><option value="delete">Delete it once the new .mp4 is verified (permanent)</option></select>
+<div class="opt"><div style="flex:1"><label for="vact" style="font-weight:600">&#9888;&#65039; What happens to the original video</label>
+<select id="vact" class="sel"><option value="move" selected>Move to an _original_videos folder (safe)</option><option value="keep">Keep it where it is, next to the new .mp4</option><option value="delete">&#9888;&#65039; Delete it once the new .mp4 is verified (permanent)</option></select>
 <small>Originals are only moved or deleted after the new file has been checked (it must play and match the original&#39;s length).</small></div></div>
 <button class="p" id="vgo" style="margin-top:6px">Start converting</button></div>
 </section>

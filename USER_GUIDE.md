@@ -49,6 +49,10 @@ To keep each tab uncluttered, the longer explanations sit behind small **i** but
 
 The app has four tabs: **1 Fix metadata**, **2 Merge folders** (also sorts Takeout folders and removes duplicates), **3 Clean up** (`.json` files, junk, names, empty folders) and **4 Convert videos**.
 
+## The warning sign
+
+Options marked with a warning sign (⚠️) can delete, overwrite, merge or empty things. Everything else is low risk. Every tab has **Preview only** as its first option, ticked by default.
+
 ## Stopping a job
 
 Every job (preview or real) has a **Stop** button in the status bar at the top. Stopping is safe: files already handled stay done, nothing is left half-written, and running the same settings again carries on where it stopped. Stopping a preview changes nothing.
