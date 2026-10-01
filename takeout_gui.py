@@ -26,7 +26,8 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}, "recent": [], "clean": {"state": "idle"}, "update": {"state": "idle", "files": []}, "phase": None, "kind": "fix", "boot": time.time()}
+VERSION = "2026.10.01-d"
+STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}, "recent": [], "clean": {"state": "idle"}, "update": {"state": "idle", "files": []}, "phase": None, "kind": "fix", "version": VERSION, "boot": time.time()}
 LOCK = threading.Lock()
 
 
@@ -894,7 +895,7 @@ code{background:var(--bg);padding:1px 5px;border-radius:5px;font-size:12px}
     </svg>
     <div>
       <h1>Takeout Metadata Fixer</h1>
-      <p class="tag">Put the right date, place and caption back on your Google Photos export.</p>
+      <p class="tag">Put the right date, place and caption back on your Google Photos export. <span id="ver" style="opacity:.6;white-space:nowrap"></span></p>
     </div>
   </div>
   <div class="chips"><span class="chip priv">&#128274; Runs only on your computer: nothing is uploaded</span></div>
@@ -1044,7 +1045,7 @@ function showSummary(s){
   if(s.live&&Object.keys(s.live).length)h+='<h2>Live Photo pairing</h2>'+tbl(['Result','Videos'],Object.entries(s.live).map(([k,v])=>[({paired:'Paired with its still','no-id':'Still has no Apple ID','no-still':'No matching still','pair-error':'Error'})[k]||k,v.toLocaleString()]));
   if((s.out_folders||[]).length)h+='<h2>Output folders</h2>'+tbl(['Folder','Files'],s.out_folders.slice(0,80).map(r=>[esc(r[0]),r[1].toLocaleString()]))+(s.out_folders.length>80?'<small>Showing 80 of '+s.out_folders.length+'; see the summary .txt for all.</small>':'');
   if(s.album_no_json.length)h+='<h2>Albums with the most no-JSON files</h2>'+tbl(['Album','No JSON'],s.album_no_json.map(r=>[esc(r[0]),r[1].toLocaleString()]));
-  const fmt=([o,b,g,n])=>o==='same'?'<span style="color:var(--mute)">already correct</span>':o==='none'||!o?'-':o==='kept'?`<b>${esc(b||'(none)')}</b> <small style="display:inline">(left as is; Google says ${esc(g)})</small>${n?' <span title="'+esc(n)+'">&#9888;</span>':''}`:`${esc(b||'(none)')} &rarr; <b>${esc(g)}</b> <small style="display:inline">(${o})</small>${n?' <span title="'+esc(n)+'">&#9888;</span>':''}`;
+  const fmt=([o,b,g,n])=>o==='same'?'<span style="color:var(--mute)">already correct</span>':o==='none'||!o?'-':o==='kept'?`<b>${esc(b||'(none)')}</b> <span class="ok">&#10003; kept</span><br><small style="display:inline">Google&#39;s date, not used: <s>${esc(g)}</s></small>${n?' <span title="'+esc(n)+'">&#9888;</span>':''}`:`${esc(b||'(none)')} &rarr; <b>${esc(g)}</b> <small style="display:inline">(${o})</small>${n?' <span title="'+esc(n)+'">&#9888;</span>':''}`;
   if((s.samples||[]).length)h+='<h2>Sample of changes (first 15)</h2>'+tbl(['File','Date taken','Location','Description'],s.samples.map(x=>[esc(x.file),fmt(x.date),fmt(x.gps),fmt(x.desc)]));
   h+='<small>Saved: full report CSV (with before/after values per file), a changes-only CSV, a CSV of just the no-JSON files, and a text summary.</small>';
   $('sumbody').innerHTML=h;$('sum').style.display='block'}
@@ -1093,7 +1094,7 @@ function showSort(s){
 
 (async function(){
   let boot=null;
-  async function st(){try{return await (await fetch('/api/status')).json()}catch(e){return null}}
+  async function st(){try{const j=await (await fetch('/api/status')).json();if(j&&j.version)$('ver').textContent='Version '+j.version;return j}catch(e){return null}}
   for(let i=0;i<8;i++){const s=await st();if(s){boot=s.boot;if(s.update&&s.update.state==='available'){
     $('updmsg').textContent='Updated files: '+s.update.files.join(', ')+'. Your settings are not affected.';$('upd').style.display='block';break}
     if(s.update&&['current','unknown'].includes(s.update.state))break}
