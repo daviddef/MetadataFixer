@@ -26,7 +26,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.01-z2"
+VERSION = "2026.10.01-z3"
 class Cancelled(Exception):
     pass
 
@@ -1227,10 +1227,33 @@ def _fetch(name):
         return r.read()
 
 
+FROZEN = bool(getattr(sys, "frozen", False))
+RELEASES_URL = "https://github.com/daviddef/MetadataFixer/releases/latest"
+
+
+def check_release():
+    """Packaged app: compare with the newest GitHub release and point to the download."""
+    req = urllib.request.Request("https://api.github.com/repos/daviddef/MetadataFixer/releases/latest",
+                                 headers={"User-Agent": "MetadataFixer-updater", "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        tag = json.loads(r.read().decode()).get("tag_name", "").lstrip("v")
+    newer = bool(tag) and tag != VERSION
+    with LOCK:
+        STATE["update"] = {"state": "available" if newer else "current", "files": [],
+                           "message": f"Version {tag} is ready to download: {RELEASES_URL}" if newer else ""}
+
+
 def check_update():
     """Compare the local files with the latest published ones. Never raises."""
     with LOCK:
         STATE["update"] = {"state": "checking", "files": []}
+    if FROZEN:
+        try:
+            check_release()
+        except Exception as e:
+            with LOCK:
+                STATE["update"] = {"state": "unknown", "files": [], "message": str(e)[:120]}
+        return
     try:
         changed = []
         for name in UPDATE_FILES:
@@ -1247,6 +1270,8 @@ def check_update():
 
 def apply_update():
     """Download the latest files, check they are valid Python, replace the old ones (keeping .bak) and restart."""
+    if FROZEN:
+        return {"error": "Download the newest version from " + RELEASES_URL + " and replace the app in Applications."}
     with LOCK:
         if STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running":
             return {"error": "A job is running. Wait for it to finish, then update."}
@@ -1742,7 +1767,7 @@ function setBar(barId,fillId,pctId,pct,indet){
     for(let i=0;i<12;i++){
       await sleep(800);const s=await st();if(!s)continue;boot=s.boot;const u=s.update||{};
       if(u.state==='available'){
-        $('updmsg').textContent='Updated files: '+u.files.join(', ')+'. Your settings are not affected.';$('upd').style.display='block';
+        $('updmsg').textContent=u.message||('Updated files: '+u.files.join(', ')+'. Your settings are not affected.');$('upd').style.display='block';
         $('vermsg').innerHTML='<span class="ok">Update available</span>';return}
       if(u.state==='current'){$('vermsg').innerHTML=manual?'<span class="ok">&#10003; Up to date</span>':'';return}
       if(u.state==='unknown'){$('vermsg').innerHTML=manual?'<span class="err">Could not check (offline?)</span>':'';return}

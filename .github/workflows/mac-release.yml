@@ -1,0 +1,55 @@
+name: Build Mac app
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15       # Apple silicon
+          - runner: macos-15-intel # Intel
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Import signing certificate
+        env:
+          CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          if [ -z "$CERT_P12" ]; then echo "No certificate: building an unsigned app"; exit 0; fi
+          KC="$RUNNER_TEMP/build.keychain"
+          echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p ci "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p ci "$KC"
+          security import "$RUNNER_TEMP/cert.p12" -P "$CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KC"
+          security set-key-partition-list -S apple-tool:,apple: -k ci "$KC"
+          security list-keychains -d user -s "$KC" login.keychain
+          ID=$(security find-identity -v -p codesigning "$KC" | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)"/\1/')
+          echo "SIGN_ID=$ID" >> "$GITHUB_ENV"
+      - name: Build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          V="${GITHUB_REF_NAME#v}"; case "$GITHUB_REF" in refs/tags/*) ;; *) V="0.0.0";; esac
+          APP_VERSION="$(echo "$V" | sed 's/-.*//')" ./packaging/build_mac.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-${{ matrix.runner }}
+          path: dist/*.dmg
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.dmg
