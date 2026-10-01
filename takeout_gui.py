@@ -26,7 +26,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.01-g"
+VERSION = "2026.10.01-h"
 STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}, "recent": [], "clean": {"state": "idle"}, "update": {"state": "idle", "files": []}, "phase": None, "kind": "fix", "version": VERSION, "boot": time.time()}
 LOCK = threading.Lock()
 
@@ -780,6 +780,8 @@ class Handler(BaseHTTPRequestHandler):
                 bool(body.get("dedupe")), bool(body.get("move")), body.get("date_policy", "earlier"))).start()
             self._send(200, "{}")
         elif self.path == "/api/update_check":
+            with LOCK:
+                STATE["update"] = {"state": "checking", "files": []}
             threading.Thread(target=check_update, daemon=True).start()
             self._send(200, "{}")
         elif self.path == "/api/update":
@@ -910,7 +912,7 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
     </svg>
     <div>
       <h1>Takeout Metadata Fixer</h1>
-      <p class="tag">Put the right date, place and caption back on your Google Photos export. <span id="ver" style="opacity:.6;white-space:nowrap"></span></p>
+      <p class="tag">Put the right date, place and caption back on your Google Photos export. <span id="ver" style="opacity:.6;white-space:nowrap"></span> <a href="#" id="vercheck" style="font-size:13px;white-space:nowrap">Check for updates</a> <span id="vermsg" style="font-size:13px;white-space:nowrap"></span></p>
     </div>
   </div>
   <div class="chips"><span class="chip priv">&#128274; Runs only on your computer: nothing is uploaded</span></div>
@@ -1130,11 +1132,23 @@ function showSort(s){
 
 (async function(){
   let boot=null;
+  const sleep=ms=>new Promise(r=>setTimeout(r,ms));
   async function st(){try{const j=await (await fetch('/api/status')).json();if(j&&j.version)$('ver').textContent='Version '+j.version;return j}catch(e){return null}}
-  for(let i=0;i<8;i++){const s=await st();if(s){boot=s.boot;if(s.update&&s.update.state==='available'){
-    $('updmsg').textContent='Updated files: '+s.update.files.join(', ')+'. Your settings are not affected.';$('upd').style.display='block';break}
-    if(s.update&&['current','unknown'].includes(s.update.state))break}
-    await new Promise(r=>setTimeout(r,1500))}
+  async function checkNow(manual){
+    if(manual)$('vermsg').textContent='Checking...';
+    try{await post('/api/update_check')}catch(e){}
+    for(let i=0;i<12;i++){
+      await sleep(800);const s=await st();if(!s)continue;boot=s.boot;const u=s.update||{};
+      if(u.state==='available'){
+        $('updmsg').textContent='Updated files: '+u.files.join(', ')+'. Your settings are not affected.';$('upd').style.display='block';
+        $('vermsg').innerHTML='<span class="ok">Update available</span>';return}
+      if(u.state==='current'){$('vermsg').innerHTML=manual?'<span class="ok">&#10003; Up to date</span>':'';return}
+      if(u.state==='unknown'){$('vermsg').innerHTML=manual?'<span class="err">Could not check (offline?)</span>':'';return}
+    }
+    if(manual)$('vermsg').textContent='';
+  }
+  $('vercheck').onclick=e=>{e.preventDefault();checkNow(true)};
+  checkNow(false);setInterval(()=>checkNow(false),30*60*1000);
   $('updno').onclick=()=>{$('upd').style.display='none'};
   $('updgo').onclick=async()=>{
     $('updgo').disabled=true;$('updmsg').textContent='Updating...';

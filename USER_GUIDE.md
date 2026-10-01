@@ -26,7 +26,7 @@ A Takeout export gives you photos and videos plus a `.json` file for each one. T
 
 ## Updates
 
-When the app starts it checks the MetadataFixer repository for a newer version. If there is one, a banner appears at the top of the page listing the changed files. Press **Update now** and the app downloads the two program files, checks they are valid, keeps your old copies as `takeout_gui.py.bak` and `takeout_fix_metadata.py.bak`, restarts itself and reloads the page. It will not update while a job is running, and it never changes anything until you press the button. Your reports and output folders are untouched.
+The app checks the MetadataFixer repository for a newer version when it starts, every time you load or reload the page, and every 30 minutes while it is open. You can also press **Check for updates** next to the version number in the header, which says "Up to date" or shows the update banner. If there is one, a banner appears at the top of the page listing the changed files. Press **Update now** and the app downloads the two program files, checks they are valid, keeps your old copies as `takeout_gui.py.bak` and `takeout_fix_metadata.py.bak`, restarts itself and reloads the page. It will not update while a job is running, and it never changes anything until you press the button. Your reports and output folders are untouched.
 
 - Needs an internet connection. If you are offline, nothing happens and the app works as normal.
 - To skip the check, start it with `python3 takeout_gui.py --no-update-check`.
