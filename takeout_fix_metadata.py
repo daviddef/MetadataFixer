@@ -1153,7 +1153,7 @@ def find_extensionless(folders):
     out = []
     for f in folders:
         for dp, dns, fns in os.walk(f, followlinks=False):
-            dns[:] = [d for d in dns if not (os.path.islink(os.path.join(dp, d)) or is_bundle(d))]
+            dns[:] = [d for d in dns if not (os.path.islink(os.path.join(dp, d)) or is_bundle(d) or d == "_unrecognised")]
             for n in fns:
                 if "." not in n and not n.startswith("._") and n.lower() not in JUNK_NAMES:
                     out.append(Path(dp) / n)
@@ -1197,7 +1197,51 @@ def _companions(path):
     return found
 
 
-def fix_extensions(folders, dry_run, progress=None, rename_json=True):
+STRONG_MAGIC = [(b"\xff\xd8\xff", "JPEG"), (b"\x89PNG\r\n\x1a\n", "PNG"), (b"GIF87a", "GIF"), (b"GIF89a", "GIF"),
+                (b"%PDF-", "PDF"), (b"PK\x03\x04", "ZIP"), (b"\x1a\x45\xdf\xa3", "MKV/WebM"), (b"FLV\x01", "FLV")]
+FFPROBE_EXT = {"mov,mp4,m4a,3gp,3g2,mj2": "mp4", "matroska,webm": "mkv", "avi": "avi", "mpegts": "ts", "mpeg": "mpg",
+               "asf": "wmv", "flv": "flv", "gif": "gif", "png_pipe": "png", "jpeg_pipe": "jpg", "webp_pipe": "webp",
+               "tiff_pipe": "tif", "mp3": "mp3", "wav": "wav", "ogg": "ogg"}
+
+
+def probe_container_ext(path):
+    """Second opinion from ffprobe for files exiftool does not recognise (some video/audio containers)."""
+    if not shutil.which("ffprobe"):
+        return None
+    try:
+        r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=format_name", "-of", "csv=p=0", str(path)],
+                           capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return FFPROBE_EXT.get(r.stdout.strip()) if r.returncode == 0 else None
+
+
+def diagnose_unknown(path):
+    """A plain-language reason why a file's type could not be recognised."""
+    try:
+        with open(path, "rb") as fh:
+            buf = fh.read(65536)
+            size = os.fstat(fh.fileno()).st_size
+    except OSError as e:
+        return f"could not be read ({e})"
+    if size == 0:
+        return "the file is empty (0 bytes)"
+    if buf.count(0) == len(buf):
+        return "filled with zeros: a failed copy or a damaged part of the disk" + (" (first 64 KB checked)" if size > len(buf) else "")
+    for sig, name in STRONG_MAGIC:
+        i = buf.find(sig, 1)
+        if i > 0:
+            return f"contains {name} data starting at byte {i}: the first {i} bytes are damaged or extra"
+    j = buf.find(b"ftyp", 1)
+    if 4 <= j < 4096:
+        return f"contains MP4/MOV data starting at byte {j - 4}: the first {j - 4} bytes are damaged or extra"
+    if size < 1024 and all(32 <= c < 127 or c in (9, 10, 13) for c in buf[:512]):
+        return "looks like text: " + buf[:60].decode("ascii", "replace").replace("\n", " ")
+    head = " ".join(f"{c:02x}" for c in buf[:12])
+    return f"unknown or truncated binary data (starts with {head}); {size / 1024:.0f} KB"
+
+
+def fix_extensions(folders, dry_run, progress=None, rename_json=True, aside=False):
     """Give files that have no extension the right one, detected from their contents; keep their .json attached."""
     cands = find_extensionless(folders)
     det = detect_types(cands, progress)
@@ -1210,9 +1254,26 @@ def fix_extensions(folders, dry_run, progress=None, rename_json=True):
             row["size"] = p.stat().st_size
         except OSError:
             pass
+        if not ext and row["size"] > 0:
+            ext = probe_container_ext(p)          # second opinion for containers exiftool does not know
+            if ext:
+                row["detail"] = "identified by ffprobe"
         if not ext:
             row["action"] = "empty" if row["size"] == 0 else "unrecognised"
-            row["detail"] = "the file is empty" if row["size"] == 0 else "contents are not a known file type (possibly damaged)"
+            row["detail"] = diagnose_unknown(p)
+            if aside:
+                root = next((Path(f) for f in folders if Path(f) in p.parents), p.parent)
+                dest = root / "_unrecognised" / p.relative_to(root)
+                row["new"] = str(dest)
+                if dry_run:
+                    row["action"] += " (would move aside)"
+                else:
+                    try:
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.move(str(p), _free_name(str(dest)) if dest.exists() else str(dest))
+                        row["action"] += " (moved aside)"
+                    except OSError as e:
+                        row["detail"] += f"; could not move aside: {e}"
         else:
             ext = EXT_MAP.get(ext, ext)
             row["ext"] = ext
@@ -1223,7 +1284,7 @@ def fix_extensions(folders, dry_run, progress=None, rename_json=True):
             comps = _companions(p) if rename_json else []
             row["json"] = len(comps)
             if info.get("warn"):
-                row["detail"] = "may be damaged: " + str(info["warn"])[:80]
+                row["detail"] = ((row["detail"] + "; ") if row["detail"] else "") + "may be damaged: " + str(info["warn"])[:80]
             if dry_run:
                 row["action"] = "would-rename"
             else:
@@ -1242,12 +1303,33 @@ def fix_extensions(folders, dry_run, progress=None, rename_json=True):
     return rows
 
 
+SAFESAVE_RE = re.compile(r"\.sb-[0-9a-f]{8}-[A-Za-z0-9]{6}$")   # macOS 'safe save' temporary files, e.g. photo.gif.sb-33880f7b-LYvy9p
+
 JUNK_KINDS = {
-    "system": lambda n: is_junk(n, True),
-    "ithmb": lambda n: n.lower().endswith(".ithmb"),                  # iPod / iTunes photo thumbnail caches
-    "picasa": lambda n: n.lower() in (".picasa.ini", "picasa.ini"),
-    "thm": lambda n: n.lower().endswith(".thm"),                      # camera video thumbnails
+    "system": lambda n, sz=0: is_junk(n, True),
+    "ithmb": lambda n, sz=0: n.lower().endswith(".ithmb"),                  # iPod / iTunes photo thumbnail caches
+    "picasa": lambda n, sz=0: n.lower() in (".picasa.ini", "picasa.ini"),
+    "thm": lambda n, sz=0: n.lower().endswith(".thm"),                      # camera video thumbnails
+    "safesave": lambda n, sz=0: sz == 0 and bool(SAFESAVE_RE.search(n)),    # only EMPTY ones: a non-empty one may hold unsaved work
+    "empty": lambda n, sz=0: sz == 0,                                       # zero-byte files of any kind
 }
+
+
+def find_safesave_kept(folders):
+    """Safe-save temporary files that are NOT empty: never deleted, only reported."""
+    out = []
+    for f in folders:
+        for dp, dns, fns in os.walk(f, followlinks=False):
+            dns[:] = [d for d in dns if not (os.path.islink(os.path.join(dp, d)) or is_bundle(d))]
+            for n in fns:
+                if SAFESAVE_RE.search(n):
+                    p = os.path.join(dp, n)
+                    try:
+                        if os.path.getsize(p) > 0:
+                            out.append(p)
+                    except OSError:
+                        pass
+    return out
 
 
 def find_junk(folders, kinds):
@@ -1257,15 +1339,15 @@ def find_junk(folders, kinds):
         for dp, dns, fns in os.walk(f, followlinks=False):
             dns[:] = [d for d in dns if not (os.path.islink(os.path.join(dp, d)) or is_bundle(d))]
             for n in fns:
+                p = os.path.join(dp, n)
+                try:
+                    size = os.path.getsize(p)
+                except OSError:
+                    size = -1
                 for k in kinds:
                     test = JUNK_KINDS.get(k)
-                    if test and test(n):
-                        p = os.path.join(dp, n)
-                        try:
-                            size = os.path.getsize(p)
-                        except OSError:
-                            size = 0
-                        items.append((p, size, k))
+                    if test and test(n, size):
+                        items.append((p, max(size, 0), k))
                         break
     return items
 

@@ -26,7 +26,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.01-s"
+VERSION = "2026.10.01-u"
 STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}, "recent": [], "clean": {"state": "idle"}, "update": {"state": "idle", "files": []}, "phase": None, "kind": "fix", "cv": None, "cancel": False, "version": VERSION, "boot": time.time()}
 LOCK = threading.Lock()
 
@@ -861,7 +861,7 @@ def run_cleanup(roots, dry_run, opts):
             if task == "ext":
                 def cbx(stage, done, total):
                     phase(i, done / max(1, total) * (0.5 if stage == "detecting types" else 1.0), f"{stage} ({done:,}/{total:,})")
-                res = fx.fix_extensions(folders, dry_run, cbx, bool(opts["ext"].get("json", True)))
+                res = fx.fix_extensions(folders, dry_run, cbx, bool(opts["ext"].get("json", True)), bool(opts["ext"].get("aside")))
                 for r in res:
                     rows.append({"task": "ext", "kind": "file", "path": r["path"], "new": r["new"], "action": r["action"], "detail": r["detail"]})
                     if r["action"] in ("renamed", "would-rename"):
@@ -870,7 +870,7 @@ def run_cleanup(roots, dry_run, opts):
                         extra["errors"] += 1
                     feed(os.path.basename(r["path"]), r["action"])
                 ok = [r for r in res if r["action"] in ("renamed", "would-rename")]
-                bad = [r for r in res if r["action"] in ("unrecognised", "empty")]
+                bad = [r for r in res if r["action"].startswith(("unrecognised", "empty"))]
                 dmg = [r for r in ok if r["detail"].startswith("may be damaged")]
                 bytype = defaultdict(int)
                 for r in ok:
@@ -881,9 +881,10 @@ def run_cleanup(roots, dry_run, opts):
                                            [len(dmg), "recognised but possibly damaged", "bad" if dmg else ""],
                                            [len(bad), "not recognised (empty or damaged)", "bad" if bad else ""]],
                                  "table": {"head": ["Detected type", "Files"], "rows": [[f".{k}", str(v)] for k, v in sorted(bytype.items(), key=lambda kv: -kv[1])]},
-                                 "note": ("Not recognised (first 20): " + "; ".join(f"{os.path.basename(r['path'])} ({fmt_bytes(r['size'])}, {r['action']})" for r in bad[:20]) +
-                                          ". These can't be repaired automatically: open one to check, or restore it from the original.") if bad else
-                                         ("Run this before the Fix metadata tab: Fix only looks at files with a known extension.")})
+                                 "table2": {"title": "Files that could not be recognised: why", "head": ["File", "Size", "Why"],
+                                            "rows": [[disp(r["path"]), fmt_bytes(r["size"]), r["detail"] + (" [" + r["action"].split("(")[-1].rstrip(")") + "]" if "(" in r["action"] else "")] for r in bad[:60]]} if bad else None,
+                                 "note": (("These cannot be repaired automatically. Open one to check, or restore it from your original export or backup. " if bad else "") +
+                                          "Run this before the Fix metadata tab: Fix only looks at files with a known extension.")})
             elif task == "json":
                 cats, files = find_json(folders, bool(opts.get("json_other")))
                 c, sz, fl = delete_items(i, [(p, s_, "json") for p, s_ in files], "json")
@@ -900,10 +901,17 @@ def run_cleanup(roots, dry_run, opts):
                     by[k][0] += 1
                     by[k][1] += s_
                 names = {"system": "System leftovers (.DS_Store, Thumbs.db, ...)", "ithmb": "iPod/iTunes thumbnail caches (.ithmb)",
-                         "picasa": "Picasa.ini", "thm": "Camera video thumbnails (.thm)"}
+                         "picasa": "Picasa.ini", "thm": "Camera video thumbnails (.thm)",
+                         "safesave": "Empty temporary files left by macOS saving (.sb-...)", "empty": "Other empty (0-byte) files"}
+                kept_sb = fx.find_safesave_kept(folders) if "safesave" in opts["junk"] else []
+                examples = [it for it in items if it[2] in ("safesave", "empty")][:25]
                 sections.append({"task": task, "title": titles[task],
                                  "tiles": [[c, f"junk files {w}deleted", "ok"], [fmt_bytes(sz), "space freed"], [fl, "could not delete", "bad" if fl else ""]],
-                                 "table": {"head": ["Kind", "Files", "Size"], "rows": [[names.get(k, k), str(v[0]), fmt_bytes(v[1])] for k, v in by.items()]}, "note": ""})
+                                 "table": {"head": ["Kind", "Files", "Size"], "rows": [[names.get(k, k), str(v[0]), fmt_bytes(v[1])] for k, v in by.items()]},
+                                 "table2": {"title": "Examples of empty files", "head": ["File", "What it is"],
+                                            "rows": [[disp(p_), names.get(k_, k_)] for p_, _s, k_ in examples]} if examples else None,
+                                 "note": ("%d temporary .sb- files that are NOT empty were left alone (they may hold unsaved work): %s" %
+                                          (len(kept_sb), "; ".join(os.path.basename(x) for x in kept_sb[:6]))) if kept_sb else ""})
             elif task == "names":
                 def cb(stage, done, total):
                     phase(i, done / max(1, total), f"tidying {stage} ({done:,}/{total:,})")
@@ -1530,7 +1538,8 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 <div class="usef" style="margin-top:10px"><b>Folders to clean:</b> <span class="fnote"></span></div>
 
 <div class="opt"><input type="checkbox" id="cx" checked><div><b>1. Fix files with no extension</b><small>Some photos and videos come out of Google Takeout with a name like <i>IMG_2438</i> and no <i>.jpg</i> or <i>.heic</i>, so Finder calls them "Document" and the Fix tab skips them. This reads the real type from inside each file and adds the right extension. Files that cannot be recognised (empty or damaged) are listed but not changed. Do this <b>before</b> Fix metadata.</small>
-<label class="sub"><input type="checkbox" id="cxj" checked> Also rename each file's Google .json to match, so Fix can still find it</label></div></div>
+<label class="sub"><input type="checkbox" id="cxj" checked> Also rename each file's Google .json to match, so Fix can still find it</label>
+<label class="sub"><input type="checkbox" id="cxu"> Move files that cannot be recognised into an <i>_unrecognised</i> folder (inside each folder you chose) so you can review or delete them</label></div></div>
 
 <div class="opt"><input type="checkbox" id="cj"><div><b>2. Remove Google .json files</b><small>The small info files Google adds to each photo. They hold the only copy of the original date and location, so do this <b>after</b> you have fixed your photos. Off by default.</small>
 <label class="sub"><input type="checkbox" id="cother"> Also remove other .json files (every .json in the folders)</label></div></div>
@@ -1539,7 +1548,9 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 <label class="sub"><input type="checkbox" id="cjs" checked> System leftovers (.DS_Store, Thumbs.db, desktop.ini, ._ files)</label>
 <label class="sub"><input type="checkbox" id="cji" checked> iPod/iTunes thumbnail caches (.ithmb, such as T103.ithmb)</label>
 <label class="sub"><input type="checkbox" id="cjp" checked> Picasa.ini files</label>
-<label class="sub"><input type="checkbox" id="cjt"> Camera video thumbnails (.thm)</label></div></div>
+<label class="sub"><input type="checkbox" id="cjt"> Camera video thumbnails (.thm)</label>
+<label class="sub"><input type="checkbox" id="cjb" checked> Empty temporary files left by macOS when saving (names ending in <i>.sb-12345678-AbCdEf</i>, 0 bytes). Ones that still contain data are never deleted</label>
+<label class="sub"><input type="checkbox" id="cje" checked> Other empty files (0 bytes, any name): nothing is stored in them</label></div></div>
 
 <div class="opt"><input type="checkbox" id="cn" checked><div><b>4. Tidy names</b><small>Fixes duplicate-style names such as <i>From Cris Drive - 2001(1)</i> to <i>From Cris Drive - 2001</i>. If a folder with the clean name already exists, the two are <b>merged</b>: identical files are kept once, and different files with the same name are both kept (the second becomes <i>name_1</i>). Real names such as <i>Summer (2019)</i> are never changed, and the folders you chose are not renamed.</small>
 <label class="sub"><input type="checkbox" id="cnp" checked> Remove " (1)", " (2)" ... from names</label>
@@ -1839,8 +1850,8 @@ function liveTiles(s,c,done,nj){
 // ---- Clean up (one job: .json, junk, names, empty folders)
 $('cgo').onclick=async()=>{
   if(!croots().length){alert('Add your folders in the bar at the top first');return}
-  const kinds=[['system','cjs'],['ithmb','cji'],['picasa','cjp'],['thm','cjt']].filter(([k,id])=>$(id).checked).map(([k])=>k);
-  const o={ext:$('cx').checked?{json:$('cxj').checked}:null,json:$('cj').checked,json_other:$('cother').checked,junk:$('cjunk').checked?kinds:[],
+  const kinds=[['system','cjs'],['ithmb','cji'],['picasa','cjp'],['thm','cjt'],['safesave','cjb'],['empty','cje']].filter(([k,id])=>$(id).checked).map(([k])=>k);
+  const o={ext:$('cx').checked?{json:$('cxj').checked,aside:$('cxu').checked}:null,json:$('cj').checked,json_other:$('cother').checked,junk:$('cjunk').checked?kinds:[],
     names:$('cn').checked?{paren:$('cnp').checked,copy:$('cnc').checked,spaces:$('cns').checked,files:$('cnf').checked,dupes:$('cnd').value}:null,
     empty:$('ce').checked?{junk:$('cejunk').checked,top:$('cetop').checked}:null};
   if(!o.ext&&!o.json&&!o.junk.length&&!o.names&&!o.empty){alert('Tick at least one thing to clean');return}
@@ -1853,7 +1864,8 @@ $('cgo').onclick=async()=>{
 function showCleanup(s){
   let h=s.sections.map(sec=>`<h2>${esc(sec.title)}</h2><div class="tiles">${sec.tiles.map(t=>tile(t[0],t[1],t[2]||'')).join('')}</div>`
     +(sec.note?`<small>${esc(sec.note)}</small>`:'')
-    +((sec.table&&sec.table.rows.length)?tbl(sec.table.head,sec.table.rows.map(r=>r.map(c=>esc(c)))):'')).join('');
+    +((sec.table&&sec.table.rows.length)?tbl(sec.table.head,sec.table.rows.map(r=>r.map(c=>esc(c)))):'')
+    +((sec.table2&&sec.table2.rows.length)?`<h2>${esc(sec.table2.title)}</h2>`+tbl(sec.table2.head,sec.table2.rows.map(r=>r.map(c=>esc(c)))):'')).join('');
   h+=s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
   h+='<small>Saved: a CSV listing every change (on your Desktop).</small>';
   $('sumbody').innerHTML=h;$('sum').style.display='block'}
