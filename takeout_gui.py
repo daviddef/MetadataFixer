@@ -7,6 +7,9 @@ Opens http://127.0.0.1:8765 in your browser. Nothing leaves your machine; the
 server only listens on localhost. Needs exiftool (brew install exiftool).
 """
 import argparse
+import hashlib
+import time
+import urllib.request
 import csv
 import json
 import os
@@ -23,7 +26,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}, "recent": [], "clean": {"state": "idle"}}
+STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}, "recent": [], "clean": {"state": "idle"}, "update": {"state": "idle", "files": []}, "boot": time.time()}
 LOCK = threading.Lock()
 
 
@@ -477,6 +480,68 @@ def run_clean(folders, include_other):
             STATE["clean"].update(state="error", message=str(e))
 
 
+UPDATE_BASE = os.environ.get("METADATAFIXER_UPDATE_BASE", "https://raw.githubusercontent.com/daviddef/MetadataFixer/main/")
+UPDATE_FILES = ["takeout_gui.py", "takeout_fix_metadata.py"]
+HERE = Path(__file__).resolve().parent
+
+
+def _fetch(name):
+    req = urllib.request.Request(UPDATE_BASE + name, headers={"User-Agent": "MetadataFixer-updater"})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return r.read()
+
+
+def check_update():
+    """Compare the local files with the latest published ones. Never raises."""
+    with LOCK:
+        STATE["update"] = {"state": "checking", "files": []}
+    try:
+        changed = []
+        for name in UPDATE_FILES:
+            remote = _fetch(name)
+            local = (HERE / name).read_bytes() if (HERE / name).exists() else b""
+            if remote and hashlib.sha256(remote).digest() != hashlib.sha256(local).digest():
+                changed.append(name)
+        with LOCK:
+            STATE["update"] = {"state": "available" if changed else "current", "files": changed}
+    except Exception as e:  # offline, repo moved, etc.: just say we could not check
+        with LOCK:
+            STATE["update"] = {"state": "unknown", "files": [], "message": str(e)[:120]}
+
+
+def apply_update():
+    """Download the latest files, check they are valid Python, replace the old ones (keeping .bak) and restart."""
+    with LOCK:
+        if STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running":
+            return {"error": "A job is running. Wait for it to finish, then update."}
+    try:
+        fresh = {}
+        for name in UPDATE_FILES:
+            data = _fetch(name)
+            compile(data, name, "exec")           # refuse anything that is not valid Python
+            if b"def main" not in data:
+                raise ValueError(f"{name} does not look like the right file")
+            fresh[name] = data
+        for name, data in fresh.items():
+            path = HERE / name
+            if path.exists():
+                (HERE / (name + ".bak")).write_bytes(path.read_bytes())
+            tmp = HERE / (name + ".new")
+            tmp.write_bytes(data)
+            os.replace(tmp, path)
+    except Exception as e:
+        return {"error": f"Update failed, nothing was changed: {e}"}
+    with LOCK:
+        STATE["update"] = {"state": "restarting", "files": []}
+
+    def restart():
+        time.sleep(1.2)
+        argv = [sys.executable] + sys.argv + ([] if "--no-browser" in sys.argv else ["--no-browser"])
+        os.execv(sys.executable, argv)
+    threading.Thread(target=restart, daemon=True).start()
+    return {"ok": True}
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -516,6 +581,11 @@ class Handler(BaseHTTPRequestHandler):
                 bool(body.get("dry_run")), bool(body.get("overwrite")), bool(body.get("pair_live")),
                 bool(body.get("dedupe")), bool(body.get("move")))).start()
             self._send(200, "{}")
+        elif self.path == "/api/update_check":
+            threading.Thread(target=check_update, daemon=True).start()
+            self._send(200, "{}")
+        elif self.path == "/api/update":
+            self._send(200, json.dumps(apply_update()))
         elif self.path == "/api/sort_start":
             with LOCK:
                 busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
@@ -573,6 +643,8 @@ table{width:100%;border-collapse:collapse;font-size:14px;font-variant-numeric:ta
 .tip{border-left:3px solid var(--warn);padding:6px 10px;margin:8px 0;background:var(--bg)}
 .mini{display:inline-block;height:8px;background:var(--bad);border-radius:3px;vertical-align:middle;margin-left:6px}
 </style></head><body><main>
+<div id="upd" style="display:none" class="card"><b>A newer version is available.</b> <span id="updmsg"></span>
+<div style="margin-top:8px"><button class="p" id="updgo">Update now</button> <button id="updno">Not now</button></div></div>
 <h1>Takeout Metadata Fixer</h1>
 <p class="sub">Restores date, location, description and people from Google's .json files. Runs only on your computer.</p>
 
@@ -709,6 +781,23 @@ function showSort(s){
   h+='<small>Saved: a CSV listing where every file went.</small>';
   $('sumbody').innerHTML=h;$('sum').style.display='block'}
 
+(async function(){
+  let boot=null;
+  async function st(){try{return await (await fetch('/api/status')).json()}catch(e){return null}}
+  for(let i=0;i<8;i++){const s=await st();if(s){boot=s.boot;if(s.update&&s.update.state==='available'){
+    $('updmsg').textContent='Updated files: '+s.update.files.join(', ')+'. Your settings are not affected.';$('upd').style.display='block';break}
+    if(s.update&&['current','unknown'].includes(s.update.state))break}
+    await new Promise(r=>setTimeout(r,1500))}
+  $('updno').onclick=()=>{$('upd').style.display='none'};
+  $('updgo').onclick=async()=>{
+    $('updgo').disabled=true;$('updmsg').textContent='Updating...';
+    const r=await post('/api/update');
+    if(r.error){$('updmsg').innerHTML='<span class="err">'+esc(r.error)+'</span>';$('updgo').disabled=false;return}
+    $('updmsg').textContent='Updated. Restarting...';
+    for(let i=0;i<30;i++){await new Promise(x=>setTimeout(x,1000));const s=await st();if(s&&s.boot!==boot){location.reload();return}}
+    $('updmsg').textContent='Updated. If the page does not reload, restart the app in Terminal.'}
+})();
+
 let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   const s=await (await fetch('/api/status')).json();$('prog').style.display='block';
   const run=s.state==='scanning'||s.state==='running';$('go').disabled=run;
@@ -727,9 +816,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--no-browser", action="store_true")
+    ap.add_argument("--no-update-check", action="store_true", help="do not look for a newer version at startup")
     a = ap.parse_args()
     srv = ThreadingHTTPServer(("127.0.0.1", a.port), Handler)
     url = f"http://127.0.0.1:{a.port}"
+    if not a.no_update_check:
+        threading.Thread(target=check_update, daemon=True).start()
     print(f"Open {url}  (Ctrl+C to quit)")
     if not a.no_browser:
         webbrowser.open(url)

@@ -24,6 +24,15 @@ A Takeout export gives you photos and videos plus a `.json` file for each one. T
 - All your Takeout zips **extracted** into folders (the tool reads folders, not zips)
 - Free disk space roughly equal to your photo library if you use an output folder (recommended)
 
+## Updates
+
+When the app starts it checks the MetadataFixer repository for a newer version. If there is one, a banner appears at the top of the page listing the changed files. Press **Update now** and the app downloads the two program files, checks they are valid, keeps your old copies as `takeout_gui.py.bak` and `takeout_fix_metadata.py.bak`, restarts itself and reloads the page. It will not update while a job is running, and it never changes anything until you press the button. Your reports and output folders are untouched.
+
+- Needs an internet connection. If you are offline, nothing happens and the app works as normal.
+- To skip the check, start it with `python3 takeout_gui.py --no-update-check`.
+- If you ever want to go back, copy the `.bak` files over the current ones.
+- Only these two files, from `https://raw.githubusercontent.com/daviddef/MetadataFixer/main/`, are downloaded.
+
 ## Install
 
 ```
