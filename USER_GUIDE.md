@@ -73,7 +73,15 @@ Live counters while running, then a full summary:
 - Breakdowns **by file type**, **by Takeout batch** and the **albums with most no-JSON files**
 - Plain-language tips (for example, "their JSON is probably in other batches")
 
-Saved in the output folder (or on your Desktop if none): `takeout_report.csv` (every file, with `date`, `gps`, `desc` and `live` outcomes), `takeout_report_no_json.csv` (only unmatched files) and `takeout_report_summary.txt`. Preview runs use `takeout_dryrun*` names.
+The app also shows a **Sample of changes** table (first 15 files) with each value as `before -> Google's value`.
+
+Saved in the output folder (or on your Desktop if none); preview runs use `takeout_dryrun*` names:
+- `takeout_report.csv`: every file. Per field it shows the outcome plus the exact values: `date` / `date_before` / `date_google`, `gps` / `gps_before` / `gps_google` (latitude, longitude), `desc` / `desc_before` / `desc_google`, plus `people`, `favourite`, `live` (Live Photo result), `match` and `status`
+- `takeout_report_changes.csv`: only files where something was added, replaced or left alone
+- `takeout_report_no_json.csv`: only unmatched files
+- `takeout_report_summary.txt`: the totals
+
+`*_google` is the value written when the outcome is *added* or *replaced*. `*_before` is what the file held (blank if it had nothing). Dates are shown as UTC.
 
 ## How files are matched to their JSON
 

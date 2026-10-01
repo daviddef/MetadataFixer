@@ -189,7 +189,7 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False):
         report_dir.mkdir(parents=True, exist_ok=True)
         tag = "dryrun" if dry_run else "report"
         report = report_dir / f"takeout_{tag}.csv"
-        fields = ["file", "sidecar", "match", "status", "detail", "live", "date", "gps", "desc"]
+        fields = fx.REPORT_FIELDS
         with open(report, "w", newline="", encoding="utf-8") as fh:
             w = csv.DictWriter(fh, fieldnames=fields)
             w.writeheader()
@@ -198,7 +198,18 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False):
             w = csv.DictWriter(fh, fieldnames=fields)
             w.writeheader()
             w.writerows(r for r in rows if r["status"] == "no-json")
+        changed = [r for r in rows if r["status"] in ("updated", "would-update")
+                   and ({r["date"], r["gps"], r["desc"]} & {"added", "replaced", "kept"} or r["people"] or r["favourite"])]
+        with open(report_dir / f"takeout_{tag}_changes.csv", "w", newline="", encoding="utf-8") as fh:
+            w = csv.DictWriter(fh, fieldnames=fields)
+            w.writeheader()
+            w.writerows(changed)
         sm = summarise(rows, sidecars, resolved, dry_run)
+        sm["samples"] = [{"file": Path(r["file"]).name, "date": [r["date"], r["date_before"], r["date_google"]],
+                          "gps": [r["gps"], r["gps_before"], r["gps_google"]],
+                          "desc": [r["desc"], r["desc_before"], r["desc_google"]]}
+                         for r in changed if "replaced" in (r["date"], r["gps"], r["desc"])
+                         or "added" in (r["date"], r["gps"], r["desc"])][:15]
         write_text_summary(report_dir / f"takeout_{tag}_summary.txt", sm)
         with LOCK:
             STATE.update(state="done", report=str(report), summary=sm, message="Finished")
@@ -340,7 +351,9 @@ function showSummary(s){
   h+='<h2>By Takeout batch</h2>'+tbl(['Batch','With JSON','No JSON'],bars(s.batch));
   if(s.live&&Object.keys(s.live).length)h+='<h2>Live Photo pairing</h2>'+tbl(['Result','Videos'],Object.entries(s.live).map(([k,v])=>[({paired:'Paired with its still','no-id':'Still has no Apple ID','no-still':'No matching still','pair-error':'Error'})[k]||k,v.toLocaleString()]));
   if(s.album_no_json.length)h+='<h2>Albums with the most no-JSON files</h2>'+tbl(['Album','No JSON'],s.album_no_json.map(r=>[esc(r[0]),r[1].toLocaleString()]));
-  h+='<small>Saved: full report CSV, a CSV of just the no-JSON files, and a text summary.</small>';
+  const fmt=([o,b,g])=>o==='same'?'<span style="color:var(--mute)">already correct</span>':o==='none'||!o?'-':`${esc(b||'(none)')} &rarr; <b>${esc(g)}</b> <small style="display:inline">(${o})</small>`;
+  if((s.samples||[]).length)h+='<h2>Sample of changes (first 15)</h2>'+tbl(['File','Date taken','Location','Description'],s.samples.map(x=>[esc(x.file),fmt(x.date),fmt(x.gps),fmt(x.desc)]));
+  h+='<small>Saved: full report CSV (with before/after values per file), a changes-only CSV, a CSV of just the no-JSON files, and a text summary.</small>';
   $('sumbody').innerHTML=h;$('sum').style.display='block'}
 let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   const s=await (await fetch('/api/status')).json();$('prog').style.display='block';

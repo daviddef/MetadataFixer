@@ -289,6 +289,8 @@ def classify(d, ext, ex, overwrite):
         dt = datetime.fromtimestamp(taken, timezone.utc).strftime("%Y:%m:%d %H:%M:%S")
         e = ex.get("date", "")
         out["date"] = "added" if (not e or e.startswith("0000")) else ("same" if e[:19] == dt else differ)
+        out["date_before"] = "" if e.startswith("0000") else e[:19]
+        out["date_google"] = dt + " UTC"
     geo = d.get("geoData") or {}
     if not (geo.get("latitude") or geo.get("longitude")):
         geo = d.get("geoDataExif") or {}
@@ -297,15 +299,22 @@ def classify(d, ext, ex, overwrite):
         out["gps"] = "none"
     elif ex.get("lat") is None or ex.get("lon") is None:
         out["gps"] = "added"
+        out["gps_google"] = f"{lat:.6f}, {lon:.6f}"
     else:
         near = abs(ex["lat"] - lat) < 5e-4 and abs(ex["lon"] - lon) < 5e-4
         out["gps"] = "same" if near else differ
+        out["gps_before"] = f"{ex['lat']:.6f}, {ex['lon']:.6f}"
+        out["gps_google"] = f"{lat:.6f}, {lon:.6f}"
     desc = (d.get("description") or "").strip()
     if not desc:
         out["desc"] = "none"
     else:
         e = ex.get("desc", "")
         out["desc"] = "added" if not e else ("same" if e == desc else differ)
+        out["desc_before"], out["desc_google"] = e, desc
+    names = [(p or {}).get("name") for p in d.get("people") or []]
+    out["people"] = "; ".join(n for n in names if n)
+    out["favourite"] = "yes" if d.get("favorited") else ""
     return out
 
 
@@ -325,6 +334,12 @@ def pick_closest(m, candidates):
             best, gap = c, abs(t - ref)
     return best
 
+
+REPORT_FIELDS = ["file", "sidecar", "match", "status", "detail", "live",
+                 "date", "date_before", "date_google",
+                 "gps", "gps_before", "gps_google",
+                 "desc", "desc_before", "desc_google",
+                 "people", "favourite"]
 
 STILL_EXT = {".heic", ".heif", ".jpg", ".jpeg"}
 
@@ -358,7 +373,7 @@ def process(m, idx, args, out_root):
     if how == "tree-ambiguous":
         sc = pick_closest(m, sc)
     row = {"file": str(m), "sidecar": str(sc) if sc else "", "match": how or "", "status": "",
-           "detail": "", "live": "", "date": "", "gps": "", "desc": ""}
+           **{k: "" for k in REPORT_FIELDS if k not in ("file", "sidecar", "match", "status")}}
     cid = None
     if getattr(args, "pair_live", False) and m.suffix.lower() in (".mp4", ".mov"):
         cid, why = live_id(m)
@@ -435,7 +450,7 @@ def main():
                 print(f"  {i}/{len(media)}")
 
     with open(args.report, "w", newline="", encoding="utf-8") as fh:
-        w = csv.DictWriter(fh, fieldnames=["file", "sidecar", "match", "status", "detail", "live", "date", "gps", "desc"])
+        w = csv.DictWriter(fh, fieldnames=REPORT_FIELDS)
         w.writeheader()
         w.writerows(rows)
 
