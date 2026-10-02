@@ -2381,6 +2381,10 @@ def photos_verify_report(lib, root):
     if st.get("ok"):
         upload_record(lib, st)
         st["eta"] = upload_eta(lib)
+        try:
+            st["albums_live"] = fx.photos_albums_live_check(lib, root)
+        except Exception as ex:
+            st["albums_live"] = {"ok": False, "why": str(ex)[:100]}
     return st
 
 
@@ -3166,6 +3170,68 @@ def open_path(rid, what):
     subprocess.Popen([opener, target])
     return {"ok": True}
 
+def build_receipt(dest, library="", sources=None):
+    """A shareable, self-contained page that shows what was done and proves what arrived: the library's metadata coverage, the Photos
+    import and iCloud upload, albums and Live Photos. Written next to the other reports. Nothing leaves this computer."""
+    dest = str(dest or "")
+    cov = fx.library_coverage(dest) if dest and os.path.isdir(dest) else None
+    runs = [e for e in list_history(60) if not e.get("dry_run") and e.get("state") == "finished" and e["kind"] in ("fix", "guided", "merge", "photos")
+            and (not dest or e.get("dest") == dest or e["kind"] == "photos")][:6]
+    up = None
+    if dest and os.path.isdir(dest):
+        try:
+            lib = library or (fx.find_photos_libraries() or [{}])[0].get("path", "")
+            if lib:
+                up = photos_verify_report(lib, dest)
+        except Exception:
+            up = None
+    esc_ = html_escape
+    pct = lambda a, b: ("%d%%" % round(100 * a / b)) if b else "n/a"
+    rows = []
+    if cov:
+        n_ = cov["sampled"]
+        rows.append(("Photos and videos in the library", "{:,} ({})".format(cov["files"], fmt_bytes(cov["bytes"]))))
+        if n_:
+            rows += [("Have a date taken", "%s of a %d-file sample" % (pct(cov["with_date"], n_), n_)), ("Have a location", pct(cov["with_gps"], n_)),
+                     ("Have a caption", pct(cov["with_caption"], n_)), ("Dates carry a time-zone offset", pct(cov["with_offset"], n_)),
+                     ("Dates in the future", "%d" % cov["future"])]
+    sec = ["<h2>The library now</h2><table>" + "".join("<tr><td>%s</td><td>%s</td></tr>" % (esc_(a), esc_(b)) for a, b in rows) + "</table>" if rows else ""]
+    if runs:
+        sec.append("<h2>What was done</h2><table>" + "".join("<tr><td>%s</td><td>%s<br><small>%s</small></td></tr>" % (esc_(time.strftime("%Y-%m-%d %H:%M", time.localtime(e["started"]))), esc_(e["title"]), esc_((e.get("headline") or "")[:200])) for e in runs) + "</table>")
+    if up and up.get("ok"):
+        ul = []
+        ul.append(("Items in Photos", "{:,}".format(up["total"])))
+        if up.get("uploaded") is not None:
+            ul.append(("In iCloud", "{:,} ({} waiting)".format(up["uploaded"], up["pending"])))
+        if up.get("sent"):
+            ul.append(("Sent by Backstory", "{:,}".format(up["sent"])))
+            if up.get("matched") is not None:
+                ul.append(("Found in Photos", "{:,} of {:,}".format(up["matched"], up["sent"])))
+                ul.append(("Of those in iCloud", "{:,}".format(up.get("matched_uploaded", 0))))
+                if up.get("uncertain"):
+                    ul.append(("Same name, different size (not counted)", "{:,}".format(up["uncertain"])))
+        al = up.get("albums_live") or {}
+        if al.get("ok"):
+            ul.append(("Albums complete", "%d of %d" % (len(al["albums"]) - al["albums_missing"] - al["albums_short"], len(al["albums"]))))
+            if al.get("live_found") is not None:
+                ul.append(("Live Photos in Photos", "{:,} of {:,} expected".format(al["live_found"], al["live_expected"])))
+        sec.append("<h2>Apple Photos and iCloud</h2><table>" + "".join("<tr><td>%s</td><td>%s</td></tr>" % (esc_(a), esc_(b)) for a, b in ul) + "</table>")
+        miss = [a for a in (al.get("albums") or []) if a["found"] < a["expected"]]
+        if miss:
+            sec.append("<h3>Albums to check</h3><table><tr><th>Album</th><th>Sent</th><th>In Photos</th></tr>" + "".join("<tr><td>%s</td><td>%s</td><td>%s</td></tr>" % (esc_(a["name"]), a["expected"], a["found"]) for a in miss) + "</table>")
+    verdict = "Everything Backstory could check arrived." if (up and up.get("ok") and up.get("pending") == 0 and not (up.get("not_found")) and not (up.get("albums_live") or {}).get("albums_missing")) else "Some items could not be confirmed yet. See the sections above."
+    page = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Backstory migration receipt</title><style>
+body{font:15px/1.5 -apple-system,system-ui,sans-serif;max-width:760px;margin:30px auto;padding:0 16px;color:#1d1d1b}h1{margin:0 0 4px}h2{margin:24px 0 6px;font-size:17px}table{width:100%%;border-collapse:collapse}td,th{padding:6px 8px;border-bottom:1px solid #ddd;text-align:left;vertical-align:top}td:first-child{color:#555;width:45%%}
+.v{padding:12px 14px;border-radius:12px;background:#eef6ff;margin:14px 0;font-weight:600}small{color:#666}.f{margin-top:30px;color:#777;font-size:12.5px}</style></head><body>
+<h1>Migration receipt</h1><div>Made by Backstory %s on %s</div><div class="v">%s</div>%s
+<div class="f">This receipt was made on your own computer from what Backstory could read. The numbers for dates, locations and captions come from a random sample of the library's files; the Photos figures come from a copy of Photos' own database, which Apple does not document, so treat them as strong hints. Nothing was uploaded anywhere. Keep your original Takeout until you have checked Photos and iCloud yourself.</div></body></html>""" % (
+        esc_(VERSION), esc_(time.strftime("%Y-%m-%d %H:%M")), esc_(verdict), "".join(sec))
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    path = REPORTS_DIR / ("Backstory receipt %s.html" % time.strftime("%Y-%m-%d %H%M%S"))
+    path.write_text(page, encoding="utf-8")
+    return str(path), page
+
+
 
 def diagnostics_text():
     with LOCK:
@@ -3439,6 +3505,16 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps({"runs": list_history(), "dir": str(REPORTS_DIR)}))
         elif path == "/api/open_run":
             self._send(200, json.dumps(open_path(body.get("id", ""), body.get("what", "report"))))
+        elif path == "/api/receipt":
+            dest_ = str(body.get("dest") or (body.get("root") or ""))
+            try:
+                rp, _html = build_receipt(dest_, str(body.get("library") or ""))
+            except OSError as ex:
+                return self._send(200, json.dumps({"error": "Could not write the receipt: %s" % ex}))
+            opener = "open" if sys.platform == "darwin" else ("xdg-open" if shutil.which("xdg-open") else None)
+            if opener and not body.get("noopen"):
+                subprocess.Popen([opener, rp])
+            self._send(200, json.dumps({"ok": True, "path": rp}))
         elif path == "/api/open_reports":
             REPORTS_DIR.mkdir(parents=True, exist_ok=True)
             opener = "open" if sys.platform == "darwin" else ("xdg-open" if shutil.which("xdg-open") else None)
@@ -4137,7 +4213,7 @@ h2{margin:12px 0 4px}small{margin-top:3px}
 <small style="margin-top:4px">Reads a copy of your Photos library's database to count what has uploaded, how fast it is going, and whether it looks stuck. It also checks the files Backstory sent from your first Source folder. Apple does not document this database, so treat the numbers as a strong hint and confirm in Photos and on iCloud.com.</small>
 <div class="opt"><div style="flex:1"><label for="uplib" style="font-weight:600">Photos library</label><select id="uplib" class="sel"><option value="">Find it automatically</option></select></div></div>
 <div class="opt"><input type="checkbox" id="upsent" checked><div>Also check the files Backstory sent<small>Compares each file sent from the first Source folder with Photos, by name and size.</small></div></div>
-<div class="hbtns"><button class="p" id="upgo">Check upload status</button></div><div id="upres"></div></div>
+<div class="hbtns"><button class="p" id="upgo">Check upload status</button><button id="rcgo" title="A shareable page proving what arrived">Make a migration receipt</button></div><div id="upres"></div></div>
 <div class="card"><b>Log issues</b>
 <small style="margin-top:4px">Reads recent Photos, iCloud and Backstory errors that you never see in Console and explains them in plain language, with fixes. It only reads. Nothing is uploaded.</small>
 <div class="opt"><div style="flex:1"><label for="mhours" style="font-weight:600">Look back</label><select id="mhours" class="sel"><option value="1">1 hour</option><option value="6" selected>6 hours</option><option value="24">24 hours</option><option value="168">7 days</option></select></div></div>
@@ -4660,6 +4736,9 @@ function uploadHTML(r){
   if(eta.stalled)h+='<div class="tip" style="border-color:var(--bad)"><b>Uploads look stuck:</b> the number waiting has not fallen for about 45 minutes. <a href="#" id="whystuck">Check the logs for the cause</a> (Low Power Mode, a paused sync, no iCloud space and a lost network are the usual ones).</div>';
   else if(eta.rate_per_hour>0&&eta.eta_hours)h+=`<div class="tip" style="border-color:var(--acc)">Uploading about <b>${eta.rate_per_hour.toLocaleString()}</b> items an hour. About <b>${fmtEta(eta.eta_hours)}</b> left at that speed.</div>`;
   else if(r.pending>0&&(eta.points||0)<2)h+='<div class="tip">Press the button again in a few minutes and Backstory will work out the upload speed and time left.</div>';
+  const al=r.albums_live;if(al&&al.ok){const bad=al.albums_missing||al.albums_short||(al.live_found!=null&&al.live_found<al.live_expected);
+    h+=`<div class="tip" style="border-color:${bad?'var(--warn)':'var(--ok)'}"><b>Albums and Live Photos:</b> ${al.albums.length-al.albums_missing-al.albums_short} of ${al.albums.length} albums arrived complete${al.albums_missing?', '+al.albums_missing+' missing':''}${al.albums_short?', '+al.albums_short+' with fewer photos than sent':''}. ${al.live_found!=null?'Live Photos in Photos: <b>'+al.live_found.toLocaleString()+'</b> of '+al.live_expected.toLocaleString()+' expected.':''}${(al.notes||[]).map(n=>' '+esc(n)).join('')}</div>`;
+    if(al.albums&&al.albums.some(a=>a.found<a.expected))h+='<details class="more"><summary>Albums that are missing or short</summary>'+tbl(['Album','Sent','In Photos'],al.albums.filter(a=>a.found<a.expected).map(a=>[esc(a.name),a.expected.toLocaleString(),a.found.toLocaleString()]))+'</details>'}
   if(r.sent!=null&&r.sent>0){
     if(r.wanted_note)h+='<div class="tip">Could not verify the files Backstory sent ('+esc(r.wanted_note)+').</div>';
     else if(r.matched!=null){const ok=r.matched_uploaded===r.matched&&r.not_found===0;
@@ -4673,6 +4752,7 @@ async function checkUpload(){
   if(!r.ok){$('upres').innerHTML=`<div class="tip">Could not read the Photos database${r.why?': '+esc(r.why):''}. This needs a Mac with a Photos library; the check is experimental.</div>`;return}
   $('upres').innerHTML=uploadHTML(r);const w=$('whystuck');if(w)w.onclick=e=>{e.preventDefault();startMonitor(false)}}
 $('upgo').onclick=checkUpload;
+$('rcgo').onclick=async()=>{const d=dest();if(!d){alert('Choose your Destination (the finished library) in the bar at the top first');return}$('rcgo').disabled=true;$('rcgo').textContent='Making the receipt...';const r=await post('/api/receipt',{dest:d,library:($('uplib')||{}).value||''});$('rcgo').disabled=false;$('rcgo').textContent='Make a migration receipt';if(r.error)alert(r.error);else alert('Receipt saved to:\n'+r.path+'\n\nIt is also opening in your browser.')};
 async function startMonitor(quiet,pasted){
   if(!quiet){$('sum').style.display='none'}curGuided=false;
   const r=await post('/api/monitor_start',{hours:+$('mhours').value,pasted:pasted||''});

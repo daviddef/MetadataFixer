@@ -946,12 +946,44 @@ def t_preflight_report():
     assert any(i["title"].startswith("Space") or "Destination" in i["title"] for i in pf["items"]), pf
 
 
+def t_albums_and_live_arrival():
+    import sqlite3
+    root = WORK / "alb_lib"
+    jpeg(root / "Japan 2025" / "a.jpg", seed=61); jpeg(root / "Japan 2025" / "b.jpg", seed=62); jpeg(root / "Japan 2025" / "live.jpg", seed=63)
+    video(root / "Japan 2025" / "live.mov", 1)
+    jpeg(root / "Cats" / "c.jpg", seed=64); jpeg(root / "Photos from 2020" / "p.jpg", seed=65)
+    exp, live = fx.expected_albums_and_live(str(root))
+    assert exp == {"Japan 2025": 3, "Cats": 1} and live == 1, (exp, live)
+    lib = WORK / "AlbMock.photoslibrary"; (lib / "database").mkdir(parents=True)
+    db = sqlite3.connect(lib / "database" / "Photos.sqlite")
+    db.execute("create table ZASSET (Z_PK integer primary key, ZTRASHEDSTATE integer, ZPLAYBACKSTYLE integer)")
+    db.execute("create table ZGENERICALBUM (Z_PK integer primary key, ZTITLE text, ZTRASHEDSTATE integer)")
+    db.execute("create table Z_26ASSETS (Z_3ALBUMS integer, Z_26ASSETS integer)")
+    for i in range(1, 7):
+        db.execute("insert into ZASSET values (?,?,?)", (i, 0, 3 if i == 3 else 1))
+    db.execute("insert into ZGENERICALBUM values (1,'Japan 2025',0)")        # the Cats album never arrived
+    for a in (1, 2, 3):
+        db.execute("insert into Z_26ASSETS values (1,?)", (a,))
+    db.commit(); db.close()
+    r = fx.photos_albums_live_check(str(lib), str(root))
+    assert r["ok"] and r["live_found"] == 1 and r["albums_missing"] == 1 and r["albums_short"] == 0, r
+    assert {a["name"]: a["found"] for a in r["albums"]} == {"Cats": 0, "Japan 2025": 3}, r["albums"]
+
+
+def t_receipt():
+    rp, page = g.build_receipt(str(WORK / "tz_out"), "")
+    assert os.path.exists(rp) and "Migration receipt" in page and "The library now" in page and "Have a date taken" in page, page[:300]
+    assert "Nothing was uploaded anywhere" in page
+    cov = fx.library_coverage(str(WORK / "tz_out"))
+    assert cov["files"] == 3 and cov["with_date"] == 3 and cov["with_offset"] >= 2, cov
+
+
 ORDER = ["t_fix_copy", "t_fix_namedate", "t_fix_inplace", "t_fix_move", "t_fix_dryrun_changes_nothing", "t_fix_zip", "t_zip_resume", "t_zip_needs_dest", "t_zip_corrupt",
          "t_edited_policies", "t_cancel_mid_run", "t_unreadable_and_zero", "t_dest_not_writable", "t_exiftool_missing", "t_low_disk_zip", "t_assess_and_recommend",
          "t_assess_multi_and_photoslib", "t_guided_end_to_end", "t_guided_no_dest", "t_merge_variants", "t_merge_refuses_unsafe", "t_merge_move_in_place", "t_cleanup_all",
          "t_cleanup_refuses_broad", "t_consolidate", "t_convert", "t_convert_stop", "t_similar_apply_undo", "t_health_and_formats", "t_undo_copy_run", "t_photos_plan_and_run",
          "t_photos_applescript_injection_safe", "t_photos_errors", "t_monitor_rules", "t_monitor_job_paste", "t_compare_and_near", "t_diagnostics", "t_history_report",
-         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs", "t_audit_regressions", "t_dates_and_places", "t_resilient_copy", "t_rerun_over_http", "t_keeper_rules_and_matching", "t_bursts_and_compare_rules", "t_qa_hunt_regressions", "t_timezone_correct_dates", "t_preflight_report"]
+         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs", "t_audit_regressions", "t_dates_and_places", "t_resilient_copy", "t_rerun_over_http", "t_keeper_rules_and_matching", "t_bursts_and_compare_rules", "t_qa_hunt_regressions", "t_timezone_correct_dates", "t_preflight_report", "t_albums_and_live_arrival", "t_receipt"]
 if __name__ == "__main__":
     only = sys.argv[1:]
     for n in ORDER:

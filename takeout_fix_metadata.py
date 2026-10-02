@@ -4405,6 +4405,132 @@ def health_scan(roots, deep=False, progress=None, should_stop=None, exif_cap=400
     F.sort(key=lambda f: (order.get(f["sev"], 3), -f["bytes"], -f["count"]))
     return {"findings": F, "stats": stats, "formats": formats, "score": score, "parts": parts, "deep": bool(deep), "roots": [str(r) for r in roots]}
 
+def expected_albums_and_live(root):
+    """What an import of this library should create in Photos: album name -> number of photos, and the number of Live Photo pairs.
+    Uses the same grouping the import uses (a still with its video counts once)."""
+    pl = plan_photos_import(root, 1e15, "oldest", True, None, None)
+    albums, live = {}, 0
+    for b in pl["batches"]:
+        for u in b["units"]:
+            exts = {Path(f).suffix.lower() for f in u["files"]}
+            if exts & {".mov", ".mp4"} and exts & {".jpg", ".jpeg", ".heic", ".heif"}:
+                live += 1
+            if u["album"]:
+                albums[u["album"]] = albums.get(u["album"], 0) + 1
+    return albums, live
+
+
+def photos_albums_live_check(lib, root):
+    """After an import: did the albums and Live Photos arrive? Reads a COPY of Photos' database (undocumented, so a best-effort hint).
+    Returns {"ok", "albums":[{"name","expected","found"}], "albums_missing", "albums_short", "live_expected", "live_found", "notes"}."""
+    import sqlite3
+    exp_albums, exp_live = expected_albums_and_live(root)
+    out = {"ok": False, "albums": [], "albums_missing": 0, "albums_short": 0, "live_expected": exp_live, "live_found": None, "notes": []}
+    db = Path(lib) / "database" / "Photos.sqlite"
+    if not db.exists():
+        out["why"] = "no Photos database found in that library"
+        return out
+    tmp = tempfile.mkdtemp(prefix="backstory_albums_")
+    try:
+        for suf in ("", "-wal", "-shm"):
+            src = Path(str(db) + suf)
+            if src.exists():
+                shutil.copy2(src, Path(tmp) / ("Photos.sqlite" + suf))
+        con = sqlite3.connect("file:%s?mode=ro" % (Path(tmp) / "Photos.sqlite"), uri=True)
+        tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        acols = {r[1] for r in con.execute("PRAGMA table_info(ZASSET)")}
+        live_sql = None
+        if "ZPLAYBACKSTYLE" in acols:
+            live_sql = "SELECT COUNT(*) FROM ZASSET WHERE ZPLAYBACKSTYLE = 3" + (" AND ZTRASHEDSTATE = 0" if "ZTRASHEDSTATE" in acols else "")
+        elif "ZKINDSUBTYPE" in acols:
+            live_sql = "SELECT COUNT(*) FROM ZASSET WHERE ZKINDSUBTYPE = 2" + (" AND ZTRASHEDSTATE = 0" if "ZTRASHEDSTATE" in acols else "")
+        if live_sql:
+            out["live_found"] = con.execute(live_sql).fetchone()[0]
+        else:
+            out["notes"].append("This Photos version does not record Live Photos in a way Backstory can read.")
+        found = {}
+        if "ZGENERICALBUM" in tables:
+            gcols = {r[1] for r in con.execute("PRAGMA table_info(ZGENERICALBUM)")}
+            join = None
+            for t in tables:
+                m = re.fullmatch(r"Z_(\d+)ASSETS", t)
+                if m:
+                    cols = {r[1] for r in con.execute("PRAGMA table_info(%s)" % t)}
+                    ac = next((c for c in cols if re.fullmatch(r"Z_\d+ALBUMS", c)), None)
+                    sc = next((c for c in cols if re.fullmatch(r"Z_\d+ASSETS", c)), None)
+                    if ac and sc:
+                        join = (t, ac, sc)
+                        break
+            if join and "ZTITLE" in gcols:
+                trashed = " AND g.ZTRASHEDSTATE = 0" if "ZTRASHEDSTATE" in gcols else ""
+                for title, cnt in con.execute("SELECT g.ZTITLE, COUNT(*) FROM ZGENERICALBUM g JOIN %s j ON j.%s = g.Z_PK WHERE g.ZTITLE IS NOT NULL%s GROUP BY g.ZTITLE" % (join[0], join[1], trashed)):
+                    found[title] = cnt
+            else:
+                out["notes"].append("Backstory could not read album membership from this Photos version.")
+        for name, n_exp in sorted(exp_albums.items()):
+            n_found = found.get(name)
+            out["albums"].append({"name": name, "expected": n_exp, "found": n_found if n_found is not None else 0})
+            if n_found is None:
+                out["albums_missing"] += 1
+            elif n_found < n_exp:
+                out["albums_short"] += 1
+        out["ok"] = True
+        con.close()
+    except Exception as ex:
+        out["why"] = str(ex)[:140]
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return out
+
+
+def library_coverage(root, sample=250, progress=None, should_stop=None):
+    """How complete the metadata in a finished library is, from the whole file list and a random sample of files."""
+    import random
+    stop = should_stop or (lambda: None)
+    files, total_b, by_year = [], 0, {}
+    for dp, dns, fns in os.walk(root, followlinks=False):
+        dns[:] = [d for d in dns if not (os.path.islink(os.path.join(dp, d)) or is_bundle(d) or d.startswith(".") or d in PHOTOS_SKIP_DIRS)]
+        for n in fns:
+            if n.startswith(".") or Path(n).suffix.lower() not in MEDIA_EXT:
+                continue
+            p = os.path.join(dp, n)
+            try:
+                sz = os.path.getsize(p)
+            except OSError:
+                continue
+            files.append(p)
+            total_b += sz
+        stop()
+    out = {"files": len(files), "bytes": total_b, "sampled": 0, "with_date": 0, "with_gps": 0, "with_caption": 0, "with_offset": 0, "future": 0}
+    pick = random.Random(5).sample(files, min(sample, len(files)))
+    if pick and shutil.which("exiftool"):
+        for k in range(0, len(pick), 200):
+            stop()
+            fd, arg = tempfile.mkstemp(suffix=".args")
+            os.close(fd)
+            try:
+                Path(arg).write_text("\n".join(pick[k:k + 200]), encoding="utf-8", errors="surrogateescape")
+                r = subprocess.run(["exiftool", "-charset", "filename=utf8", "-j", "-n", "-DateTimeOriginal", "-CreateDate", "-GPSLatitude", "-ImageDescription", "-OffsetTimeOriginal", "-@", arg], capture_output=True, text=True)
+                for it in json.loads(r.stdout or "[]"):
+                    out["sampled"] += 1
+                    d = str(it.get("DateTimeOriginal") or it.get("CreateDate") or "")
+                    if d and not d.startswith("0000"):
+                        out["with_date"] += 1
+                        ep = _epoch(d)
+                        if ep and ep > time.time() + 2 * 86400:
+                            out["future"] += 1
+                        by_year[d[:4]] = by_year.get(d[:4], 0) + 1
+                    out["with_gps"] += it.get("GPSLatitude") is not None
+                    out["with_caption"] += bool(it.get("ImageDescription"))
+                    out["with_offset"] += bool(it.get("OffsetTimeOriginal"))
+            except (ValueError, OSError):
+                pass
+            finally:
+                Path(arg).unlink(missing_ok=True)
+    out["years"] = sorted(by_year.items())
+    return out
+
+
 
 def photos_db_health(lib):
     """Experimental, read-only hints from an Apple Photos library's own database (a copy of it is read). Apple does not document
