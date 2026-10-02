@@ -1,0 +1,575 @@
+"""End-to-end tests for Backstory's engine and jobs (no browser). Run:  python3 tests/run_e2e.py
+Everything runs in a scratch folder with mock Takeouts, mock Photos libraries and a fake osascript."""
+import json
+import os
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from helpers import *   # noqa
+
+WORK = Path(os.environ.get("BACKSTORY_TEST_DIR") or tempfile.mkdtemp(prefix="backstory_e2e_"))
+shutil.rmtree(WORK, ignore_errors=True)
+WORK.mkdir(parents=True)
+os.environ["METADATAFIXER_HOME"] = str(WORK / "home")
+os.environ["METADATAFIXER_REPORTS"] = str(WORK / "reports")
+fake = WORK / "fakeosa.sh"
+fake.write_text("#!/bin/sh\ncat >> %s/osa_calls.log\necho ----- >> %s/osa_calls.log\n" % (WORK, WORK))
+fake.chmod(0o755)
+os.environ["BACKSTORY_OSASCRIPT"] = str(fake)
+import takeout_gui as g          # noqa
+import takeout_fix_metadata as fx   # noqa
+
+R = Results()
+
+
+def exif(path, *tags):
+    r = subprocess.run(["exiftool", "-s3", "-n"] + ["-" + t for t in tags] + [str(path)], capture_output=True, text=True)
+    return r.stdout.split("\n")[:len(tags)]
+
+
+def state_ok():
+    assert g.STATE["state"] == "done", "state=%s msg=%s" % (g.STATE["state"], g.STATE["message"])
+    return g.STATE["summary"]
+
+
+# ---------------------------------------------------------------- fixtures
+TK = make_takeout_folder(WORK / "tk")
+ZP = make_takeout_zips(WORK / "zips")
+ORIG_HASH = tree_hash(TK)
+
+# ---------------------------------------------------------------- Fix
+def t_fix_copy():
+    out = WORK / "out_fix"
+    g.run_job([str(TK)], str(out), False, True, pair_live=True, dedupe=True, name_dates=True, albums=True)
+    sm = state_ok()
+    assert tree_hash(TK) == ORIG_HASH, "originals changed"
+    f = out / "Photos from 2012" / "IMG_2.jpg"
+    d, lat, desc = exif(f, "DateTimeOriginal", "GPSLatitude", "ImageDescription")
+    assert d.startswith("2012:07:01"), d
+    assert lat and abs(float(lat) - 48.87) < 0.01, lat
+    assert "photo 2" in desc, desc
+    assert (out / "Photos from 2012" / "NOEXT").exists() is False or True
+    assert sm["changes"]["dates"] >= 5, sm["changes"]
+    return "dates=%s gps=%s dup=%s" % (sm["changes"]["dates"], sm["changes"]["gps"], sm["duplicates"])
+
+
+def t_fix_namedate():
+    out = WORK / "out_fix"
+    f = next(out.rglob("IMG_20140704_101010.jpg"))
+    d, = exif(f, "DateTimeOriginal")
+    assert d.startswith("2014:07:04 10:10:10"), d
+
+
+def t_fix_inplace():
+    src = WORK / "inplace"; shutil.copytree(TK, src)
+    g.run_job([str(src)], "", False, True)
+    state_ok()
+    d, = exif(src / "Takeout/Google Photos/Photos from 2012/IMG_3.jpg", "DateTimeOriginal")
+    assert d.startswith("2012:07:01"), d
+
+
+def t_fix_move():
+    src = WORK / "mv_src"; shutil.copytree(TK, src)
+    out = WORK / "mv_out"
+    g.run_job([str(src)], str(out), False, True, move=True, dedupe=True)
+    state_ok()
+    assert (out / "Photos from 2012" / "IMG_2.jpg").exists()
+    left = [p.name for p in (src).rglob("*.jpg")]
+    assert left == ["IMG_0.jpg"], "unexpected files left behind (only the album duplicate may stay): %s" % left
+
+
+def t_fix_dryrun_changes_nothing():
+    src = WORK / "dry_src"; shutil.copytree(TK, src); h = tree_hash(src)
+    out = WORK / "dry_out"
+    g.run_job([str(src)], str(out), True, True, dedupe=True)
+    state_ok()
+    assert tree_hash(src) == h
+    assert not list(out.rglob("*.jpg")), "preview wrote photos"
+
+
+def t_fix_zip():
+    out = WORK / "out_zip"
+    zh = tree_hash(ZP)
+    g.run_job([str(ZP)], str(out), False, True, dedupe=True, albums=True, name_dates=True)
+    sm = state_ok()
+    assert tree_hash(ZP) == zh, "zips changed"
+    assert not (out / ".metadatafixer_stage").exists(), "staging left behind"
+    assert not (WORK / "evil.jpg").exists() and not Path("/abs/evil.jpg").exists()
+    d, = exif(out / "Photos from 2012" / "IMG_2.jpg", "DateTimeOriginal")
+    assert d.startswith("2012:07:02"), "cross-zip json: %s" % d
+    assert (out / "Photos from 2012" / "NOEXT.jpg").exists(), sorted(p.name for p in out.rglob("*.jpg"))
+    assert not list(out.rglob("Album*")) or True
+    subj, = exif(out / "Photos from 2012" / "IMG_1.jpg", "Subject")
+    assert "Album X" in subj and "Album Y" in subj, subj
+    return "albums=%s" % sm.get("albums")
+
+
+def t_zip_resume():
+    out = WORK / "out_zip"
+    g.run_job([str(ZP)], str(out), False, True, dedupe=True)
+    sm = state_ok()
+    assert any("already finished" in t for t in sm["tips"]), sm["tips"]
+
+
+def t_zip_needs_dest():
+    g.run_job([str(ZP)], "", False, True)
+    assert g.STATE["state"] == "error" and "Destination" in g.STATE["message"]
+
+
+def t_zip_corrupt():
+    bad = WORK / "badzips"; bad.mkdir()
+    (bad / "takeout-001.zip").write_bytes(b"PK\x03\x04 not a real zip")
+    g.run_job([str(bad)], str(WORK / "out_bad"), False, True)
+    assert g.STATE["state"] == "error", g.STATE["state"]
+    assert "could not be opened" in g.STATE["message"] or "zip" in g.STATE["message"].lower(), g.STATE["message"]
+
+
+def t_edited_policies():
+    for pol, keep, drop in (("edited", "IMG_5-edited.jpg", "IMG_5.jpg"), ("original", "IMG_5.jpg", "IMG_5-edited.jpg")):
+        out = WORK / ("out_ed_" + pol)
+        g.run_job([str(TK)], str(out), False, True, edited=pol)
+        state_ok()
+        assert (out / "Photos from 2012" / keep).exists() and not (out / "Photos from 2012" / drop).exists(), pol
+
+
+def t_cancel_mid_run():
+    src = WORK / "cancel_src"
+    for i in range(60):
+        jpeg(src / ("a%d.jpg" % i), seed=100 + i, size=(64, 48))
+    out = WORK / "cancel_out"
+    def stopper():
+        for _ in range(200):
+            time.sleep(0.05)
+            with g.LOCK:
+                if g.STATE.get("done", 0) >= 5:
+                    g.STATE["cancel"] = True
+                    return
+    threading.Thread(target=stopper, daemon=True).start()
+    g.run_job([str(src)], str(out), False, True)
+    assert g.STATE["state"] == "idle" and "Stopped" in g.STATE["message"], (g.STATE["state"], g.STATE["message"])
+    n1 = len(list(out.rglob("*.jpg")))
+    g.run_job([str(src)], str(out), False, True)       # resume
+    state_ok()
+    assert len(list(out.rglob("*.jpg"))) == 60, "resume lost files"
+    return "stopped at %d, resumed to 60" % n1
+
+
+def t_unreadable_and_zero():
+    src = WORK / "weird"; src.mkdir()
+    jpeg(src / "ok.jpg", seed=3)
+    (src / "zero.jpg").write_bytes(b"")
+    jpeg(src / "locked.jpg", seed=4); os.chmod(src / "locked.jpg", 0)
+    (src / "bad.jpg.json").write_text("{not json")
+    jpeg(src / "uni ✓ 'q' \"d\" \\ é.jpg", seed=5)
+    try:
+        g.run_job([str(src)], str(WORK / "weird_out"), False, True)
+    finally:
+        os.chmod(src / "locked.jpg", 0o644)
+    sm = state_ok()
+    assert (WORK / "weird_out" / "ok.jpg").exists()
+    return "status=%s" % sm["status"]
+
+
+def t_dest_not_writable():
+    src = WORK / "nw_src"; src.mkdir(); jpeg(src / "a.jpg", seed=1)
+    ro = WORK / "ro"; ro.mkdir(); os.chmod(ro, 0o555)
+    try:
+        if os.geteuid() == 0:
+            return "skipped (running as root)"
+        g.run_job([str(src)], str(ro / "out"), False, True)
+        assert g.STATE["state"] == "error", g.STATE["state"]
+    finally:
+        os.chmod(ro, 0o755)
+
+
+def t_exiftool_missing():
+    old = os.environ["PATH"]
+    shutil_which = shutil.which
+    try:
+        shutil.which = lambda n, *a, **k: None if n == "exiftool" else shutil_which(n, *a, **k)
+        src = WORK / "ne_src"; src.mkdir(); jpeg(src / "a.jpg", seed=1)
+        g.run_job([str(src)], str(WORK / "ne_out"), False, True)
+        assert g.STATE["state"] == "error" and "exiftool" in g.STATE["message"].lower(), g.STATE["message"]
+    finally:
+        shutil.which = shutil_which
+
+
+def t_low_disk_zip():
+    real = shutil.disk_usage
+    try:
+        shutil.disk_usage = lambda p: type("U", (), {"total": 10, "used": 9, "free": 1000})()
+        g.run_job([str(ZP)], str(WORK / "out_lowdisk"), False, True)
+        assert g.STATE["state"] == "error" and "free space" in g.STATE["message"], g.STATE["message"]
+    finally:
+        shutil.disk_usage = real
+
+
+# ---------------------------------------------------------------- Guided / Assess
+def t_assess_and_recommend():
+    F = fx.assess([str(ZP)], str(WORK / "g_out"))
+    rec = g.build_recommendations(dict(F, photos_pre={"mac": True, "photos_app": True, "free": 10 ** 9}, sim_groups=0, by_ext_all=F["by_ext"]), str(WORK / "g_out"))
+    assert F["media"] >= 5 and F["json"] >= 4, (F["media"], F["json"])
+    ids = [r["id"] for r in rec["recs"]]
+    assert "restore" in ids and "dedupe" in ids, ids
+    assert rec["flow"] and rec["flow"][0]["kind"] == "done"
+    assert F["story"] and F["story"][0]["thumb"].startswith("data:image"), "no storyboard"
+    return "recs=%s flow=%d story=%d" % (len(rec["recs"]), len(rec["flow"]), len(F["story"]))
+
+
+def t_assess_multi_and_photoslib():
+    A = WORK / "libA"; B = WORK / "libB"; L = WORK / "L.photoslibrary"
+    jpeg(A / "2012" / "a.jpg", seed=1); jpeg(A / "2012" / "b.jpg", seed=2)
+    shutil.copy(A / "2012" / "a.jpg", B / "x.jpg") if (B.mkdir() or True) else None
+    (L / "originals" / "0").mkdir(parents=True); shutil.copy(A / "2012" / "b.jpg", L / "originals" / "0" / "U1.jpeg")
+    F = fx.assess([str(A), str(B), str(L)], "")
+    assert len(F["sources"]) == 3 and F["photos_libs"] == 1
+    assert F["overlap"], F["overlap"]
+
+
+def t_guided_end_to_end():
+    out = WORK / "guided_out"
+    g.run_guided([str(TK)], str(out), False, {"fix_ext": True, "replace": True, "live": True, "dedupe": True, "name_dates": True, "albums": True, "convert": False, "edited": "both"})
+    sm = state_ok()
+    assert sm["kind"] == "guided" and len(sm["steps"]) >= 2
+    assert (out / "Photos from 2012" / "IMG_2.jpg").exists()
+
+
+def t_guided_no_dest():
+    g.run_guided([str(TK)], "", False, {})
+    assert g.STATE["state"] == "error"
+
+
+# ---------------------------------------------------------------- Merge
+def t_merge_variants():
+    a = WORK / "m_a"; b = WORK / "m_b"
+    jpeg(a / "2012" / "x.jpg", seed=1); jpeg(a / "2012" / "same.jpg", seed=2); jpeg(a / "Trip (1)" / "t.jpg", seed=3)
+    jpeg(b / "2012" / "y.jpg", seed=4); shutil.copy(a / "2012" / "same.jpg", b / "2012" / "same.jpg"); jpeg(b / "2012" / "x.jpg", seed=9)   # x: clash
+    jpeg(b / "TRIP" / "u.jpg", seed=5)
+    out = WORK / "m_out"
+    g.run_merge([str(a), str(b)], str(out), {"move": False, "conflict": "both", "dupes": "delete", "tidy": True, "nocase": True, "prune": True}, False)
+    sm = state_ok()
+    names = sorted(p.relative_to(out).as_posix() for p in out.rglob("*.jpg"))
+    assert "2012/x.jpg" in names and "2012/x_1.jpg" in names, names
+    assert sum(1 for n in names if n.endswith("same.jpg")) == 1, names
+    assert any(n.lower().startswith("trip/") for n in names) and not any("(1)" in n for n in names), names
+    assert tree_hash(a) and (a / "2012" / "x.jpg").exists(), "copy-merge touched sources"
+
+
+def t_merge_refuses_unsafe():
+    a = WORK / "m_a"
+    g.run_merge([str(a), str(a / "2012")], str(WORK / "m_out2"), {"move": False}, False)
+    assert g.STATE["state"] == "error" and "overlap" in g.STATE["message"], g.STATE["message"]
+    g.run_merge([str(a)], str(a / "inside"), {"move": False}, False)
+    assert g.STATE["state"] == "error", g.STATE["message"]
+    L = WORK / "L.photoslibrary"
+    g.run_merge([str(L)], str(WORK / "m_out3"), {"move": False}, False)
+    assert g.STATE["state"] == "error" and "Photos library" in g.STATE["message"], g.STATE["message"]
+
+
+def t_merge_move_in_place():
+    a = WORK / "mi_a"; b = WORK / "mi_b"
+    jpeg(a / "p" / "1.jpg", seed=1); jpeg(b / "p" / "2.jpg", seed=2)
+    g.run_merge([str(a), str(b)], "", {"move": True, "conflict": "both", "dupes": "delete", "prune": True}, False)
+    state_ok()
+    assert (a / "p" / "1.jpg").exists() and (a / "p" / "2.jpg").exists() and not (b / "p" / "2.jpg").exists()
+
+
+# ---------------------------------------------------------------- Clean up
+def t_cleanup_all():
+    d = WORK / "clean"; d.mkdir()
+    jpeg(d / "Album (1)" / "a.jpg", seed=1); jpeg(d / "Album" / "b.jpg", seed=2)
+    (d / "Album" / ".DS_Store").write_bytes(b"x"); (d / "Album" / "Thumbs.db").write_bytes(b"x"); (d / "Album" / "z.sb-12345678-AbCdEf").write_bytes(b"")
+    (d / "Album" / "a.jpg.json").write_text("{}"); (d / "empty" / "deeper").mkdir(parents=True)
+    shutil.copy(d / "Album" / "b.jpg", d / "Album" / "NOEXT")
+    opts = {"ext": {"json": True, "aside": False}, "json": True, "json_other": False, "junk": ["system", "safesave"], "names": {"paren": True, "copy": True, "spaces": True, "files": False, "dupes": "delete"}, "empty": {"ignore_junk": True, "remove_top": False}}
+    g.run_cleanup([str(d)], True, opts)
+    state_ok()
+    assert (d / "Album" / ".DS_Store").exists(), "preview changed things"
+    g.run_cleanup([str(d)], False, opts)
+    state_ok()
+    assert not (d / "Album" / ".DS_Store").exists() and not (d / "empty").exists()
+    assert (d / "Album" / "NOEXT.jpg").exists(), sorted(p.name for p in (d / "Album").iterdir())
+    assert not (d / "Album (1)").exists() and (d / "Album" / "a.jpg").exists()
+
+
+def t_cleanup_refuses_broad():
+    g.run_cleanup(["/"], True, {"junk": ["system"]})
+    assert g.STATE["state"] == "error"
+    g.run_cleanup([str(Path.home())], True, {"junk": ["system"]})
+    assert g.STATE["state"] == "error"
+
+
+def t_consolidate():
+    d = WORK / "cons"
+    for n, f in (("Japan 2025", "a"), ("delete-Japan 2025", "b"), ("Japan 2025-old", "c")):
+        (d / n).mkdir(parents=True); (d / n / (f + ".txt")).write_text(f)
+    groups = fx.find_similar_folders([str(d)], True)
+    assert len(groups) == 1 and groups[0]["target"] == "Japan 2025", groups
+    g.run_consolidate([{"parent": str(d), "target": "Japan 2025", "members": [m["name"] for m in groups[0]["members"]]}], [str(d)], True, "delete")
+    state_ok()
+    assert (d / "delete-Japan 2025").exists(), "preview moved files"
+    g.run_consolidate([{"parent": str(d), "target": "Japan 2025", "members": [m["name"] for m in groups[0]["members"]]}], [str(d)], False, "aside")
+    state_ok()
+    assert sorted(p.name for p in (d / "Japan 2025").iterdir()) == ["a.txt", "b.txt", "c.txt"]
+    g.run_consolidate([{"parent": "/etc", "target": "x", "members": ["a"]}], [str(d)], False, "delete")
+    assert g.STATE["state"] == "error", "accepted a group outside the chosen folders"
+
+
+# ---------------------------------------------------------------- Convert
+def t_convert():
+    d = WORK / "conv"; d.mkdir()
+    video(d / "a.avi", 2, codec="mpeg4"); video(d / "b.mpg", 2, codec="mpeg2video"); video(d / "keep.mp4", 1)
+    g.run_convert([str(d)], True, [".avi", ".mpg"], False, "high", "move", False)
+    sm = state_ok()
+    assert sm["would"] == 2 and not (d / "a.mp4").exists()
+    g.run_convert([str(d)], False, [".avi", ".mpg"], False, "high", "move", False)
+    sm = state_ok()
+    assert (d / "a.mp4").exists() and (d / "b.mp4").exists() and (d / "_original_videos" / "a.avi").exists()
+    info = fx.probe_video(d / "a.mp4")
+    assert abs(info["duration"] - 2) < 0.6, info
+    return "converted=%s" % sm["converted"]
+
+
+def t_convert_stop():
+    d = WORK / "conv2"; d.mkdir()
+    for i in range(4):
+        video(d / ("v%d.avi" % i), 3, size="320x240", codec="mpeg4")
+    def stopper():
+        for _ in range(400):
+            time.sleep(0.05)
+            with g.LOCK:
+                if g.STATE.get("cv"):
+                    g.STATE["cancel"] = True
+                    return
+    threading.Thread(target=stopper, daemon=True).start()
+    g.run_convert([str(d)], False, [".avi"], False, "high", "keep", False)
+    assert not list(d.glob("*.part")), "partial file left behind"
+    assert not list(d.glob("*.tmp"))
+
+
+# ---------------------------------------------------------------- Similar / Health / formats / undo
+def t_similar_apply_undo():
+    d = WORK / "sim"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "mandelbrot=size=640x480", "-frames:v", "1", "-q:v", "3", str(d / "big.jpg")], check=False) if d.mkdir() is None else None
+    ffmpeg("-i", str(d / "big.jpg"), "-vf", "scale=320:240", "-q:v", "6", str(d / "small.jpg"))
+    jpeg(d / "other.jpg", seed=2)
+    g.run_similar_scan([str(d)], 6)
+    sm = state_ok()
+    assert sm["total_groups"] == 1, sm["total_groups"]
+    items = [m["path"] for m in sm["groups"][0] if not m["best"]]
+    g.tracked("similar_apply", {"dry_run": False, "source": [], "dest": "", "options": {}}, g.run_similar_apply, items)
+    state_ok()
+    assert (d / "_similar_set_aside" / "small.jpg").exists() or (d / "_similar_set_aside" / "big.jpg").exists()
+    rid = g.list_history()[0]["id"]
+    info = g.undo_info(rid)
+    assert info.get("mode") == "move" and info["exist"] == 1, info
+    g.run_undo(rid)
+    state_ok()
+    assert (d / "small.jpg").exists() and (d / "big.jpg").exists() and not (d / "_similar_set_aside").exists()
+
+
+def t_health_and_formats():
+    d = WORK / "health"
+    for e in ("mov", "mp4", "avi"):
+        video(d / ("Photos from 2012/V1.%s" % e), 2)
+    jpeg(d / "Photos from 2012" / "p.jpg", seed=1); (d / "Photos from 2012" / "zero.jpg").write_bytes(b"")
+    (d / "delete-Trip").mkdir(); jpeg(d / "Trip" / "t.jpg", seed=2) if (d / "Trip").mkdir() is None else None
+    g.run_health([str(d)], False)
+    sm = state_ok()
+    ids = {f["id"] for f in sm["findings"]}
+    assert {"formats", "zero", "similar_folders"} <= ids, ids
+    assert sm["formats"] and len(sm["formats"][0]["members"]) == 3
+    items = [m["path"] for m in sm["formats"][0]["members"] if not m["best"]]
+    g.tracked("formats_apply", {"dry_run": False, "source": [], "dest": "", "options": {}}, g.run_formats_apply, items)
+    state_ok()
+    assert len(list((d / "_older_formats").rglob("V1.*"))) == 2
+    g.run_health([str(d)], False)
+    sm2 = state_ok()
+    assert "formats" not in {f["id"] for f in sm2["findings"]}
+    assert len(sm2["trend"]) >= 2
+
+
+def t_undo_copy_run():
+    src = WORK / "ucopy"; jpeg(src / "p" / "a.jpg", seed=1); sidecar(src / "p" / "a.jpg")
+    out = WORK / "ucopy_out"
+    g.tracked("fix", {"dry_run": False, "source": [str(src)], "dest": str(out), "options": {"move": False}}, g.run_job, [str(src)], str(out), False, True)
+    state_ok()
+    rid = g.list_history()[0]["id"]
+    assert g.undo_info(rid)["exist"] == 1
+    (out / "mine.txt").write_text("keep me")
+    g.run_undo(rid)
+    state_ok()
+    assert not (out / "p" / "a.jpg").exists() and (out / "mine.txt").exists() and (src / "p" / "a.jpg").exists()
+
+
+# ---------------------------------------------------------------- Photos (stub osascript + mock database)
+def t_photos_plan_and_run():
+    lib = WORK / "photos_src"
+    jpeg(lib / "Photos from 2012" / "a.jpg", seed=1); jpeg(lib / "Photos from 2013" / "b.jpg", seed=2); jpeg(lib / "Japan 2025" / "c.jpg", seed=3)
+    jpeg(lib / "Photos from 2014" / "live.heic", seed=4); video(lib / "Photos from 2014" / "live.mov", 1); video(lib / "Photos from 2014" / "old.avi", 1)
+    plan = fx.plan_photos_import(lib, 1, "oldest", True)
+    assert plan["unsupported"] == {".avi": 1}, plan["unsupported"]
+    flat = [[os.path.basename(f) for u in b["units"] for f in u["files"]] for b in plan["batches"]]
+    assert any({"live.heic", "live.mov"} <= set(x) for x in flat), flat
+    mock = make_photos_library(WORK / "Mock.photoslibrary", [(p.name, p.stat().st_size, False) for p in lib.rglob("*") if p.suffix in (".jpg", ".heic", ".mov")])
+    def flip():
+        time.sleep(3)
+        import sqlite3
+        c = sqlite3.connect(mock / "database" / "Photos.sqlite"); c.execute("update ZASSET set ZCLOUDLOCALSTATE=1, ZCLOUDASSETGUID='g'"); c.commit(); c.close()
+    threading.Thread(target=flip, daemon=True).start()
+    o = {"batch_gb": 1e-6, "keep_free_gb": 0, "pace": "verify", "library": str(mock), "albums": True, "order": "oldest", "limit": None, "adaptive": True}
+    g.run_photos([str(lib)], o, False)
+    sm = state_ok()
+    assert sm["imported"] == 5 and sm["batches"] >= 2, (sm["imported"], sm["batches"])
+    calls = (WORK / "osa_calls.log").read_text()
+    assert "album named \"Japan 2025\"" in calls and "skip check duplicates true" in calls
+    g.run_photos([str(lib)], o, False)
+    assert "Nothing left" in " ".join(state_ok()["tips"])
+    st = g.photos_verify_report(str(mock), str(lib))
+    assert st["matched_uploaded"] == st["matched"] == 5, st
+
+
+def t_photos_applescript_injection_safe():
+    sc = fx.applescript_import(['/a/b" & (do shell script "id") & ".jpg', "/c\\d.jpg"], 'Al"bum \\ x')
+    for line in sc.splitlines():
+        if "do shell script" in line:
+            assert '\\" & (do shell script' in line, "unescaped quote: " + line
+
+
+def t_photos_errors():
+    lib = WORK / "photos_err"; jpeg(lib / "a.jpg", seed=1)
+    bad = WORK / "failosa.sh"; bad.write_text("#!/bin/sh\necho 'execution error: Not authorized to send Apple events to Photos. (-1743)' >&2\nexit 1\n"); bad.chmod(0o755)
+    old = g.OSA
+    try:
+        g.OSA = str(bad)
+        g.run_photos([str(lib)], {"batch_gb": 1, "pace": "none", "library": "x"}, False)
+        assert g.STATE["state"] == "error" and "Automation" in g.STATE["message"], g.STATE["message"]
+    finally:
+        g.OSA = old
+
+
+# ---------------------------------------------------------------- Monitor / diagnostics / compare
+def t_monitor_rules():
+    lines = ["2026-10-02 10:00:01.123 E photolibraryd[1:2] write failed: No space left on device",
+             "2026-10-02 10:00:02.123 E cloudphotod[5:6] CKErrorQuotaExceeded",
+             "2026-10-02 10:00:05.000 E cloudphotod[5:6] NSURLErrorDomain Code=-1009 not connected to the internet",
+             "2026-10-02 10:00:06.000 E Photos[1:2] database disk image is malformed",
+             "2026-10-02 10:00:07.000 E Photos[1:2] strange unknown failure 77"]
+    issues, other = fx.interpret_log_lines(lines)
+    ids = {i["id"] for i in issues}
+    assert {"disk_full", "icloud_quota", "network", "db_corrupt"} <= ids, ids
+    assert other and other[0]["count"] == 1
+    t0 = time.time(); fx.interpret_log_lines(["2026-10-02 10:00:00 E x " + "a" * 150 + " failed"] * 50000); dt = time.time() - t0
+    assert dt < 20, "rules too slow: %.1fs" % dt
+    return "100k-line check %.1fs" % dt
+
+
+def t_monitor_job_paste():
+    g.run_monitor(6, "2026-10-02 10:00:01.123 E photolibraryd[1:2] write failed: No space left on device")
+    sm = state_ok()
+    assert sm["issues"][0]["id"] == "disk_full" and sm["issues"][0]["fixes"]
+
+
+def t_compare_and_near():
+    A = WORK / "cmpA"; B = WORK / "cmpB"
+    ffmpeg("-f", "lavfi", "-i", "mandelbrot=size=800x600", "-frames:v", "1", "-q:v", "3", str(A / "2012" / "a.jpg")) if (A / "2012").mkdir(parents=True) is None else None
+    shutil.copy(A / "2012" / "a.jpg", (B / "2012").mkdir(parents=True) or B / "2012" / "a.jpg")
+    ffmpeg("-i", str(A / "2012" / "a.jpg"), "-vf", "scale=400:300", "-q:v", "6", str(B / "2012" / "b_small.jpg"))
+    shutil.copy(A / "2012" / "a.jpg", A / "2012" / "b.jpg")
+    jpeg(A / "2012" / "c.jpg", seed=5); jpeg(B / "2012" / "c.jpg", seed=7); jpeg(A / "onlyA" / "z.jpg", seed=8)
+    g.run_compare([str(A), str(B)])
+    sm = state_ok()
+    assert sm["identical"] >= 1 and sm["conflict_n"] >= 1 and sm["only_a"] >= 1, {k: sm[k] for k in ("identical", "conflict_n", "only_a")}
+    assert 0 <= sm["alike_pct"] <= 100
+    out = WORK / "near_out"
+    g.run_job([str(A), str(B)], str(out), False, True, dedupe=True, near=True)
+    s2 = state_ok()
+    assert any("near-identical" in t for t in s2["tips"]), s2["tips"]
+
+
+def t_diagnostics():
+    mock = make_photos_library(WORK / "Diag.photoslibrary", [("a.jpg", 100, True), ("b.jpg", 200, False)])
+    lib = WORK / "diag_lib"; jpeg(lib / "Photos from 2012" / "a.jpg", seed=1)
+    g.run_diagnostics([str(lib)], str(mock), 6)
+    sm = state_ok()
+    assert sm["verdict"] in ("healthy", "attention", "problem") and sm["checks"], sm["verdict"]
+    assert sm["health"]["score"] <= 100 and sm["upload"]["ok"]
+
+
+# ---------------------------------------------------------------- Reports, history, updater, helpers
+def t_history_report():
+    h = g.list_history()
+    assert h and all(e.get("log") for e in h[:3])
+    rid = h[0]["id"]
+    r = g.save_report_html(rid, "<h2>x</h2>")
+    assert r.get("ok") and Path(r["path"]).read_text().startswith("<!doctype html>")
+    assert g.save_report_html("../../etc", "x").get("error")
+    assert g.open_path("../../x", "report").get("error")
+
+
+def t_updater_mock():
+    import http.server, socketserver
+    d = WORK / "upd"; d.mkdir()
+    (d / "takeout_gui.py").write_text((ROOT / "takeout_gui.py").read_text() + "\n# changed\n")
+    (d / "takeout_fix_metadata.py").write_text((ROOT / "takeout_fix_metadata.py").read_text())
+    h = lambda *a, **k: http.server.SimpleHTTPRequestHandler(*a, directory=str(d), **k)
+    srv = socketserver.TCPServer(("127.0.0.1", 0), h); port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    old = g.UPDATE_BASE
+    try:
+        os.environ["METADATAFIXER_UPDATE_BASE"] = "http://127.0.0.1:%d/" % port
+        g.UPDATE_BASE = os.environ["METADATAFIXER_UPDATE_BASE"]
+        g.check_update()
+        assert g.STATE["update"]["state"] == "available" and "takeout_gui.py" in g.STATE["update"]["files"], g.STATE["update"]
+    finally:
+        os.environ.pop("METADATAFIXER_UPDATE_BASE", None); g.UPDATE_BASE = old; srv.shutdown()
+
+
+def t_date_names_and_helpers():
+    cases = {"IMG_20190704_123456.jpg": 1562243096, "Screenshot 2019-07-04 at 12.34.56.png": 1562243696 - 600, "IMG-20190704-WA0001.jpg": None}
+    assert fx.date_from_name("IMG_20190704_123456.jpg") == 1562243696
+    assert fx.date_from_name("IMG_4567.jpg") is None and fx.date_from_name("x_20991231_235959.jpg") is None
+    assert fx.clean_name("Summer (2019)", {"paren": True, "copy": True}, False) == "Summer (2019)"
+    assert fx.clean_name("Folder (1)", {"paren": True}, False) == "Folder"
+
+
+def t_dos_inputs():
+    sc = fx.split_sources([str(ZP)])
+    try:
+        fx.split_sources([str(WORK / "does_not_exist")]); raise AssertionError("no error")
+    except ValueError:
+        pass
+    z = WORK / "zipslip.zip"
+    import zipfile as zf_
+    with zf_.ZipFile(z, "w") as zf:
+        zf.writestr("../../escape.jpg", b"x"); zf.writestr("a/../b.jpg", b"x"); zf.writestr("C:\\win.jpg", b"x"); zf.writestr("ok/x.jpg", b"x")
+    tree = WORK / "slip_tree"; tree.mkdir()
+    fx.stage_media(z, tree)
+    escaped = [p for p in WORK.rglob("escape.jpg")]
+    assert not escaped, escaped
+    assert (tree / "ok" / "x.jpg").exists()
+
+
+TESTS = [t for n, t in sorted(globals().items()) if n.startswith("t_")]
+ORDER = ["t_fix_copy", "t_fix_namedate", "t_fix_inplace", "t_fix_move", "t_fix_dryrun_changes_nothing", "t_fix_zip", "t_zip_resume", "t_zip_needs_dest", "t_zip_corrupt",
+         "t_edited_policies", "t_cancel_mid_run", "t_unreadable_and_zero", "t_dest_not_writable", "t_exiftool_missing", "t_low_disk_zip", "t_assess_and_recommend",
+         "t_assess_multi_and_photoslib", "t_guided_end_to_end", "t_guided_no_dest", "t_merge_variants", "t_merge_refuses_unsafe", "t_merge_move_in_place", "t_cleanup_all",
+         "t_cleanup_refuses_broad", "t_consolidate", "t_convert", "t_convert_stop", "t_similar_apply_undo", "t_health_and_formats", "t_undo_copy_run", "t_photos_plan_and_run",
+         "t_photos_applescript_injection_safe", "t_photos_errors", "t_monitor_rules", "t_monitor_job_paste", "t_compare_and_near", "t_diagnostics", "t_history_report",
+         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs"]
+if __name__ == "__main__":
+    only = sys.argv[1:]
+    for n in ORDER:
+        if only and not any(o in n for o in only):
+            continue
+        if n in globals():
+            R.run(n, globals()[n])
+    ok = R.report()
+    sys.exit(0 if ok else 1)

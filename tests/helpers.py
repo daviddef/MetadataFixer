@@ -40,13 +40,15 @@ def ffmpeg(*args):
 
 def jpeg(path, size=(160, 120), seed=0, q=3):
     """A distinct test picture (different seed = different picture)."""
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    src = ["gradients=size=%dx%d:seed=%d" % (size[0], size[1], seed + 1)] if seed % 2 == 0 else ["mandelbrot=size=%dx%d" % size]
-    if seed % 3 == 1:
-        src = ["testsrc2=size=%dx%d:rate=1" % size]
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.suffix.lower() not in (".jpg", ".jpeg", ".png"):           # a mislabelled JPEG, like Google's .heic files that are JPEGs
+        tmp = path.with_name(path.name + ".tmp.jpg")
+        jpeg(tmp, size, seed, q)
+        tmp.rename(path)
+        return
+    src = ["gradients=size=%dx%d:seed=%d:speed=0.1" % (size[0], size[1], seed * 7919 + 13)]
     ffmpeg("-f", "lavfi", "-i", src[0], "-frames:v", "1", "-q:v", str(q), str(path))
-    if seed % 5 == 4:   # make solid variations distinct even when a generator ignores the seed
-        subprocess.run(["exiftool", "-q", "-overwrite_original", "-Comment=seed%d" % seed, str(path)], check=False)
 
 
 def video(path, seconds=2, size="128x96", codec=None):
@@ -74,7 +76,8 @@ def make_takeout_folder(base, n=6):
         f = P / "Photos from 2012" / ("IMG_%d.jpg" % i)
         jpeg(f, seed=i)
         sidecar(f, ts=1341100000 + i * 3600, lat=48.85 + i / 100, lon=2.35, desc="photo %d" % i)
-    shutil.copy(P / "Photos from 2012" / "IMG_0.jpg", P / "Trip" / "IMG_0.jpg") if (P / "Trip").mkdir(parents=True, exist_ok=True) is None else None
+    (P / "Trip").mkdir(parents=True, exist_ok=True)
+    shutil.copy(P / "Photos from 2012" / "IMG_0.jpg", P / "Trip" / "IMG_0.jpg")
     sidecar(P / "Trip" / "IMG_0.jpg", ts=1341100000)
     jpeg(P / "Photos from 2012" / "IMG_5-edited.jpg", seed=11)
     sidecar(P / "Photos from 2012" / "IMG_5-edited.jpg", ts=1341200000)

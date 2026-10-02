@@ -3389,6 +3389,397 @@ def story_from_row(row, out_root=None, thumb=True):
     return story_card(p.name, thumb_b64(p) if thumb and p.exists() else "", where or "", b, a, notes)
 
 
+# ---- Compare libraries: what is the same, what differs, and what a merge would do ----------------------------
+def _canon_rel(parts):
+    """Folder path of a file inside a library, Takeout wrapper folders ignored, case-folded."""
+    parts = list(parts)
+    while parts and _TAKEOUT_WRAP.match(parts[0]):
+        parts.pop(0)
+    return tuple(p.casefold() for p in parts)
+
+
+def compare_libraries(entries, progress=None, should_stop=None, threshold=4, similar_cap=30000, meta_cap=200, workers=6):
+    """Compare the first two libraries you added (folders, Photos libraries or Takeout zip files) and say how alike they are:
+    identical files, the same file filed differently, same-named files that differ, the same picture at a different size,
+    what only one has, and which folders differ. Read-only. A third or fourth library is only counted against the first."""
+    from concurrent.futures import ThreadPoolExecutor
+    from pathlib import PurePosixPath
+    stop = should_stop or (lambda: None)
+    say = progress or (lambda *a: None)
+    if len(entries) < 2:
+        raise ValueError("Add at least two libraries in the Source list to compare them")
+    libs = []
+    for ei, ent in enumerate(entries[:4]):
+        zips, folders = split_sources([ent])
+        label = Path(ent).expanduser().name or str(ent)
+        files = []                                   # (canonical dir tuple, name, size, sig, source, member, is_zip)
+        for z in zips:
+            stop()
+            say("Reading %s" % z.name, 0, 0)
+            try:
+                with zipfile.ZipFile(z) as zf:
+                    for i in zf.infolist():
+                        parts = _safe_member(i.filename) if not i.is_dir() else None
+                        if parts and _wanted_media(parts) and not parts[-1].lower().endswith(".json"):
+                            files.append((_canon_rel(parts[:-1]), parts[-1], i.file_size, (i.file_size, i.CRC), z, i.filename, True))
+            except (zipfile.BadZipFile, OSError):
+                continue
+        for fo in folders:
+            for dp, dns, fns in os.walk(fo, followlinks=False):
+                stop()
+                dns[:] = [d for d in dns if not (os.path.islink(os.path.join(dp, d)) or is_bundle(d) or d in SIMILAR_SKIP_DIRS or d.startswith("."))]
+                try:
+                    rel = Path(dp).relative_to(fo).parts
+                except ValueError:
+                    rel = ()
+                for n in fns:
+                    p = os.path.join(dp, n)
+                    ext = os.path.splitext(n)[1].lower()
+                    if n.startswith(".") or ext not in MEDIA_EXT and ext not in FORMAT_VIDEO_EXT:
+                        continue
+                    try:
+                        sz = os.path.getsize(p)
+                    except OSError:
+                        continue
+                    if sz:
+                        files.append((_canon_rel(rel), n, sz, None, p, "", False))
+        libs.append({"label": label, "files": files})
+    A, B = libs[0], libs[1]
+    # content fingerprints, only where a size also occurs in the other library
+    say("Comparing file contents", 0, 0)
+    sizes_other = [set(f[2] for f in lib["files"]) for lib in libs]
+    sig_cache = {}
+
+    def sig_of(f, other_sizes):
+        if f[3] is not None:
+            return f[3]
+        if f[2] not in other_sizes:
+            return (f[2], None)
+        key = f[4]
+        if key not in sig_cache:
+            try:
+                sig_cache[key] = file_sig(key)
+            except OSError:
+                sig_cache[key] = (f[2], None)
+        return sig_cache[key]
+    for li, lib in enumerate(libs):
+        other = set().union(*[sizes_other[j] for j in range(len(libs)) if j != li])
+        lib["sigs"] = []
+        for k, f in enumerate(lib["files"]):
+            if k % 500 == 0:
+                stop()
+            lib["sigs"].append(sig_of(f, other))
+    # index B
+    b_by_sig, b_by_path = {}, {}
+    for f, sg in zip(B["files"], B["sigs"]):
+        if sg[1] is not None:
+            b_by_sig.setdefault(sg, []).append(f)
+        b_by_path.setdefault((f[0], f[1].casefold()), []).append((f, sg))
+    R = {"labels": [l["label"] for l in libs], "a_files": len(A["files"]), "b_files": len(B["files"]),
+         "a_bytes": sum(f[2] for f in A["files"]), "b_bytes": sum(f[2] for f in B["files"]),
+         "identical": 0, "identical_bytes": 0, "refiled": 0, "refiled_examples": [], "conflicts": [], "conflict_n": 0, "only_a": 0, "only_b": 0,
+         "only_a_bytes": 0, "only_b_bytes": 0, "similar": [], "similar_n": 0, "folders_only_a": [], "folders_only_b": [], "folders_diff": [],
+         "meta_diffs": [], "matrix": [], "notes": []}
+    matched_b = set()
+    a_unmatched = []
+    for f, sg in zip(A["files"], A["sigs"]):
+        hit = b_by_sig.get(sg) if sg[1] is not None else None
+        if hit:
+            R["identical"] += 1
+            R["identical_bytes"] += f[2]
+            for h in hit:
+                matched_b.add(id(h))
+            same_place = any(h[0] == f[0] and h[1].casefold() == f[1].casefold() for h in hit)
+            if not same_place:
+                R["refiled"] += 1
+                if len(R["refiled_examples"]) < 12:
+                    R["refiled_examples"].append({"name": f[1], "a": "/".join(f[0]) or ".", "b": "/".join(hit[0][0]) or ".", "b_name": hit[0][1]})
+        else:
+            a_unmatched.append((f, sg))
+    # same name in the same folder but different content
+    conflicts, a_rest = [], []
+    for f, sg in a_unmatched:
+        cands = [(g, gs) for g, gs in b_by_path.get((f[0], f[1].casefold()), []) if id(g) not in matched_b]
+        if cands:
+            g, gs = cands[0]
+            conflicts.append((f, g))
+            matched_b.add(id(g))
+        else:
+            a_rest.append(f)
+    b_rest = [g for g in B["files"] if id(g) not in matched_b]
+    # similar pictures among what is left (folders only: needs pixels)
+    def ext_of(f):
+        return os.path.splitext(f[1])[1].lower()
+    cand_a = [f for f in a_rest if not f[6] and ext_of(f) in SIMILAR_EXT]
+    cand_b = [g for g in b_rest if not g[6] and ext_of(g) in SIMILAR_EXT]
+    hashes = {}
+    cmem = [m for c in conflicts for m in c if not m[6] and ext_of(m) in SIMILAR_EXT]
+    todo = (cand_a + cand_b)[:similar_cap] + cmem
+    done = 0
+    lock = threading.Lock()
+
+    def hw(f):
+        nonlocal done
+        stop()
+        h = dhash_image(f[4])
+        with lock:
+            done += 1
+            if h is not None:
+                hashes[f[4]] = h
+            if done % 25 == 0 or done == len(todo):
+                say("Comparing how pictures look", done, len(todo))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        list(ex.map(hw, todo))
+    n_chunks = max(2, min(16, threshold + 1))
+    bounds = [round(i * 64 / n_chunks) for i in range(n_chunks + 1)]
+    bucket = {}
+    for g in cand_b:
+        h = hashes.get(g[4])
+        if h is None or h in (0, (1 << 64) - 1):
+            continue
+        for c in range(n_chunks):
+            bucket.setdefault((c, (h >> bounds[c]) & ((1 << (bounds[c + 1] - bounds[c])) - 1)), []).append(g)
+    sim_pairs, used_b, used_a = [], set(), set()
+    for f in cand_a:
+        h = hashes.get(f[4])
+        if h is None or h in (0, (1 << 64) - 1):
+            continue
+        best = None
+        seen = set()
+        for c in range(n_chunks):
+            for g in bucket.get((c, (h >> bounds[c]) & ((1 << (bounds[c + 1] - bounds[c])) - 1)), []):
+                if id(g) in seen or id(g) in used_b:
+                    continue
+                seen.add(id(g))
+                d = bin(h ^ hashes[g[4]]).count("1")
+                if d <= threshold and (best is None or d < best[0]):
+                    best = (d, g)
+        if best:
+            used_b.add(id(best[1]))
+            used_a.add(id(f))
+            sim_pairs.append((f, best[1], best[0]))
+    conflict_pairs = {(id(c[0]), id(c[1])) for c in conflicts}
+    # describe conflicts and similar pairs (dimensions, dates), reading a limited number with exiftool
+    want = []
+    for f, g, d in sim_pairs[:meta_cap]:
+        want += [f, g]
+    for f, g in conflicts[:meta_cap]:
+        want += [f, g]
+    info = {}
+    paths = [w[4] for w in want if not w[6]]
+    if paths and shutil.which("exiftool"):
+        for k in range(0, len(paths), 300):
+            stop()
+            fd, arg = tempfile.mkstemp(suffix=".args")
+            os.close(fd)
+            try:
+                Path(arg).write_text("\n".join(paths[k:k + 300]), encoding="utf-8")
+                r = subprocess.run(["exiftool", "-charset", "filename=utf8", "-j", "-n", "-ImageWidth", "-ImageHeight", "-DateTimeOriginal", "-CreateDate", "-GPSLatitude", "-GPSLongitude", "-ImageDescription", "-@", arg],
+                                   capture_output=True, text=True)
+                for it in json.loads(r.stdout or "[]"):
+                    info[it["SourceFile"]] = it
+            except (ValueError, OSError):
+                pass
+            finally:
+                Path(arg).unlink(missing_ok=True)
+
+    def desc(f):
+        it = info.get(f[4], {})
+        date = str(it.get("DateTimeOriginal") or it.get("CreateDate") or "")[:19]
+        gps = "%.4f, %.4f" % (it["GPSLatitude"], it["GPSLongitude"]) if it.get("GPSLatitude") is not None and it.get("GPSLongitude") is not None else ""
+        return {"name": f[1], "where": "/".join(f[0]) or ".", "size": f[2], "w": it.get("ImageWidth") or 0, "h": it.get("ImageHeight") or 0,
+                "date": date, "gps": gps, "desc": str(it.get("ImageDescription") or "")[:60], "path": "" if f[6] else f[4]}
+
+    def differences(da, db):
+        out = []
+        for key, label in (("date", "date"), ("gps", "location"), ("desc", "caption")):
+            if da[key] != db[key]:
+                if da[key] and not db[key]:
+                    out.append("only %s has a %s" % ("the first library", label))
+                elif db[key] and not da[key]:
+                    out.append("only %s has a %s" % ("the second library", label))
+                else:
+                    out.append("the %s differs" % label)
+        if da["w"] and db["w"] and da["w"] * da["h"] != db["w"] * db["h"]:
+            out.append("different picture size (%s x %s against %s x %s)" % (da["w"], da["h"], db["w"], db["h"]))
+        return out
+    R["conflict_n"] = len(conflicts)
+    for f, g in conflicts[:60]:
+        da, db = desc(f), desc(g)
+        h1, h2 = hashes.get(f[4]), hashes.get(g[4])
+        same_pic = h1 is not None and h2 is not None and bin(h1 ^ h2).count("1") <= threshold
+        R["conflicts"].append({"a": da, "b": db, "same_picture": same_pic, "differences": differences(da, db)})
+    R["similar_n"] = len(sim_pairs)
+    for f, g, d in sorted(sim_pairs, key=lambda x: x[2])[:80]:
+        da, db = desc(f), desc(g)
+        R["similar"].append({"a": da, "b": db, "bits": d, "differences": differences(da, db), "bigger": "a" if da["w"] * da["h"] > db["w"] * db["h"] else ("b" if db["w"] * db["h"] > da["w"] * da["h"] else "same")})
+    a_only = [f for f in a_rest if id(f) not in used_a]
+    b_only = [g for g in b_rest if id(g) not in used_b]
+    R["only_a"], R["only_b"] = len(a_only), len(b_only)
+    R["only_a_bytes"], R["only_b_bytes"] = sum(f[2] for f in a_only), sum(g[2] for g in b_only)
+    # folders
+    ca, cb = {}, {}
+    for f in A["files"]:
+        ca[f[0]] = ca.get(f[0], 0) + 1
+    for g in B["files"]:
+        cb[g[0]] = cb.get(g[0], 0) + 1
+    R["folders_only_a"] = sorted(({"folder": "/".join(k) or ".", "files": v} for k, v in ca.items() if k not in cb), key=lambda x: -x["files"])[:15]
+    R["folders_only_b"] = sorted(({"folder": "/".join(k) or ".", "files": v} for k, v in cb.items() if k not in ca), key=lambda x: -x["files"])[:15]
+    R["folders_diff"] = sorted(({"folder": "/".join(k) or ".", "a": ca[k], "b": cb[k]} for k in ca if k in cb and ca[k] != cb[k]), key=lambda x: -abs(x["a"] - x["b"]))[:15]
+    # what a merge would produce, and a one-line verdict
+    small = max(1, min(R["a_files"], R["b_files"]))
+    sp_n = 0
+    for f, g in conflicts:
+        h1, h2 = hashes.get(f[4]), hashes.get(g[4])
+        if h1 is not None and h2 is not None and bin(h1 ^ h2).count("1") <= threshold:
+            sp_n += 1
+    R["same_picture_conflicts"] = sp_n
+    R["alike_pct"] = min(100, round(100 * (R["identical"] + len(sim_pairs) + sp_n) / small))
+    R["merged_files"] = R["a_files"] + len(b_only) + len(conflicts)
+    R["merged_if_near_skipped"] = R["a_files"] + len(b_only) + (len(conflicts) - sp_n)
+    # a third/fourth library counted against the first
+    for li in range(2, len(libs)):
+        sigs_a = {sg for sg in A["sigs"] if sg[1] is not None}
+        same = sum(1 for sg in libs[li]["sigs"] if sg[1] is not None and sg in sigs_a)
+        R["matrix"].append({"label": libs[li]["label"], "files": len(libs[li]["files"]), "identical_to_first": same})
+    if any(f[6] for f in A["files"] + B["files"]):
+        R["notes"].append("Zip files were compared by name and content fingerprint only: pictures inside zips are not compared by how they look.")
+    return R
+
+
+# ---- System activity: is Photos running, busy and making progress? ------------------------------------------------
+PHOTOS_PROCS = ("photolibraryd", "cloudphotod", "Photos", "assetsd", "mediaanalysisd", "photoanalysisd", "bird", "cloudd")
+
+
+def system_snapshot(want_activity=True):
+    """A quick look at the Mac: the Photos-related processes and what they use, power, disk, DNS, and how busy the iCloud
+    photo uploader has been in the last 10 minutes. Read-only; every part is optional."""
+    out = {"mac": sys.platform == "darwin", "procs": [], "power": {}, "free": None, "dns": None, "activity": None, "photos_open": False}
+    try:
+        r = subprocess.run(["ps", "-axo", "pid=,pcpu=,rss=,etime=,comm="], capture_output=True, text=True, timeout=15)
+        for line in r.stdout.splitlines():
+            parts = line.split(None, 4)
+            if len(parts) == 5:
+                name = os.path.basename(parts[4].strip())
+                if name in PHOTOS_PROCS:
+                    out["procs"].append({"name": name, "cpu": float(parts[1]), "mb": round(int(parts[2]) / 1024), "up": parts[3]})
+                    if name == "Photos":
+                        out["photos_open"] = True
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        pass
+    if shutil.which("pmset"):
+        try:
+            b = subprocess.run(["pmset", "-g", "batt"], capture_output=True, text=True, timeout=10).stdout
+            m = re.search(r"(\d+)%", b)
+            out["power"] = {"battery": int(m.group(1)) if m else None, "ac": "AC Power" in b, "charging": "charging" in b and "discharging" not in b and "not charging" not in b}
+            lp = subprocess.run(["pmset", "-g"], capture_output=True, text=True, timeout=10).stdout
+            out["power"]["low_power"] = bool(re.search(r"lowpowermode\s+1", lp))
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    try:
+        out["free"] = shutil.disk_usage(Path.home()).free
+    except OSError:
+        pass
+    try:
+        import socket
+        socket.setdefaulttimeout(3)
+        socket.gethostbyname("www.icloud.com")
+        out["dns"] = True
+    except Exception:
+        out["dns"] = False
+    if want_activity and sys.platform == "darwin" and shutil.which("log"):
+        try:
+            r = subprocess.run(["log", "show", "--last", "10m", "--style", "compact", "--predicate", 'process == "cloudphotod" OR process == "photolibraryd"'],
+                               capture_output=True, text=True, timeout=90)
+            out["activity"] = len([l for l in r.stdout.splitlines() if l[:2] == "20"])
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    return out
+
+
+def diagnose_system(snap, upload=None, issues=None, health=None):
+    """Turn the pieces (system snapshot, upload progress, log issues, library health) into one verdict and a short
+    prioritised list of what to do. Returns {"verdict", "headline", "progress", "actions", "checks"}."""
+    checks, actions = [], []
+
+    def chk(level, title, detail, action=""):
+        checks.append({"level": level, "title": title, "detail": detail})
+        if action and level in ("bad", "warn"):
+            actions.append({"level": level, "title": title, "do": action})
+    upload = upload or {}
+    pending = upload.get("pending")
+    eta = upload.get("eta") or {}
+    # progress
+    prog = {"state": "unknown", "text": "Upload progress could not be read."}
+    if upload.get("ok") and pending is not None:
+        if pending == 0:
+            prog = {"state": "done", "text": "Everything in this library is uploaded to iCloud."}
+        elif eta.get("stalled"):
+            prog = {"state": "stalled", "text": "%s items are waiting and the number has not fallen for about 45 minutes." % f"{pending:,}"}
+        elif eta.get("rate_per_hour", 0) > 0 and eta.get("eta_hours"):
+            prog = {"state": "progressing", "text": "%s items waiting, uploading about %s an hour, roughly %s h left." % (f"{pending:,}", f"{eta['rate_per_hour']:,}", eta["eta_hours"])}
+        elif eta.get("rate_per_hour", 0) < 0:
+            prog = {"state": "growing", "text": "More items are arriving (%s waiting) than are uploading. This is normal while a big import runs." % f"{pending:,}"}
+        else:
+            prog = {"state": "unknown", "text": "%s items waiting. Check again in a few minutes to measure the speed." % f"{pending:,}"}
+    # system
+    procs = {p["name"]: p for p in snap.get("procs", [])}
+    if snap.get("mac"):
+        if pending and not snap.get("photos_open"):
+            chk("warn", "Photos is not open", "Uploads are most reliable while Photos is open.", "Open Photos and leave it open until the upload finishes.")
+        elif snap.get("photos_open"):
+            chk("ok", "Photos is open", "The Photos app is running.")
+        pw = snap.get("power") or {}
+        if pw.get("low_power"):
+            chk("warn", "Low Power Mode is on", "macOS holds back background uploads in Low Power Mode.", "Turn off Low Power Mode (System Settings > Battery).")
+        if pw.get("battery") is not None and not pw.get("ac") and pw["battery"] < 30 and pending:
+            chk("warn", "Running on battery (%d%%)" % pw["battery"], "Uploads slow down or pause on battery.", "Plug the Mac in until the upload finishes.")
+        elif pw.get("ac"):
+            chk("ok", "Plugged in", "Power is connected.")
+        busy = [p for p in snap.get("procs", []) if p["name"] in ("mediaanalysisd", "photoanalysisd") and p["cpu"] > 30]
+        if busy:
+            chk("info", "Photos is analysing your library", "mediaanalysisd/photoanalysisd are using %d%% CPU. This is normal after a big import and slows uploads." % round(max(p["cpu"] for p in busy)),
+                "Leave the Mac on and plugged in: it finishes by itself.")
+        act = snap.get("activity")
+        if pending and act is not None:
+            if act < 5 and "cloudphotod" in procs:
+                chk("warn", "No upload activity", "The iCloud Photos uploader wrote almost nothing to the log in the last 10 minutes although %s items are waiting." % f"{pending:,}",
+                    "Open Photos and look at the bottom of the Library view for 'Paused'. Press Resume, then run the log check.")
+            elif act is not None and act >= 5:
+                chk("ok", "The uploader is active", "%s log entries from the iCloud Photos services in the last 10 minutes." % f"{act:,}")
+        if pending and "cloudphotod" not in procs and snap.get("photos_open"):
+            chk("warn", "The iCloud Photos service is not running", "cloudphotod handles uploads and is not running.", "Quit and reopen Photos; if it persists restart the Mac.")
+    if snap.get("free") is not None:
+        if snap["free"] < 5e9:
+            chk("bad", "Very little free disk space", "Only %.1f GB free on this Mac." % (snap["free"] / 1e9), "Free space now: Photos cannot import or sync reliably when the disk is nearly full.")
+        elif snap["free"] < 20e9:
+            chk("warn", "Low free disk space", "%.1f GB free on this Mac." % (snap["free"] / 1e9), "Free some space or switch on Optimize Mac Storage.")
+        else:
+            chk("ok", "Disk space is fine", "%.0f GB free." % (snap["free"] / 1e9))
+    if snap.get("dns") is False:
+        chk("bad", "No internet connection", "www.icloud.com could not be reached.", "Check Wi-Fi or Ethernet, VPN and DNS.")
+    elif snap.get("dns"):
+        chk("ok", "Internet reachable", "iCloud's address resolves.")
+    if upload.get("ok") and upload.get("icloud_on") is False:
+        chk("bad", "iCloud Photos looks switched off", "Nothing in this library is marked as uploaded.", "Turn on iCloud Photos in Photos > Settings > iCloud.")
+    if prog["state"] == "stalled":
+        chk("bad", "Uploads look stuck", prog["text"], "Run the log check below and follow the fix for the top issue (Low Power Mode, a paused sync, no iCloud space and network loss are the usual causes).")
+    for i in (issues or []):
+        if i["sev"] in ("bad", "warn"):
+            chk(i["sev"], i["title"] + (" (%dx in the logs)" % i["count"]), i["meaning"], i["fixes"][0] if i.get("fixes") else "")
+    if health:
+        sc = health.get("score")
+        if sc is not None and sc < 70:
+            chk("warn", "Library health score is %d" % sc, "See the Health tab for the findings.", "Open the Health tab and work through the top findings.")
+        elif sc is not None:
+            chk("ok", "Library health score is %d" % sc, "")
+    levels = [c["level"] for c in checks]
+    verdict = "problem" if "bad" in levels else ("attention" if "warn" in levels else "healthy")
+    headline = {"problem": "Something needs fixing now.", "attention": "Mostly fine, a few things to look at.", "healthy": "Everything looks healthy."}[verdict]
+    actions.sort(key=lambda a: 0 if a["level"] == "bad" else 1)
+    return {"verdict": verdict, "headline": headline, "progress": prog, "actions": actions[:8], "checks": checks}
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("root", type=Path, help="folder containing all extracted 'Takeout N' folders")

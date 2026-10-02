@@ -29,7 +29,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.02-q"
+VERSION = "2026.10.03-a"
 class Cancelled(Exception):
     pass
 
@@ -218,7 +218,7 @@ def write_text_summary(path, sm):
     Path(path).write_text("\n".join(L) + "\n", encoding="utf-8")
 
 
-def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=False, date_policy="earlier", name_dates=False, albums=False, edited="both"):
+def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=False, date_policy="earlier", name_dates=False, albums=False, edited="both", near=False):
     with LOCK:
         STATE.update(state="scanning", cancel=False, total=0, done=0, counts={}, message="Scanning folders...",
                      report="", summary=None, scan=None, extra={}, recent=[], phase=None, kind="fix", **({} if IN_GUIDED[0] else {"guided": None}))
@@ -274,6 +274,17 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
                 STATE["message"] = "Finding exact duplicates..." if dedupe else "Preparing..."
             fx.prepare(args, media, hashing)
             args.claimed |= claimed_all
+            if near and not zips:
+                try:
+                    ngroups, _n = fx.find_similar_photos([str(p) for p in resolved], 3, lambda m_, a_, b_: check_cancel(), check_cancel)
+                except OSError:
+                    ngroups = []
+                mset_ = {str(m_) for m_ in media}
+                for g_ in ngroups:
+                    for mem_ in g_[1:]:
+                        if mem_["path"] in mset_ and mem_["path"] not in args.skip and mem_["path"] not in args.dupes:
+                            args.skip[mem_["path"]] = "left out: a near-identical copy; the larger version is kept"
+                            extra["near_skipped"] += 1
             if edited in ("edited", "original"):
                 pairs = fx.find_edited_pairs(media)
                 for ed, og in pairs.items():
@@ -515,6 +526,8 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
             sm["tips"].append("%d photo%s had a Google-edited copy next to the original. %s" % (
                 extra["edited_pairs"], "" if extra["edited_pairs"] == 1 else "s", "Only the edited versions were kept." if edited == "edited" else "Only the originals were kept."))
         sm["story"] = story_cards[:8]
+        if extra.get("near_skipped"):
+            sm["tips"].append("%d near-identical pictures (the same picture at a smaller size) were left out; the larger version of each was kept." % extra["near_skipped"])
         sm["problems"] = [{"file": Path(r["file"]).name, "status": r["status"], "detail": r.get("detail", "")} for r in rows
                           if r["status"] in ("copy-error", "error", "exiftool-error")][:100]
         sm["dupe_bytes"] = dupe_bytes
@@ -578,7 +591,7 @@ def _run_guided(roots, out, dry_run, opts):
                 [str(p) for p in folders], dry_run, {"ext": {"json": True, "aside": False}, "json": False, "json_other": False,
                                                      "junk": None, "names": None, "empty": None})))
         steps.append(("Put dates, locations and captions back, and merge into one library", lambda: run_job(
-            roots, out, dry_run, bool(opts.get("replace", True)), bool(opts.get("live", True)), bool(opts.get("dedupe", True)), False, "earlier", bool(opts.get("name_dates", True)), bool(opts.get("albums", True)), opts.get("edited", "both"))))
+            roots, out, dry_run, bool(opts.get("replace", True)), bool(opts.get("live", True)), bool(opts.get("dedupe", True)), False, "earlier", bool(opts.get("name_dates", True)), bool(opts.get("albums", True)), opts.get("edited", "both"), bool(opts.get("near", False)))))
         if opts.get("convert") and not dry_run:
             steps.append(("Convert old videos to MP4", lambda: run_convert([out], False, list(fx.DEFAULT_EXT), False, "high", "move", False)))
         titles = [t for t, _ in steps]
@@ -2578,12 +2591,124 @@ def run_health(roots, deep):
             STATE.update(state="error", message=str(e))
 
 
+COMPARE = {"allowed": set()}
+
+
+def run_compare(roots):
+    with LOCK:
+        STATE.update(state="scanning", cancel=False, total=0, done=0, counts={}, message="Comparing your libraries...", report="",
+                     summary=None, scan=None, extra={}, recent=[], phase=None, kind="compare", cv=None, guided=None)
+    try:
+        def prog(msg, done, total):
+            check_cancel()
+            with LOCK:
+                STATE.update(state="running", total=total, done=done, message=msg + (" (%s of %s)" % (f"{done:,}", f"{total:,}") if total else ""))
+                STATE["phase"] = {"stage": "pct", "done": done, "total": total} if total else None
+        R = fx.compare_libraries(roots, prog, check_cancel)
+        allowed = set()
+        for lst in (R["conflicts"], R["similar"]):
+            for c in lst:
+                for side in ("a", "b"):
+                    if c[side].get("path"):
+                        allowed.add(c[side]["path"])
+        with LOCK:
+            COMPARE["allowed"] = allowed
+        tips = []
+        if R["alike_pct"] >= 95:
+            tips.append("These libraries are almost the same. Merging them adds only %s file%s from the second." % (f"{R['only_b']:,}", "" if R["only_b"] == 1 else "s"))
+        elif R["alike_pct"] >= 40:
+            tips.append("These libraries overlap a lot but each has files the other lacks.")
+        else:
+            tips.append("These libraries are mostly different.")
+        tips += R.get("notes", [])
+        sm = {"kind": "compare", "dry_run": True, **R, "tips": tips}
+        with LOCK:
+            STATE.update(state="done", message="Finished", summary=sm, phase=None)
+    except Cancelled:
+        stopped_state("Nothing was changed.")
+    except Exception as ex:
+        with LOCK:
+            STATE.update(state="error", message=str(ex))
+
+
+def _upload_series(lib, hours=24):
+    out = []
+    try:
+        for line in _upload_log_path().read_text(encoding="utf-8").splitlines()[-4000:]:
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            if d.get("lib") == str(lib) and time.time() - d["t"] <= hours * 3600:
+                out.append({"t": d["t"], "pending": d["pending"]})
+    except OSError:
+        pass
+    return out[-60:]
+
+
+def run_diagnostics(roots, library, hours):
+    """One report on everything: the library's health, whether Photos is progressing, what the logs say, and the Mac itself."""
+    with LOCK:
+        STATE.update(state="scanning", cancel=False, total=5, done=0, counts={}, message="Running diagnostics...", report="",
+                     summary=None, scan=None, extra={}, recent=[], phase=None, kind="diagnostics", cv=None, guided=None)
+    try:
+        def step(n, msg):
+            check_cancel()
+            with LOCK:
+                STATE.update(state="running", done=n, message="Diagnostics %d of 5: %s" % (n + 1, msg))
+        health = None
+        zips, folders = fx.split_sources(roots) if roots else ([], [])
+        if folders:
+            step(0, "checking the library's health")
+            R = fx.health_scan([str(f) for f in folders], False, lambda m, a, b: check_cancel(), check_cancel)
+            health = {"score": R["score"], "parts": R["parts"], "findings": R["findings"][:8], "waste": R["stats"]["waste_bytes"], "files": R["stats"]["files"], "bytes": R["stats"]["bytes"]}
+        step(1, "checking the upload to iCloud")
+        lib = library or (fx.find_photos_libraries() or [""])[0]
+        upload = {}
+        series = []
+        if lib:
+            upload = photos_verify_report(lib, roots[0]) if roots else fx.photos_upload_status(lib)
+            if upload.get("ok"):
+                if not roots:
+                    upload_record(lib, upload)
+                    upload["eta"] = upload_eta(lib)
+                series = _upload_series(lib)
+        step(2, "reading the Photos and iCloud logs")
+        lines, note = fx.collect_mac_logs(hours)
+        lines += fx.collect_crash_reports(7)
+        for e_ in list_history(40):
+            if e_.get("state") in ("failed", "stopped") and e_.get("message") and time.time() - e_["started"] < max(hours, 24) * 3600:
+                lines.append("%s Backstory %s: %s" % (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(e_["started"])), e_["title"], e_["message"]))
+        issues, other = fx.interpret_log_lines(lines)
+        step(3, "looking at the Mac")
+        snap = fx.system_snapshot(True)
+        step(4, "putting it together")
+        diag = fx.diagnose_system(snap, upload if upload.get("ok") else None, issues, health)
+        sm = {"kind": "diagnostics", "dry_run": True, **diag, "health": health, "upload": ({k: v for k, v in upload.items() if k != "missing_examples"} if upload else {}), "series": series,
+              "library": lib, "issues": issues, "other": other, "log_note": note, "log_lines": len(lines),
+              "system": {"procs": snap["procs"], "power": snap["power"], "free": snap["free"], "dns": snap["dns"], "activity": snap["activity"], "photos_open": snap["photos_open"], "mac": snap["mac"]},
+              "tips": []}
+        try:
+            APP_HOME.mkdir(parents=True, exist_ok=True)
+            with open(APP_HOME / "diag.jsonl", "a", encoding="utf-8") as fh:
+                fh.write(json.dumps({"t": time.time(), "verdict": diag["verdict"], "pending": (upload or {}).get("pending"), "score": (health or {}).get("score")}) + "\n")
+        except OSError:
+            pass
+        with LOCK:
+            STATE.update(state="done", message="Finished", summary=sm, phase=None, done=5)
+    except Cancelled:
+        stopped_state("Nothing was changed.")
+    except Exception as ex:
+        with LOCK:
+            STATE.update(state="error", message=str(ex))
+
+
 # ---- Reports, run logs and history -------------------------------------------------------------------------
 APP_HOME = Path(os.environ.get("METADATAFIXER_HOME") or (
     Path.home() / "Library" / "Application Support" / "MetadataFixer" if sys.platform == "darwin" else Path.home() / ".metadatafixer"))
 HIST_DIR = APP_HOME / "history"
 REPORTS_DIR = Path(os.environ.get("METADATAFIXER_REPORTS") or (Path.home() / "Documents" / "Backstory Reports"))
-KIND_TITLE = {"monitor": "Photos and iCloud log check", "health": "Library health check", "formats_apply": "Set older formats aside", "photos": "Send to Apple Photos", "similar": "Find similar photos", "similar_apply": "Set similar photos aside", "undo": "Undo a run", "assess": "Check my files", "consolidate": "Merge similar folders", "fix": "Fix metadata", "merge": "Merge folders", "cleanup": "Clean up", "convert": "Convert videos", "guided": "Guided: Fix my Takeout"}
+KIND_TITLE = {"compare": "Compare libraries", "diagnostics": "Full diagnostics", "monitor": "Photos and iCloud log check", "health": "Library health check", "formats_apply": "Set older formats aside", "photos": "Send to Apple Photos", "similar": "Find similar photos", "similar_apply": "Set similar photos aside", "undo": "Undo a run", "assess": "Check my files", "consolidate": "Merge similar folders", "fix": "Fix metadata", "merge": "Merge folders", "cleanup": "Clean up", "convert": "Convert videos", "guided": "Guided: Fix my Takeout"}
 
 
 def _headline(sm):
@@ -2592,6 +2717,10 @@ def _headline(sm):
         return ""
     k = sm.get("kind")
     try:
+        if k == "compare":
+            return "%s%% alike: %s identical, %s same name but different, %s similar pictures" % (sm.get("alike_pct", 0), f"{sm.get('identical', 0):,}", f"{sm.get('conflict_n', 0):,}", f"{sm.get('similar_n', 0):,}")
+        if k == "diagnostics":
+            return "%s: %s" % (sm.get("verdict", ""), sm.get("headline", ""))
         if k == "monitor":
             return "%s issues found in %s log lines" % (len(sm.get("issues", [])), f"{sm.get('lines', 0):,}")
         if k == "health":
@@ -2913,7 +3042,7 @@ class Handler(BaseHTTPRequestHandler):
             from urllib.parse import parse_qs, urlparse
             p = (parse_qs(urlparse(self.path).query).get("p") or [""])[0]
             with LOCK:
-                ok = p in SIMILAR["allowed"]
+                ok = p in SIMILAR["allowed"] or p in COMPARE["allowed"]
             data = make_thumb(p) if ok else b""
             if not data:
                 return self._send(404, "{}")
@@ -2944,7 +3073,7 @@ class Handler(BaseHTTPRequestHandler):
                 body.get("roots", []), body.get("out", ""),
                 bool(body.get("dry_run")), bool(body.get("overwrite")), bool(body.get("pair_live")),
                 bool(body.get("dedupe")), bool(body.get("move")), body.get("date_policy", "earlier"), bool(body.get("name_dates")), bool(body.get("albums")),
-                body.get("edited") if body.get("edited") in ("both", "edited", "original") else "both"))
+                body.get("edited") if body.get("edited") in ("both", "edited", "original") else "both", bool(body.get("near"))))
             self._send(200, "{}")
         elif self.path == "/api/health_start":
             with LOCK:
@@ -2961,6 +3090,25 @@ class Handler(BaseHTTPRequestHandler):
             if busy:
                 return self._send(409, json.dumps({"error": "A job is already running"}))
             start_tracked("formats_apply", {"roots": [], "dry_run": False, "opts": {"files": len(body.get("items", []))}}, run_formats_apply, ([str(x) for x in body.get("items", [])],))
+            self._send(200, "{}")
+        elif self.path == "/api/compare_start":
+            with LOCK:
+                busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
+            if busy:
+                return self._send(409, json.dumps({"error": "A job is already running"}))
+            roots = [str(x) for x in body.get("roots", [])]
+            if len(roots) < 2:
+                return self._send(200, json.dumps({"error": "Add at least two libraries in the Source list to compare them"}))
+            start_tracked("compare", {"roots": roots, "dry_run": True, "opts": {}}, run_compare, (roots,))
+            self._send(200, "{}")
+        elif self.path == "/api/diagnostics_start":
+            with LOCK:
+                busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
+            if busy:
+                return self._send(409, json.dumps({"error": "A job is already running"}))
+            hrs = body.get("hours") if body.get("hours") in (1, 6, 24, 168) else 6
+            start_tracked("diagnostics", {"roots": [str(x) for x in body.get("roots", [])], "dry_run": True, "opts": {"hours": hrs}}, run_diagnostics,
+                          ([str(x) for x in body.get("roots", [])], body.get("library") or "", hrs))
             self._send(200, "{}")
         elif self.path == "/api/monitor_start":
             with LOCK:
@@ -3053,7 +3201,7 @@ class Handler(BaseHTTPRequestHandler):
             if busy:
                 return self._send(409, json.dumps({"error": "A job is already running"}))
             o = body.get("opts", {})
-            opts = {k: bool(o.get(k)) for k in ("fix_ext", "convert", "replace", "live", "dedupe", "name_dates", "albums")}
+            opts = {k: bool(o.get(k)) for k in ("fix_ext", "convert", "replace", "live", "dedupe", "name_dates", "albums", "near")}
             opts["edited"] = o.get("edited") if o.get("edited") in ("both", "edited", "original") else "both"
             start_tracked('guided', body, run_guided, (
                 body.get("roots", []), body.get("out", ""), bool(body.get("dry_run")), opts))
@@ -3349,6 +3497,12 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
 .fstrip{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:6px 0 14px;padding:12px 14px;border-radius:14px;background:var(--soft)}
 .fst{display:flex;gap:8px;align-items:center}.fst .fn{display:inline-grid;place-items:center;width:26px;height:26px;border-radius:50%;background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;font-weight:700;font-size:13px;flex:none}
 .fst b{display:block;font-size:13px}.fst span:not(.fn){display:block;font-size:12px;color:var(--mute)}.fsarrow{color:var(--mute);font-size:22px}
+
+.verdict{display:flex;gap:14px;align-items:center;padding:16px 18px;border-radius:16px;background:color-mix(in srgb,var(--c) 14%,var(--card));border:1px solid color-mix(in srgb,var(--c) 45%,var(--line));margin:6px 0 12px;font-size:15px}
+.verdict b{font-size:20px;color:var(--c)}.vdot{width:16px;height:16px;border-radius:50%;background:var(--c);flex:none;box-shadow:0 0 0 6px color-mix(in srgb,var(--c) 25%,transparent)}
+.cmpsides{display:grid;grid-template-columns:1fr 1fr;gap:12px}.cmpside{display:flex;gap:10px;align-items:flex-start;min-width:0}
+.cmpside img,.cmpside .stnoimg{width:110px;height:84px;object-fit:cover;border-radius:8px;flex:none}.cmppair{padding:12px}
+@media(max-width:620px){.cmpsides{grid-template-columns:1fr}}
 </style></head><body><div id="ack" style="display:none"><div class="ackbox" role="dialog" aria-modal="true" aria-labelledby="acktitle">
 <h2 id="acktitle">Before you start</h2>
 <p>Backstory changes, copies, moves and (if you choose) deletes files. Please read this once:</p>
@@ -3428,6 +3582,7 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
 <div class="opt"><input type="checkbox" id="gdedupe" checked><div>Merge same-named folders and remove exact duplicates<small>Every <i>Photos from 2012</i> across all your zips becomes one folder, and the same photo repeated in several albums is kept once.</small></div></div>
 <div class="opt"><input type="checkbox" id="glive" checked><div>Re-pair Live Photos<small>Reconnects each Live Photo&#39;s still and video so Apple Photos shows them together.</small></div></div>
 <div class="opt"><input type="checkbox" id="gnd" checked><div>Use the date in the file name when there is no .json<small>Fills in a missing date from names like <i>IMG_20190704_123456</i>. Never changes a date that is already there.</small></div></div>
+<div class="opt"><input type="checkbox" id="gnear"><div>&#9888;&#65039; Also skip near-identical pictures<small>When your libraries overlap, leave out the smaller version of the same picture and keep the larger one. Off by default: use Compare libraries on the Merge tab to see what it would skip. Folders only.</small></div></div>
 <div class="opt"><input type="checkbox" id="galb" checked><div>Keep album names as keywords<small>When a photo that lived in an album is skipped as a duplicate, the album name is saved as a keyword on the kept copy so you do not lose your albums. A list of albums is saved with the reports.</small></div></div>
 <div class="opt"><div style="flex:1"><label for="gedit" style="font-weight:600">Google-edited copies (IMG_1-edited.jpg)</label><select id="gedit" class="sel"><option value="both" selected>Keep both</option><option value="edited">Keep only the edited version</option><option value="original">Keep only the original</option></select></div></div>
 <div class="opt"><input type="checkbox" id="gow" checked><div>&#9888;&#65039; Replace location and caption already stored in the photo<small>Google&#39;s values win for location and caption. Dates keep the earlier of the two. Change this in the Fix tab if you want other rules.</small></div></div>
@@ -3451,6 +3606,7 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
 <small>Google sometimes records the day a photo was uploaded or re-saved instead of the day it was taken, and that day is always later. Keeping the earlier of the two is usually right. A photo with no date at all always gets Google&#39;s.</small></div></div>
 <div class="opt"><input type="checkbox" id="ow" checked><div>&#9888;&#65039; Replace location and caption already stored in the photo<small>Every photo has hidden facts saved inside the file itself (called EXIF). <b>Off</b>: only fill in a location or caption that is missing. <b>On</b>: replace a different one with Google&#39;s version. Your pictures themselves are never altered.</small></div></div></div>
 <div class="opt"><input type="checkbox" id="ndates" checked><div>Use the date in the file name when there is no .json<small>For photos with no Google info file and no date of their own, reads a date from names like <i>IMG_20190704_123456</i>, <i>PXL_20210512_...</i> or <i>Screenshot 2019-07-04 at 12.34.56</i>. It only fills in a missing date and never changes one that is already there.</small></div></div>
+<div class="opt"><input type="checkbox" id="near"><div>&#9888;&#65039; Also skip near-identical pictures<small>The same picture saved at a smaller size or re-saved is not an exact copy, so it is normally kept. Tick this to leave out the smaller version when libraries overlap (folders only, not zip files). Check the Compare results first.</small></div></div>
 <div class="opt"><input type="checkbox" id="albums" checked><div>Keep album names when duplicates are removed<small>Google saves a photo once in its year folder and again in every album. When the album copies are skipped as duplicates, the album names are saved as keywords on the kept photo (Apple Photos and Lightroom show keywords), and a list of albums is saved with the reports.</small></div></div>
 <div class="opt"><div style="flex:1"><label for="edited" style="font-weight:600">When Google saved an edited copy (IMG_1-edited.jpg) next to the original</label><select id="edited" class="sel"><option value="both" selected>Keep both</option><option value="edited">Keep only the edited version</option><option value="original">Keep only the original</option></select><small>The ones left out stay in your Takeout; they are just not copied into the new library.</small></div></div>
 
@@ -3487,6 +3643,13 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
 <div class="opt"><input type="checkbox" id="mgdd"><div>Find identical photos anywhere, not just in the same folder<small>Compares file contents across all folders, so the same photo repeated in several albums or Takeouts is kept once. Slower on big libraries.</small></div></div>
 <small>Not touched: shortcuts. App and library bundles (such as <i>.photoslibrary</i>) are moved as a single item. Invisible system files (.DS_Store and the like) are left out.</small>
 <button class="p" id="mgo" style="margin-top:10px">Start</button></div>
+
+<div class="card" id="cmpcard">
+<b>Compare libraries</b>
+<small style="margin-top:4px">Add two libraries to the Source list (folders, Photos libraries or Takeout zips) and see how alike they are before you merge: what is identical, the same file filed in a different folder, files with the same name that differ, the same picture at a different size, what only one has, and which folders differ. It only reads.</small>
+<div class="usef" style="margin-top:8px"><b>Libraries:</b> <span class="fnote"></span></div>
+<button class="p" id="cmpgo">Compare the first two libraries</button>
+</div>
 </section>
 <section class="pane" id="pane-clean">
 <h2 class="ph">Clean up</h2>
@@ -3592,6 +3755,9 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
 </section>
 <section class="pane" id="pane-monitor">
 <h2 class="ph">Photos and iCloud monitor</h2>
+<div class="card"><b>Full diagnostics</b>
+<small style="margin-top:4px">One report that answers: is my library healthy, is Photos making progress, what are the logs saying, and is the Mac itself in good shape? It combines the library health check, the iCloud upload status (speed and time left), the Photos and iCloud log check, and a look at Photos' processes, power, disk and network. It ends with a verdict and the few things to do first. It only reads.</small>
+<div class="hbtns"><button class="p" id="diaggo">Run full diagnostics</button></div></div>
 <div class="card"><b>Is everything in iCloud yet?</b>
 <small style="margin-top:4px">Reads a copy of your Photos library's database to count what has uploaded, how fast it is going, and whether it looks stuck. It also checks the files Backstory sent from your first Source folder. Apple does not document this database, so treat the numbers as a strong hint and confirm in Photos and on iCloud.com.</small>
 <div class="opt"><div style="flex:1"><label for="uplib" style="font-weight:600">Photos library</label><select id="uplib" class="sel"><option value="">Find it automatically</option></select></div></div>
@@ -3690,7 +3856,7 @@ $('go').onclick=async()=>{
   if(!$('dry').checked&&!dest()&&!confirm('No output folder: files will be edited IN PLACE. Continue?'))return;
   if($('move').checked&&!$('dry').checked&&!confirm('MOVE will take files out of your Takeout folders. Make sure you have another backup. Continue?'))return;
   $('sum').style.display='none';
-  const r=await post('/api/start',{roots:roots(),out:dest(),dry_run:$('dry').checked,overwrite:$('ow').checked,pair_live:$('live').checked,dedupe:$('dedupe').checked,move:$('move').checked,date_policy:$('datepol').value,name_dates:$('ndates').checked,albums:$('albums').checked,edited:$('edited').value});
+  const r=await post('/api/start',{roots:roots(),out:dest(),dry_run:$('dry').checked,overwrite:$('ow').checked,pair_live:$('live').checked,dedupe:$('dedupe').checked,move:$('move').checked,date_policy:$('datepol').value,name_dates:$('ndates').checked,albums:$('albums').checked,edited:$('edited').value,near:$('near').checked});
   if(r.error)alert(r.error);else poll();
 };
 $('rev').onclick=()=>post('/api/reveal');
@@ -3709,6 +3875,8 @@ function showSummary(s){
   if(s.kind==='photos'){showPhotos(s);return}
   if(s.kind==='health'){showHealth(s);return}
   if(s.kind==='monitor'){showMonitor(s);return}
+  if(s.kind==='compare'){showCompare(s);return}
+  if(s.kind==='diagnostics'){showDiagnostics(s);return}
   if(s.kind==='similar_apply'||s.kind==='formats_apply'){showSimilarApply(s);return}
   let h=flowStrip(s)+storyHTML(s.story,s.dry_run?'What a few of your real photos would look like after the run.':'A few of your real photos, before and after.')+`<div class="tiles">${tile(s.total,'media files')}${tile(s.duplicates,'exact duplicates skipped')}${tile(s.matched,'unique files matched ('+s.pct_matched+'%)','ok')}${tile(s.no_json,'no JSON found',s.no_json?'bad':'ok')}${tile(s.orphans,'JSON with no photo')}${s.name_dates?tile(s.name_dates,'dates from file names','ok'):''}</div>`;
   h+=s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
@@ -3765,7 +3933,7 @@ function setBar(barId,fillId,pctId,pct,indet){
     for(let i=0;i<30;i++){await new Promise(x=>setTimeout(x,1000));const s=await st();if(s&&s.boot!==boot){location.reload();return}}
     $('updmsg').textContent='Updated. If the page does not reload, restart the app in Terminal.'}
 })();
-const TABS=['guided','fix','merge','clean','convert','health','monitor','photos','similar','history','help'];const tabOf=k=>({formats_apply:'health',similar_apply:'similar',undo:'history',consolidate:'clean',cleanup:'clean',sort:'merge',assess:'guided'}[k]||k);let curGuided=false;const paneKind=()=>curGuided?'guided':tabOf(jobKind);let jobKind='fix';
+const TABS=['guided','fix','merge','clean','convert','health','monitor','photos','similar','history','help'];const tabOf=k=>({diagnostics:'monitor',compare:'merge',formats_apply:'health',similar_apply:'similar',undo:'history',consolidate:'clean',cleanup:'clean',sort:'merge',assess:'guided'}[k]||k);let curGuided=false;const paneKind=()=>curGuided?'guided':tabOf(jobKind);let jobKind='fix';
 function showTab(t){if(!TABS.includes(t))t='fix';
   TABS.forEach(x=>{$('pane-'+x).style.display=x===t?'block':'none';document.querySelector('.tab[data-tab="'+x+'"]').classList.toggle('on',x===t)});
   try{localStorage.setItem('tab',t)}catch(e){}
@@ -3851,7 +4019,7 @@ $('gst').onclick=async()=>{
   const real=!$('gdry').checked;
   if(real&&$('gcv').checked&&!confirm('After the library is built, old videos in the Destination will be converted to MP4 and the originals moved into an _original_videos folder. Continue?'))return;
   $('sum').style.display='none';curGuided=true;
-  const r=await post('/api/guided_start',{roots:roots(),out:dest(),dry_run:$('gdry').checked,opts:{fix_ext:$('gext').checked,convert:$('gcv').checked,replace:$('gow').checked,live:$('glive').checked,dedupe:$('gdedupe').checked,name_dates:$('gnd').checked,albums:$('galb').checked,edited:$('gedit').value}});
+  const r=await post('/api/guided_start',{roots:roots(),out:dest(),dry_run:$('gdry').checked,opts:{fix_ext:$('gext').checked,convert:$('gcv').checked,replace:$('gow').checked,live:$('glive').checked,dedupe:$('gdedupe').checked,name_dates:$('gnd').checked,albums:$('galb').checked,edited:$('gedit').value,near:$('gnear').checked}});
   if(r.error){alert(r.error);curGuided=false}else{placeResults('guided');$('prog').style.display='block';poll()}};
 
 // ---- Help: user guide (rendered from USER_GUIDE.md), safety notice, support, about
@@ -4098,11 +4266,7 @@ $('hgo').onclick=()=>startHealth(false);
 
 function fmtEta(h){if(!h)return '';return h<1?Math.max(1,Math.round(h*60))+' minutes':h<48?h.toFixed(1)+' hours':Math.round(h/24)+' days'}
 async function loadLibs(){try{const r=await post('/api/photos_libs');const sel=$('uplib');const cur=sel.value;sel.innerHTML='<option value="">Find it automatically</option>'+(r.libs||[]).map(l=>`<option value="${esc(l)}">${esc(l.split('/').slice(-2).join('/'))}</option>`).join('');sel.value=cur}catch(e){}}
-async function checkUpload(){
-  $('upgo').disabled=true;$('upres').innerHTML='<small>Reading the Photos database...</small>';
-  const r=await post('/api/upload_status',{library:$('uplib').value,root:$('upsent').checked?(roots()[0]||''):''});
-  $('upgo').disabled=false;
-  if(!r.ok){$('upres').innerHTML=`<div class="tip">Could not read the Photos database${r.why?': '+esc(r.why):''}. This needs a Mac with a Photos library; the check is experimental.</div>`;return}
+function uploadHTML(r){
   const pct=r.total&&r.uploaded!=null?Math.round(100*r.uploaded/r.total):null;
   let h='';
   if(r.icloud_on===false)h+='<div class="tip">iCloud Photos looks <b>switched off</b> for this library: nothing is marked as uploaded. Turn it on in Photos > Settings > iCloud.</div>';
@@ -4117,7 +4281,13 @@ async function checkUpload(){
     else if(r.matched!=null){const ok=r.matched_uploaded===r.matched&&r.not_found===0;
       h+=`<div class="tip" style="border-color:${ok?'var(--ok)':'var(--warn)'}"><b>Files Backstory sent:</b> ${r.matched.toLocaleString()} of ${r.sent.toLocaleString()} are in Photos, ${r.matched_uploaded.toLocaleString()} of those are in iCloud${r.not_found?`; ${r.not_found.toLocaleString()} were not found in Photos (skipped as duplicates, still importing, or renamed)`:''}.${(r.missing_examples||[]).length?'<br>Not found: '+r.missing_examples.map(esc).join(', '):''}</div>`;
       if(ok)h+='<h2>Ready to retire the staging copy?</h2><div class="rec"><div class="why" style="margin:0">All files Backstory sent are in iCloud. Before you remove anything: (1) look through Photos and on iCloud.com (Photos) for a few years and albums; (2) compare the item counts; (3) keep a backup of your library on another drive; (4) <b>keep your Takeout zip files and the staging drive until you are satisfied</b>. The zips hold Google\'s original information and are your only copy of it.</div></div>'}}
-  $('upres').innerHTML=h;const w=$('whystuck');if(w)w.onclick=e=>{e.preventDefault();startMonitor(false)}}
+  return h}
+async function checkUpload(){
+  $('upgo').disabled=true;$('upres').innerHTML='<small>Reading the Photos database...</small>';
+  const r=await post('/api/upload_status',{library:$('uplib').value,root:$('upsent').checked?(roots()[0]||''):''});
+  $('upgo').disabled=false;
+  if(!r.ok){$('upres').innerHTML=`<div class="tip">Could not read the Photos database${r.why?': '+esc(r.why):''}. This needs a Mac with a Photos library; the check is experimental.</div>`;return}
+  $('upres').innerHTML=uploadHTML(r);const w=$('whystuck');if(w)w.onclick=e=>{e.preventDefault();startMonitor(false)}}
 $('upgo').onclick=checkUpload;
 async function startMonitor(quiet,pasted){
   if(!quiet){$('sum').style.display='none'}curGuided=false;
@@ -4131,10 +4301,7 @@ function showMonitor(s){
   let h=`<div class="tiles">${tile(s.issues.length,'issues found',s.issues.some(i=>i.sev==='bad')?'bad':s.issues.length?'':'ok')}${tile(s.lines,'log lines read')}${tile((s.other||[]).length,'unrecognised errors')}</div><small>${src}</small>`;
   if(s.note)h+=`<div class="tip">${esc(s.note)}</div>`;
   h+=(s.tips||[]).map(t=>`<div class="tip" style="border-color:var(--ok)">${esc(t)}</div>`).join('');
-  h+=s.issues.map(i=>`<div class="card"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="font-size:16px">${esc(i.title)}</b><span class="badge ${i.sev==='bad'?'badb':i.sev==='warn'?'warnb':''}">${i.sev==='bad'?'Fix':i.sev==='warn'?'Worth fixing':'For your information'}</span>${i.new?'<span class="badge okb">New</span>':''}<span class="mutes">${i.count.toLocaleString()} time${i.count===1?'':'s'}${i.last&&i.last!==i.first?' &middot; last '+esc(i.last):''}</span></div>
-  <div class="why" style="margin:6px 0">${esc(i.meaning)}</div><b style="font-size:13px">What to do</b><ol style="margin:4px 0 8px;padding-left:20px">${i.fixes.map(f=>'<li>'+esc(f)+'</li>').join('')}</ol>
-  <details><summary class="mutes">Show the log lines</summary><pre style="white-space:pre-wrap;font-size:11.5px;margin:6px 0">${i.examples.map(esc).join('\n')}</pre></details></div>`).join('');
-  if((s.other||[]).length)h+='<h2>Errors Backstory does not recognise</h2><small style="margin-top:0">These are errors without a known explanation. If something is not working, copy them into an email to support.</small><pre style="white-space:pre-wrap;font-size:11.5px">'+s.other.map(o=>esc(o.text)+'  (x'+o.count+')').join('\n')+'</pre>';
+  h+=issuesHTML(s.issues,s.other);
   $('sumbody').innerHTML=h;$('sum').style.display='block';
   const bad=s.issues.filter(i=>i.new&&i.sev==='bad');
   if(bad.length&&window.Notification&&Notification.permission==='granted'){try{new Notification('Backstory: '+bad[0].title,{body:bad[0].meaning})}catch(e){}}}
@@ -4142,7 +4309,7 @@ function showMonitor(s){
   $('mauto').onchange=()=>{try{localStorage.setItem('mon_auto',$('mauto').value)}catch(e){}if($('mauto').value!=='0'&&window.Notification&&Notification.permission==='default')Notification.requestPermission()};
   setInterval(async()=>{const m=+$('mauto').value;if(!m)return;let last=0;try{last=+localStorage.getItem('mon_last')||0}catch(e){}
     if(Date.now()-last<m*60e3)return;try{const s=await (await fetch('/api/status')).json();if(s.state==='scanning'||s.state==='running')return}catch(e){return}
-    startMonitor(true)},60000)})();
+    startDiagnostics(true)},60000)})();
 
 function storyHTML(items,sub){
   if(!items||!items.length)return '';
@@ -4154,6 +4321,61 @@ function flowStrip(s){
   const c=s.changes||{};const w=s.dry_run?'would be ':'';
   const steps=[['1','Found',(s.total||0).toLocaleString()+' files'],['2','Restored',(c.dates||0).toLocaleString()+' dates, '+(c.gps||0).toLocaleString()+' places'],['3','Merged',(s.duplicates||0).toLocaleString()+' duplicates skipped'+((s.albums||{}).albums?', '+s.albums.albums+' albums kept':'')],['4','Result',(s.out_folders||[]).length?(s.out_folders.length+' folders'):'done']];
   return '<div class="fstrip">'+steps.map((x,i)=>`<div class="fst"><span class="fn">${x[0]}</span><div><b>${x[1]}</b><span>${esc(x[2])}</span></div></div>${i<3?'<span class="fsarrow">&rsaquo;</span>':''}`).join('')+'</div>'}
+
+function showCompare(s){
+  const col=s.alike_pct>=80?'var(--ok)':s.alike_pct>=40?'var(--warn)':'var(--bad)';
+  const [la,lb]=s.labels;
+  let h=`<div class="hscore"><div class="ring" style="--p:${s.alike_pct};--c:${col}"><b>${s.alike_pct}%</b><span>alike</span></div><div style="flex:1;min-width:0"><div style="font-size:20px;font-weight:700">${esc(la)} and ${esc(lb)}</div><div class="mutes">${s.a_files.toLocaleString()} files (${esc(fmtB(s.a_bytes))}) against ${s.b_files.toLocaleString()} files (${esc(fmtB(s.b_bytes))})</div></div></div>`;
+  h+=s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
+  h+=`<div class="tiles">${tile(s.identical,'identical files','ok')}${tile(s.refiled,'same file, filed differently')}${tile(s.conflict_n,'same name, different file',s.conflict_n?'bad':'')}${tile(s.similar_n,'same picture, different size')}${tile(s.only_a,'only in '+la)}${tile(s.only_b,'only in '+lb)}</div>`;
+  h+=`<div class="tip" style="border-color:var(--acc)"><b>If you merge them</b> the library would hold about <b>${s.merged_files.toLocaleString()}</b> files. ${s.same_picture_conflicts?'If you also skip near-identical pictures it would hold about <b>'+s.merged_if_near_skipped.toLocaleString()+'</b>. ':''}Identical files are kept once; files with the same name that differ are both kept (the second becomes <i>name_1</i>).</div>`;
+  const pic=(x)=>x.path?`<img src="/thumb?p=${encodeURIComponent(x.path)}" loading="lazy" alt="">`:'<div class="stnoimg">&#128247;</div>';
+  const side=(x,lab)=>`<div class="cmpside">${pic(x)}<div class="simcap"><b>${esc(lab)}</b><span>${esc(x.name)}</span><span>${esc(x.where)}</span><span>${x.w&&x.h?x.w+' &times; '+x.h+' &middot; ':''}${esc(fmtB(x.size))}${x.date?' &middot; '+esc(x.date.slice(0,10)):''}${x.gps?' &middot; has location':''}</span></div></div>`;
+  if((s.conflicts||[]).length)h+=`<h2>Same name, but not the same file (${s.conflict_n.toLocaleString()})</h2><small style="margin-top:0">${s.same_picture_conflicts?s.same_picture_conflicts.toLocaleString()+' of these look like the same picture saved differently. ':''}A merge keeps both.</small>`+s.conflicts.map(c=>`<div class="card cmppair"><div class="cmpsides">${side(c.a,la)}${side(c.b,lb)}</div><div class="why">${c.same_picture?'<span class="badge okb">Same picture</span> ':'<span class="badge badb">Different pictures</span> '}${c.differences.length?esc(c.differences.join('; ')):'No difference in size, date, location or caption that Backstory can see.'}</div></div>`).join('');
+  if((s.similar||[]).length)h+=`<h2>Same picture, different size (${s.similar_n.toLocaleString()})</h2><small style="margin-top:0">Not identical files, but they look the same. Tick <i>Also skip near-identical pictures</i> in Guided to keep only the larger one when you merge.</small>`+s.similar.map(c=>`<div class="card cmppair"><div class="cmpsides">${side(c.a,la)}${side(c.b,lb)}</div><div class="why">${c.bigger==='same'?'Same size. ':esc((c.bigger==='a'?la:lb))+' has the larger picture. '}${esc(c.differences.join('; '))}</div></div>`).join('');
+  if((s.refiled_examples||[]).length)h+='<h2>Same file, filed in a different folder ('+s.refiled.toLocaleString()+')</h2>'+tbl(['File',esc(la),esc(lb)],s.refiled_examples.map(r=>[esc(r.name),esc(r.a),esc(r.b)+(r.b_name!==r.name?' ('+esc(r.b_name)+')':'')]));
+  const fl=(L,t)=>L.length?'<h2>'+t+'</h2>'+tbl(['Folder','Files'],L.map(r=>[esc(r.folder),r.files.toLocaleString()])):'';
+  h+=fl(s.folders_only_a||[],'Folders only in '+esc(la))+fl(s.folders_only_b||[],'Folders only in '+esc(lb));
+  if((s.folders_diff||[]).length)h+='<h2>Folders with a different number of files</h2>'+tbl(['Folder',esc(la),esc(lb)],s.folders_diff.map(r=>[esc(r.folder),r.a.toLocaleString(),r.b.toLocaleString()]));
+  if((s.matrix||[]).length)h+='<h2>Other libraries against '+esc(la)+'</h2>'+tbl(['Library','Files','Identical to '+esc(la)],s.matrix.map(m=>[esc(m.label),m.files.toLocaleString(),m.identical_to_first.toLocaleString()]));
+  h+='<div class="hbtns" style="margin-top:12px"><button class="p" id="cmpmerge">Merge them with Guided</button></div>';
+  $('sumbody').innerHTML=h;$('sum').style.display='block';
+  $('cmpmerge').onclick=()=>{if(s.same_picture_conflicts||s.similar_n)$('gnear').checked=false;showTab('guided');window.scrollTo({top:0,behavior:'smooth'})}}
+$('cmpgo').onclick=async()=>{
+  if(roots().length<2){alert('Add at least two libraries in the Source list first');return}
+  $('sum').style.display='none';curGuided=false;
+  const r=await post('/api/compare_start',{roots:roots()});
+  if(r.error)alert(r.error);else{placeResults('compare');$('prog').style.display='block';poll()}};
+
+function issuesHTML(issues,other){
+  let h=(issues||[]).map(i=>`<div class="card"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="font-size:16px">${esc(i.title)}</b><span class="badge ${i.sev==='bad'?'badb':i.sev==='warn'?'warnb':''}">${i.sev==='bad'?'Fix':i.sev==='warn'?'Worth fixing':'For your information'}</span>${i.new?'<span class="badge okb">New</span>':''}<span class="mutes">${i.count.toLocaleString()} time${i.count===1?'':'s'}${i.last&&i.last!==i.first?' &middot; last '+esc(i.last):''}</span></div>
+  <div class="why" style="margin:6px 0">${esc(i.meaning)}</div><b style="font-size:13px">What to do</b><ol style="margin:4px 0 8px;padding-left:20px">${i.fixes.map(f=>'<li>'+esc(f)+'</li>').join('')}</ol>
+  <details><summary class="mutes">Show the log lines</summary><pre style="white-space:pre-wrap;font-size:11.5px;margin:6px 0">${i.examples.map(esc).join('\n')}</pre></details></div>`).join('');
+  if((other||[]).length)h+='<h2>Errors Backstory does not recognise</h2><small style="margin-top:0">These are errors without a known explanation. If something is not working, copy them into an email to support.</small><pre style="white-space:pre-wrap;font-size:11.5px">'+other.map(o=>esc(o.text)+'  (x'+o.count+')').join('\n')+'</pre>';
+  return h}
+function showDiagnostics(s){
+  const col={healthy:'var(--ok)',attention:'var(--warn)',problem:'var(--bad)'}[s.verdict],ic={ok:'&#10003;',warn:'!',bad:'&times;',info:'i'};
+  const pr=s.progress||{};const prc={done:'var(--ok)',progressing:'var(--ok)',growing:'var(--acc)',stalled:'var(--bad)',unknown:'var(--mute)'}[pr.state];
+  let h=`<div class="verdict" style="--c:${col}"><span class="vdot"></span><div><b>${esc(({healthy:'Healthy',attention:'Needs a look',problem:'Needs fixing'})[s.verdict])}</b><div>${esc(s.headline)}</div></div></div>`;
+  h+=`<div class="card"><b>Is Photos progressing?</b><div style="margin:6px 0;color:${prc};font-weight:600">${esc(({done:'Finished',progressing:'Progressing',growing:'Busy importing',stalled:'Stuck',unknown:'Not enough information yet'})[pr.state]||'')}</div><div class="why">${esc(pr.text||'')}</div>${(s.series||[]).length>1?'<div style="margin-top:8px"><small style="margin:0 0 4px">Items waiting to upload over time</small>'+sparkP(s.series)+'</div>':''}</div>`;
+  if((s.actions||[]).length)h+='<h2>Do this first</h2>'+s.actions.map((a,i)=>`<div class="rec"><span class="fn" style="display:inline-grid;place-items:center;width:26px;height:26px;border-radius:50%;background:${a.level==='bad'?'var(--bad)':'var(--warn)'};color:#fff;font-weight:700;flex:none">${i+1}</span><div style="flex:1"><b>${esc(a.title)}</b><div class="why">${esc(a.do)}</div></div></div>`).join('');
+  h+='<h2>All checks</h2><div class="gcheck">'+s.checks.map(c=>`<div class="gc ${c.level==='ok'?'ok':c.level==='bad'?'bad':c.level==='warn'?'':'opt2'}"><i>${ic[c.level]||'&middot;'}</i><span><b>${esc(c.title)}</b>${c.detail?'<br><span class="mutes">'+esc(c.detail)+'</span>':''}</span></div>`).join('')+'</div>';
+  if(s.health)h+=`<h2>Library health</h2><div class="hscore"><div class="ring" style="--p:${s.health.score};--c:${s.health.score>=80?'var(--ok)':s.health.score>=60?'var(--warn)':'var(--bad)'}"><b>${s.health.score}</b><span>out of 100</span></div><div style="flex:1;min-width:0">${(s.health.findings||[]).slice(0,5).map(f=>`<div style="margin:4px 0"><b>${esc(f.title)}</b> <span class="mutes">${esc(f.detail.slice(0,110))}</span></div>`).join('')||'No problems found.'}<button class="sm" data-tab="health" style="margin-top:8px">Open the Health tab</button></div></div>`;
+  if(s.upload&&s.upload.ok)h+='<h2>Upload to iCloud</h2>'+uploadHTML(s.upload);
+  if((s.issues||[]).length||(s.other||[]).length)h+='<h2>Log issues</h2>'+issuesHTML(s.issues,s.other);
+  else h+='<h2>Log issues</h2><div class="tip" style="border-color:var(--ok)">No problems found in the '+s.log_lines.toLocaleString()+' log lines read.'+(s.log_note?' ('+esc(s.log_note)+')':'')+'</div>';
+  const sy=s.system||{};
+  if((sy.procs||[]).length)h+='<h2>Photos processes on this Mac</h2>'+tbl(['Process','CPU','Memory','Running for'],sy.procs.map(p=>[esc(p.name),p.cpu+'%',p.mb+' MB',esc(p.up)]));
+  $('sumbody').innerHTML=h;$('sum').style.display='block';
+  document.querySelectorAll('#sumbody button[data-tab]').forEach(b=>b.onclick=()=>showTab(b.dataset.tab))}
+function sparkP(tr){const w=260,h=50,mx=Math.max(1,...tr.map(t=>t.pending)),xs=tr.map((t,i)=>i/(tr.length-1)*w),ys=tr.map(t=>h-(t.pending/mx)*h);
+  return `<svg viewBox="0 0 ${w} ${h+4}" width="${w}" height="${h+4}" style="display:block"><polyline fill="none" stroke="var(--acc)" stroke-width="2.5" points="${xs.map((x,i)=>x.toFixed(1)+','+(ys[i]+2).toFixed(1)).join(' ')}"/></svg>`}
+async function startDiagnostics(quiet){
+  if(!quiet){$('sum').style.display='none'}curGuided=false;
+  const r=await post('/api/diagnostics_start',{roots:roots(),library:$('uplib').value,hours:+$('mhours').value});
+  try{localStorage.setItem('mon_last',String(Date.now()))}catch(e){}
+  if(r.error){if(!quiet)alert(r.error)}else{placeResults('diagnostics');$('prog').style.display='block';poll()}}
+$('diaggo').onclick=()=>startDiagnostics(false);
 function showMerge(s){
   const w=s.dry_run?'would be ':'';
   let h=`<div class="tiles">${tile(s.total,'files found')}${tile(s.brought,'files '+w+(s.move?'moved':'copied')+' in','ok')}${tile(s.in_place_files,'already in place')}${tile(s.identical,'identical copies (kept once)')}${tile(s.clashes,'name clashes resolved')}${tile(s.merged_dirs,'folders '+w+'merged from 2+ sources')}${s.json_along?tile(s.json_along,'.json files brought along'):''}${tile(s.failed,'problems',s.failed?'bad':'')}</div>`;
@@ -4229,7 +4451,7 @@ function showConvert(s){
 
 function liveTiles(s,c,done,nj){
   if(!s.total)return '';const x=s.extra||{};const err=(x.errors?tile(x.errors,'files with errors','bad'):'');
-  if(['assess','consolidate','undo','similar','similar_apply','photos','health','formats_apply','monitor'].includes(jobKind))return '';
+  if(['assess','consolidate','undo','similar','similar_apply','photos','health','formats_apply','monitor','compare','diagnostics'].includes(jobKind))return '';
   if(jobKind==='merge')return tile(s.total,'files found')+tile(x.placed||0,'brought in','ok')+tile(x.identical||0,'identical (kept once)')+tile(x.clashes||0,'name clashes')+(x.json_along?tile(x.json_along,'.json brought along'):'')+(x.errors?tile(x.errors,'problems','bad'):'');
   if(jobKind==='cleanup')return tile(x.json||0,'.json files')+tile(x.junk||0,'junk files')+tile(x.renamed||0,'renamed')+tile(x.merged||0,'folders merged')+tile(x.empty||0,'empty folders')+(x.errors?tile(x.errors,'errors','bad'):'');
   if(jobKind==='convert')return tile(s.total,'videos found')+tile(done,'checked so far')+tile(x.converted||0,'converted','ok')+(x.bytes_before?tile(fmtBytes(Math.max(0,x.bytes_before-x.bytes_after))+' ('+Math.round(100*(1-x.bytes_after/x.bytes_before))+'%)','space saved so far','ok'):'')+tile(x.skipped_live||0,'Live Photo videos skipped')+(x.errors?tile(x.errors,'could not convert','bad'):'');
@@ -4287,7 +4509,7 @@ $('hfolder').onclick=()=>post('/api/open_reports');
 $('hdiag').onclick=async()=>{const r=await post('/api/diagnostics');try{await navigator.clipboard.writeText(r.text);$('hdiag').textContent='Copied'}catch(e){const t=document.createElement('textarea');t.value=r.text;document.body.appendChild(t);t.select();try{document.execCommand('copy');$('hdiag').textContent='Copied'}catch(_){prompt('Copy this:',r.text)}t.remove()}setTimeout(()=>{$('hdiag').textContent='Copy diagnostic info'},2000)};
 let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   const s=await (await fetch('/api/status')).json();$('prog').style.display='block';
-  const run=s.state==='scanning'||s.state==='running';$('go').disabled=run;$('gst').disabled=run;$('gchk').disabled=run;$('simscan').disabled=run;$('pgo').disabled=run;$('hgo').disabled=run;$('mgo').disabled=run;$('mpastego').disabled=run;$('ptest').disabled=run;
+  const run=s.state==='scanning'||s.state==='running';$('go').disabled=run;$('gst').disabled=run;$('gchk').disabled=run;$('simscan').disabled=run;$('pgo').disabled=run;$('hgo').disabled=run;$('mgo').disabled=run;$('cmpgo').disabled=run;$('diaggo').disabled=run;$('mpastego').disabled=run;$('ptest').disabled=run;
   jobKind=s.kind||'fix';const gd=s.guided||null;curGuided=!!gd;placeResults(jobKind);
   let pct=0,indet=false;
   if(s.state==='done'){pct=100}
@@ -4296,7 +4518,7 @@ let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   else if(s.phase&&s.phase.total){pct=100*s.phase.done/s.phase.total}
   else if(s.state==='scanning'||s.state==='running'){indet=true}
   setBar('bar','fill','pct',pct,indet);
-  const LBL=(gd&&!gd.final&&gd.steps.length)?('Guided &middot; step '+gd.i+' of '+gd.steps.length+': '+esc(gd.steps[gd.i-1]||'')):gd&&jobKind==='guided'?'Guided':{monitor:'Log check',health:'Library health',formats_apply:'Set aside',photos:'Apple Photos',similar:'Find similar photos',similar_apply:'Set aside',undo:'Undo',consolidate:'Merge similar folders',assess:'Check my files',fix:'Part 1 Fix',convert:'Part 4 Convert',cleanup:'Part 3 Clean up',merge:'Part 2 Merge'}[jobKind]||'';
+  const LBL=(gd&&!gd.final&&gd.steps.length)?('Guided &middot; step '+gd.i+' of '+gd.steps.length+': '+esc(gd.steps[gd.i-1]||'')):gd&&jobKind==='guided'?'Guided':{diagnostics:'Full diagnostics',compare:'Compare libraries',monitor:'Log check',health:'Library health',formats_apply:'Set aside',photos:'Apple Photos',similar:'Find similar photos',similar_apply:'Set aside',undo:'Undo',consolidate:'Merge similar folders',assess:'Check my files',fix:'Part 1 Fix',convert:'Part 4 Convert',cleanup:'Part 3 Clean up',merge:'Part 2 Merge'}[jobKind]||'';
   $('msg').innerHTML=(LBL?'<b>'+LBL+'</b> &middot; ':'')+(s.state==='error'?'<span class="err">'+esc(s.message)+'</span>':s.state==='done'?'<span class="ok">Finished.</span>':esc(s.message)+(s.done?` (${s.done.toLocaleString()} / ${s.total.toLocaleString()})`:''));
   const c=s.counts||{},done=s.done||0,nj=c['no-json']||0;
   $('tiles').innerHTML=liveTiles(s,c,done,nj);
