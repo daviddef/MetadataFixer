@@ -759,6 +759,10 @@ def process(m, idx, args, out_root):
     if kept:
         row["status"], row["detail"] = "duplicate", f"identical to {kept}"
         return row
+    skipped = (getattr(args, "skip", None) or {}).get(str(m))
+    if skipped:
+        row["status"], row["detail"] = "left-out", skipped
+        return row
     prev = already_done(m, args)
     if prev:
         row["status"], row["output"] = "already-done", prev
@@ -2087,6 +2091,7 @@ def assess(entries, dest="", progress=None, should_stop=None, sample_n=120):
         elif e in (".mov", ".mp4"):
             vids.add(key)
     F["live_pairs"] = len(stills & vids)
+    F["edited_pairs"] = len(find_edited_pairs([m[0] for m in media]))
     # Matching against Google's info files (by name only)
     say("Matching photos to their info files", 0, 0)
     stop()
@@ -2363,6 +2368,33 @@ def consolidate_groups(groups, dupes_action="delete", dry_run=True, progress=Non
         if progress:
             progress("groups", i, total)
     return rows
+
+
+# ---- Google's "-edited" copies ---------------------------------------------------------------------------------
+EDIT_SUFFIXES = ("-edited", "-bearbeitet", "-modifié", "-modifie", "-editado", "-modificato", "-bewerkt", "-redigerad", "-redigeret",
+                 "-muokattu", "-edytowane", "-upravené", "-изменено", "-отредактировано", "-編集済み", "-已修改", "-편집됨")
+
+
+def find_edited_pairs(media):
+    """{edited_path: original_path} for photos that Google saved twice: IMG_1.jpg and IMG_1-edited.jpg in the same folder."""
+    by_dir = {}
+    for m in media:
+        by_dir.setdefault(m.parent, {}).setdefault(m.stem.lower(), []).append(m)
+    pairs = {}
+    for d, stems in by_dir.items():
+        for stem, files in stems.items():
+            for suf in EDIT_SUFFIXES:
+                if stem.endswith(suf):
+                    orig = stems.get(stem[:-len(suf)])
+                    if orig:
+                        for f in files:
+                            pairs[f] = orig[0]
+                    break
+    return pairs
+
+
+def is_album_folder(name):
+    return not re.fullmatch(r"Photos from \d{4}", name) and name.lower() not in ("takeout", "google photos")
 
 
 def main():

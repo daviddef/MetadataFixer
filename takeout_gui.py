@@ -218,7 +218,7 @@ def write_text_summary(path, sm):
     Path(path).write_text("\n".join(L) + "\n", encoding="utf-8")
 
 
-def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=False, date_policy="earlier", name_dates=False):
+def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=False, date_policy="earlier", name_dates=False, albums=False, edited="both"):
     with LOCK:
         STATE.update(state="scanning", cancel=False, total=0, done=0, counts={}, message="Scanning folders...",
                      report="", summary=None, scan=None, extra={}, recent=[], phase=None, kind="fix", **({} if IN_GUIDED[0] else {"guided": None}))
@@ -246,6 +246,7 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
         out_dirs, recent = set(), []
         all_sidecars, noext, dupe_bytes, claimed_all = [], 0, 0, set()
         shared_sizes, prior_sig = set(), {}
+        album_links = {}
         zip_info = {"zips": 0, "skipped": 0, "bad": []}
 
         def run_pass(media, sidecars, pass_roots, ns=""):
@@ -254,6 +255,8 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
             args = argparse.Namespace(dry_run=dry_run, overwrite=overwrite, pair_live=pair_live,
                                       dedupe=dedupe, move=move, out_root=out or None, roots=pass_roots,
                                       date_policy=date_policy, manifest_ns=ns, name_dates=name_dates)
+            args.skip = {}
+            pass_start = len(rows)
 
             def hashing(stage, done, todo):
                 check_cancel()
@@ -268,6 +271,14 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
                 STATE["message"] = "Finding exact duplicates..." if dedupe else "Preparing..."
             fx.prepare(args, media, hashing)
             args.claimed |= claimed_all
+            if edited in ("edited", "original"):
+                pairs = fx.find_edited_pairs(media)
+                for ed, og in pairs.items():
+                    if edited == "edited":
+                        args.skip[str(og)] = "left out: Google's edited version is kept"
+                    else:
+                        args.skip[str(ed)] = "left out: the original is kept"
+                extra["edited_pairs"] += len(pairs)
             cur_sig = {}
             if dedupe and zips and shared_sizes:
                 # the same photo in an earlier zip is not placed a second time (size + CRC32 fingerprint)
@@ -321,6 +332,15 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
                         STATE["recent"] = [{"name": Path(r["file"]).name, "status": r["status"],
                                             "to": (Path(r["output"]).parent.name + "/" if r["output"] else ""),
                                             "live": r["live"]} for r in recent]
+            if albums and dedupe and args.dupes:
+                out_by_src = {r["file"]: r["output"] for r in rows[pass_start:] if r.get("output")}
+                for dup, kept in args.dupes.items():
+                    alb = Path(dup).parent.name
+                    if not fx.is_album_folder(alb):
+                        continue
+                    kept_out = out_by_src.get(kept) or (kept if (out_root and str(kept).startswith(str(out_root)) and os.path.exists(kept)) else None)
+                    if kept_out:
+                        album_links.setdefault(kept_out, set()).add(alb)
             for r in rows[-len(media):] if media else []:
                 sg = cur_sig.get(r["file"])
                 if sg and r["output"] and sg not in prior_sig:
@@ -408,6 +428,21 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
             shutil.rmtree(stage_dir, ignore_errors=True)
             stage_dir = None
             sidecars = all_sidecars
+        album_info = {"files": 0, "albums": 0, "written": 0}
+        if albums and album_links:
+            names = set()
+            for outp, albs in album_links.items():
+                names |= albs
+                album_info["files"] += 1
+                p = Path(outp)
+                if not dry_run and p.exists() and p.suffix.lower() not in fx.NO_WRITE_EXT:
+                    check_cancel()
+                    ea = []
+                    for a_ in sorted(albs):
+                        ea += ["-XMP-dc:Subject+=" + a_, "-IPTC:Keywords+=" + a_]
+                    ok_, _msg = fx.run_exiftool(p, ea, True, sidecar_for_raw=p.suffix.lower() in fx.RAW_EXT)
+                    album_info["written"] += 1 if ok_ else 0
+            album_info["albums"] = len(names)
         report_dir = out_root or Path.home() / "Desktop"
         report_dir.mkdir(parents=True, exist_ok=True)
         tag = "dryrun" if dry_run else "report"
@@ -440,6 +475,23 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
         sm["name_dates"] = nd
         if nd:
             sm["tips"].append("%d files had no Google info file and no date of their own, so their date %s from the file name." % (nd, "would be taken" if dry_run else "was taken"))
+        if album_links:
+            sm["albums"] = album_info
+            try:
+                with open(report_dir / f"takeout_{tag}_albums.csv", "w", newline="", encoding="utf-8") as fh:
+                    w = csv.writer(fh)
+                    w.writerow(["file", "albums"])
+                    for outp, albs in sorted(album_links.items()):
+                        w.writerow([outp, "; ".join(sorted(albs))])
+            except OSError:
+                pass
+            sm["tips"] = [t.replace(" Album copies of the same photo are not repeated, so album membership is not preserved.", " Album copies are not repeated; their album names are kept as keywords instead.") for t in sm["tips"]]
+            sm["tips"].append("%d photo%s also lived in %d album%s. Their album names %s as keywords, and the full list is in takeout_%s_albums.csv." % (
+                album_info["files"], "" if album_info["files"] == 1 else "s", album_info["albums"], "" if album_info["albums"] == 1 else "s", "would be saved" if dry_run else "were saved", tag))
+        if extra.get("edited_pairs"):
+            sm["edited_pairs"] = extra["edited_pairs"]
+            sm["tips"].append("%d photo%s had a Google-edited copy next to the original. %s" % (
+                extra["edited_pairs"], "" if extra["edited_pairs"] == 1 else "s", "Only the edited versions were kept." if edited == "edited" else "Only the originals were kept."))
         sm["problems"] = [{"file": Path(r["file"]).name, "status": r["status"], "detail": r.get("detail", "")} for r in rows
                           if r["status"] in ("copy-error", "error", "exiftool-error")][:100]
         sm["dupe_bytes"] = dupe_bytes
@@ -503,7 +555,7 @@ def _run_guided(roots, out, dry_run, opts):
                 [str(p) for p in folders], dry_run, {"ext": {"json": True, "aside": False}, "json": False, "json_other": False,
                                                      "junk": None, "names": None, "empty": None})))
         steps.append(("Put dates, locations and captions back, and merge into one library", lambda: run_job(
-            roots, out, dry_run, bool(opts.get("replace", True)), bool(opts.get("live", True)), bool(opts.get("dedupe", True)), False, "earlier", bool(opts.get("name_dates", True)))))
+            roots, out, dry_run, bool(opts.get("replace", True)), bool(opts.get("live", True)), bool(opts.get("dedupe", True)), False, "earlier", bool(opts.get("name_dates", True)), bool(opts.get("albums", True)), opts.get("edited", "both"))))
         if opts.get("convert") and not dry_run:
             steps.append(("Convert old videos to MP4", lambda: run_convert([out], False, list(fx.DEFAULT_EXT), False, "high", "move", False)))
         titles = [t for t, _ in steps]
@@ -1618,6 +1670,13 @@ def build_recommendations(F, dest):
         recs.append({"id": "dedupe", "title": "Merge same-named folders", "risk": "safe", "on": True,
                      "why": "No exact duplicates were found, but every folder with the same name (like Photos from 2012) across your zips will still become one folder." if F["wrapper"] or F["zips"] > 1 else
                             "No exact duplicates were found. Same-named folders will still be merged into one."})
+    if F["dup_n"]:
+        plan["albums"] = True
+        recs.append({"id": "albums", "title": "Keep your album names", "risk": "safe", "on": True,
+                     "why": "Photos that appear in an album and in a year folder are copied once. Their album names are saved as keywords on the kept copy, so you do not lose your albums, and a list of albums is saved with the reports."})
+    if F.get("edited_pairs"):
+        recs.append({"id": "edited", "title": "Google-edited copies", "risk": "safe", "on": True, "fixed": True,
+                     "why": "%s photos have a Google-edited copy next to the original (IMG_1-edited.jpg). Both are kept by default. If you only want one, choose it in the options above." % n(F["edited_pairs"])})
     # --- live photos
     if F["live_pairs"]:
         plan["live"] = True
@@ -1998,7 +2057,8 @@ class Handler(BaseHTTPRequestHandler):
             start_tracked('fix', body, run_job, (
                 body.get("roots", []), body.get("out", ""),
                 bool(body.get("dry_run")), bool(body.get("overwrite")), bool(body.get("pair_live")),
-                bool(body.get("dedupe")), bool(body.get("move")), body.get("date_policy", "earlier"), bool(body.get("name_dates"))))
+                bool(body.get("dedupe")), bool(body.get("move")), body.get("date_policy", "earlier"), bool(body.get("name_dates")), bool(body.get("albums")),
+                body.get("edited") if body.get("edited") in ("both", "edited", "original") else "both"))
             self._send(200, "{}")
         elif self.path == "/api/similar_folders":
             try:
@@ -2029,7 +2089,8 @@ class Handler(BaseHTTPRequestHandler):
             if busy:
                 return self._send(409, json.dumps({"error": "A job is already running"}))
             o = body.get("opts", {})
-            opts = {k: bool(o.get(k)) for k in ("fix_ext", "convert", "replace", "live", "dedupe", "name_dates")}
+            opts = {k: bool(o.get(k)) for k in ("fix_ext", "convert", "replace", "live", "dedupe", "name_dates", "albums")}
+            opts["edited"] = o.get("edited") if o.get("edited") in ("both", "edited", "original") else "both"
             start_tracked('guided', body, run_guided, (
                 body.get("roots", []), body.get("out", ""), bool(body.get("dry_run")), opts))
             self._send(200, "{}")
@@ -2365,6 +2426,8 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
 <div class="opt"><input type="checkbox" id="gdedupe" checked><div>Merge same-named folders and remove exact duplicates<small>Every <i>Photos from 2012</i> across all your zips becomes one folder, and the same photo repeated in several albums is kept once.</small></div></div>
 <div class="opt"><input type="checkbox" id="glive" checked><div>Re-pair Live Photos<small>Reconnects each Live Photo&#39;s still and video so Apple Photos shows them together.</small></div></div>
 <div class="opt"><input type="checkbox" id="gnd" checked><div>Use the date in the file name when there is no .json<small>Fills in a missing date from names like <i>IMG_20190704_123456</i>. Never changes a date that is already there.</small></div></div>
+<div class="opt"><input type="checkbox" id="galb" checked><div>Keep album names as keywords<small>When a photo that lived in an album is skipped as a duplicate, the album name is saved as a keyword on the kept copy so you do not lose your albums. A list of albums is saved with the reports.</small></div></div>
+<div class="opt"><div style="flex:1"><label for="gedit" style="font-weight:600">Google-edited copies (IMG_1-edited.jpg)</label><select id="gedit" class="sel"><option value="both" selected>Keep both</option><option value="edited">Keep only the edited version</option><option value="original">Keep only the original</option></select></div></div>
 <div class="opt"><input type="checkbox" id="gow" checked><div>&#9888;&#65039; Replace location and caption already stored in the photo<small>Google&#39;s values win for location and caption. Dates keep the earlier of the two. Change this in the Fix tab if you want other rules.</small></div></div>
 <div class="opt"><input type="checkbox" id="gext" checked><div>&#9888;&#65039; Repair files with a missing file type<small>Some Takeout photos have no .jpg or .heic ending. Inside zip files they are repaired in the copy automatically. For folders you already unzipped, this renames those files in the source folders.</small></div></div>
 <div class="opt"><input type="checkbox" id="gcv"><div>&#9888;&#65039; Also convert old videos (.avi, .mpg, .wmv...) to MP4 afterwards<small>Runs after the library is built, on the Destination. The old videos are moved into an <i>_original_videos</i> folder, not deleted. Not part of a preview.</small></div></div>
@@ -2386,6 +2449,8 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
 <small>Google sometimes records the day a photo was uploaded or re-saved instead of the day it was taken, and that day is always later. Keeping the earlier of the two is usually right. A photo with no date at all always gets Google&#39;s.</small></div></div>
 <div class="opt"><input type="checkbox" id="ow" checked><div>&#9888;&#65039; Replace location and caption already stored in the photo<small>Every photo has hidden facts saved inside the file itself (called EXIF). <b>Off</b>: only fill in a location or caption that is missing. <b>On</b>: replace a different one with Google&#39;s version. Your pictures themselves are never altered.</small></div></div></div>
 <div class="opt"><input type="checkbox" id="ndates" checked><div>Use the date in the file name when there is no .json<small>For photos with no Google info file and no date of their own, reads a date from names like <i>IMG_20190704_123456</i>, <i>PXL_20210512_...</i> or <i>Screenshot 2019-07-04 at 12.34.56</i>. It only fills in a missing date and never changes one that is already there.</small></div></div>
+<div class="opt"><input type="checkbox" id="albums" checked><div>Keep album names when duplicates are removed<small>Google saves a photo once in its year folder and again in every album. When the album copies are skipped as duplicates, the album names are saved as keywords on the kept photo (Apple Photos and Lightroom show keywords), and a list of albums is saved with the reports.</small></div></div>
+<div class="opt"><div style="flex:1"><label for="edited" style="font-weight:600">When Google saved an edited copy (IMG_1-edited.jpg) next to the original</label><select id="edited" class="sel"><option value="both" selected>Keep both</option><option value="edited">Keep only the edited version</option><option value="original">Keep only the original</option></select><small>The ones left out stay in your Takeout; they are just not copied into the new library.</small></div></div>
 
 <button class="p" id="go">Start</button>
 
@@ -2574,7 +2639,7 @@ $('go').onclick=async()=>{
   if(!$('dry').checked&&!dest()&&!confirm('No output folder: files will be edited IN PLACE. Continue?'))return;
   if($('move').checked&&!$('dry').checked&&!confirm('MOVE will take files out of your Takeout folders. Make sure you have another backup. Continue?'))return;
   $('sum').style.display='none';
-  const r=await post('/api/start',{roots:roots(),out:dest(),dry_run:$('dry').checked,overwrite:$('ow').checked,pair_live:$('live').checked,dedupe:$('dedupe').checked,move:$('move').checked,date_policy:$('datepol').value,name_dates:$('ndates').checked});
+  const r=await post('/api/start',{roots:roots(),out:dest(),dry_run:$('dry').checked,overwrite:$('ow').checked,pair_live:$('live').checked,dedupe:$('dedupe').checked,move:$('move').checked,date_policy:$('datepol').value,name_dates:$('ndates').checked,albums:$('albums').checked,edited:$('edited').value});
   if(r.error)alert(r.error);else poll();
 };
 $('rev').onclick=()=>post('/api/reveal');
@@ -2726,7 +2791,7 @@ $('gst').onclick=async()=>{
   const real=!$('gdry').checked;
   if(real&&$('gcv').checked&&!confirm('After the library is built, old videos in the Destination will be converted to MP4 and the originals moved into an _original_videos folder. Continue?'))return;
   $('sum').style.display='none';curGuided=true;
-  const r=await post('/api/guided_start',{roots:roots(),out:dest(),dry_run:$('gdry').checked,opts:{fix_ext:$('gext').checked,convert:$('gcv').checked,replace:$('gow').checked,live:$('glive').checked,dedupe:$('gdedupe').checked,name_dates:$('gnd').checked}});
+  const r=await post('/api/guided_start',{roots:roots(),out:dest(),dry_run:$('gdry').checked,opts:{fix_ext:$('gext').checked,convert:$('gcv').checked,replace:$('gow').checked,live:$('glive').checked,dedupe:$('gdedupe').checked,name_dates:$('gnd').checked,albums:$('galb').checked,edited:$('gedit').value}});
   if(r.error){alert(r.error);curGuided=false}else{placeResults('guided');$('prog').style.display='block';poll()}};
 
 // ---- Help: user guide (rendered from USER_GUIDE.md), safety notice, support, about
@@ -2797,7 +2862,7 @@ document.querySelectorAll('a[data-help]').forEach(a=>a.onclick=e=>{e.preventDefa
   $('ackmore').onclick=()=>{ack.style.display='none';showTab('help');helpView('safety');
     const back=document.createElement('div');back.className='tip';back.innerHTML='Read the notice, then <a href="#" id="ackback">go back and accept it</a>.';$('hview').prepend(back);$('ackback').onclick=e=>{e.preventDefault();ack.style.display='flex'}}})();
 
-const RECMAP={dedupe:'gdedupe',live:'glive',name_dates:'gnd',fix_ext:'gext',replace:'gow'};
+const RECMAP={albums:'galb',dedupe:'gdedupe',live:'glive',name_dates:'gnd',fix_ext:'gext',replace:'gow'};
 function applyRecs(s){
   Object.entries(RECMAP).forEach(([k,id])=>{const present=(s.recs||[]).find(r=>r.id===k);const cb=document.getElementById('rc_'+k);$(id).checked=!!present&&(!cb||cb.checked)});
   $('gcv').checked=false}
