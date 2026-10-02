@@ -9,6 +9,8 @@ server only listens on localhost. Needs exiftool (brew install exiftool).
 import argparse
 import hashlib
 import tempfile
+from html import escape as html_escape
+import platform
 import time
 import urllib.request
 import csv
@@ -27,7 +29,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.01-z4"
+VERSION = "2026.10.02-a"
 class Cancelled(Exception):
     pass
 
@@ -42,7 +44,7 @@ def stopped_state(what="Nothing further was changed."):
         STATE.update(state="idle", phase=None, cv=None, message="Stopped by you. " + what)
 
 
-STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}, "recent": [], "clean": {"state": "idle"}, "update": {"state": "idle", "files": []}, "phase": None, "kind": "fix", "cv": None, "cancel": False, "guided": None, "version": VERSION, "boot": time.time()}
+STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}, "recent": [], "clean": {"state": "idle"}, "update": {"state": "idle", "files": []}, "phase": None, "kind": "fix", "cv": None, "cancel": False, "guided": None, "run": None, "version": VERSION, "boot": time.time()}
 LOCK = threading.Lock()
 
 
@@ -434,6 +436,8 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
                               "Open the Clean up tab, tick 'Fix files with no extension', then run Fix again." % noext)
         if pruned:
             sm["tips"].append("%d folders left empty by the move were removed. Google's .json files are left where they were; remove them with the Clean up tab, then use Empty folders to tidy the rest." % pruned)
+        sm["problems"] = [{"file": Path(r["file"]).name, "status": r["status"], "detail": r.get("detail", "")} for r in rows
+                          if r["status"] in ("copy-error", "error", "exiftool-error")][:100]
         sm["dupe_bytes"] = dupe_bytes
         if zip_info["zips"] or zip_info["skipped"] or zip_info["bad"]:
             sm["zip"] = zip_info
@@ -1496,6 +1500,242 @@ def apply_update():
     return {"ok": True}
 
 
+# ---- Reports, run logs and history -------------------------------------------------------------------------
+APP_HOME = Path(os.environ.get("METADATAFIXER_HOME") or (
+    Path.home() / "Library" / "Application Support" / "MetadataFixer" if sys.platform == "darwin" else Path.home() / ".metadatafixer"))
+HIST_DIR = APP_HOME / "history"
+REPORTS_DIR = Path(os.environ.get("METADATAFIXER_REPORTS") or (Path.home() / "Documents" / "Metadata Fixer Reports"))
+KIND_TITLE = {"fix": "Fix metadata", "merge": "Merge folders", "cleanup": "Clean up", "convert": "Convert videos", "guided": "Guided: Fix my Takeout"}
+
+
+def _headline(sm):
+    """One short line describing what a run did, from its summary."""
+    if not isinstance(sm, dict):
+        return ""
+    k = sm.get("kind")
+    try:
+        if k == "guided":
+            return "; ".join(h for h in (_headline(x.get("summary")) for x in sm.get("steps", [])) if h)
+        if k == "merge":
+            return "%s files brought in, %s identical copies, %s name clashes" % (f"{sm.get('brought', 0):,}", f"{sm.get('identical', 0):,}", f"{sm.get('clashes', 0):,}")
+        if k == "convert":
+            n = sm.get("converted") or sm.get("would") or 0
+            return "%s videos %s" % (f"{n:,}", "converted" if sm.get("converted") else "would be converted")
+        if k == "cleanup":
+            tiles = [t for sec in sm.get("sections", []) for t in sec.get("tiles", []) if t and t[0]]
+            return "; ".join("%s %s" % (f"{t[0]:,}", t[1]) for t in tiles[:3])
+        c = sm.get("changes") or {}
+        return "%s dates, %s locations, %s captions %s; %s duplicates skipped" % (
+            f"{c.get('dates', 0):,}", f"{c.get('gps', 0):,}", f"{c.get('desc', 0):,}", "would change" if sm.get("dry_run") else "changed",
+            f"{sm.get('duplicates', 0):,}")
+    except Exception:
+        return ""
+
+
+def _tool_versions():
+    out = {}
+    for name, flag in (("exiftool", "-ver"), ("ffmpeg", "-version"), ("ffprobe", "-version")):
+        exe = shutil.which(name)
+        if not exe:
+            out[name] = "not found"
+            continue
+        try:
+            r = subprocess.run([exe, flag], capture_output=True, text=True, timeout=10)
+            out[name] = " ".join(((r.stdout.splitlines() or ["?"])[0]).replace("version", "").split()[:3 if name != "exiftool" else 1])
+        except Exception as e:
+            out[name] = "error: %s" % e
+    return out
+
+
+def _problems(sm):
+    """Problem rows from a summary, for the log."""
+    if not isinstance(sm, dict):
+        return []
+    if sm.get("kind") == "guided":
+        return [p for x in sm.get("steps", []) for p in _problems(x.get("summary"))]
+    return [("%s: %s" % (p.get("file", ""), p.get("detail") or p.get("status", ""))) for p in (sm.get("problems") or sm.get("failures") or sm.get("clash_rows") or [])
+            if p.get("status") in ("failed", "unreadable", "copy-error", "error", "exiftool-error")][:200]
+
+
+def write_run_record(run, timeline):
+    """After a job ends: write its text log and a history entry."""
+    with LOCK:
+        st, msg, sm = STATE["state"], STATE["message"], STATE.get("summary")
+    ended = time.time()
+    state = {"done": "finished", "error": "failed"}.get(st, "stopped")
+    title = KIND_TITLE.get(run["kind"], run["kind"])
+    meta = run.get("meta", {})
+    stamp = time.strftime("%Y-%m-%d %H.%M", time.localtime(run["started"]))
+    folder = REPORTS_DIR / (f"{stamp} {title.split(':')[0]}" + (" (preview)" if meta.get("dry_run") else ""))
+    n = 2
+    while folder.exists():
+        folder = REPORTS_DIR / (f"{stamp} {title.split(':')[0]}" + (" (preview)" if meta.get("dry_run") else "") + f" {n}")
+        n += 1
+    entry = {"id": run["id"], "kind": run["kind"], "title": title, "state": state, "message": msg if state != "finished" else "",
+             "started": run["started"], "ended": ended, "duration": round(ended - run["started"], 1), "version": VERSION,
+             "dry_run": bool(meta.get("dry_run")), "source": meta.get("source", []), "dest": meta.get("dest", ""),
+             "options": meta.get("options", {}), "headline": _headline(sm) if state == "finished" else msg,
+             "folder": "", "html": "", "log": ""}
+    L = ["Metadata Fixer run log", "=" * 60,
+         "Run:        %s%s" % (title, " (preview, nothing changed)" if entry["dry_run"] else ""),
+         "Result:     %s%s" % (state.upper(), (" - " + msg) if entry["message"] else ""),
+         "Started:    %s" % time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(run["started"])),
+         "Took:       %s" % fmt_dur(entry["duration"]),
+         "Version:    %s (%s, Python %s%s)" % (VERSION, platform.platform(), platform.python_version(), ", packaged app" if FROZEN else ""),
+         "Tools:      " + ", ".join("%s %s" % kv for kv in _tool_versions().items()),
+         "Source:     " + "; ".join(entry["source"]),
+         "Destination: " + (entry["dest"] or "(none)"),
+         "Options:    " + ", ".join("%s=%s" % kv for kv in sorted(entry["options"].items())), "",
+         "What happened", "-" * 60, entry["headline"] or "(no summary)", ""]
+    for tip in (sm.get("tips", []) if isinstance(sm, dict) else []):
+        L.append("* " + tip)
+    probs = _problems(sm)
+    L += ["", "Problems (%d)" % len(probs), "-" * 60] + (probs[:200] or ["none"])
+    L += ["", "Timeline", "-" * 60]
+    for t, tst, tmsg in timeline:
+        L.append("%s  [%s] %s" % (time.strftime("%H:%M:%S", time.localtime(t)), tst, tmsg))
+    L.append("%s  [end] %s" % (time.strftime("%H:%M:%S", time.localtime(ended)), state))
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "run.log").write_text("\n".join(L) + "\n", encoding="utf-8")
+        entry["folder"], entry["log"] = str(folder), str(folder / "run.log")
+    except OSError:
+        pass
+    try:
+        HIST_DIR.mkdir(parents=True, exist_ok=True)
+        (HIST_DIR / (run["id"] + ".json")).write_text(json.dumps(entry, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+    with LOCK:
+        STATE["run"] = dict(run, saved=True)
+
+
+def tracked(kind, meta, fn, *args):
+    """Run a job and record it: text log, history entry (the page adds the HTML report when it sees the result)."""
+    rid = time.strftime("%Y%m%d-%H%M%S")
+    while (HIST_DIR / (rid + ".json")).exists():
+        rid += "x"
+    run = {"id": rid, "kind": kind, "started": time.time(), "meta": meta}
+    with LOCK:
+        STATE["run"] = dict(run, saved=False)
+    stop, timeline = threading.Event(), []
+
+    def sampler():
+        last, lastt = None, 0
+        while not stop.wait(1.0):
+            with LOCK:
+                msg, st = STATE["message"], STATE["state"]
+            key = re.sub(r"[\d,.]+", "#", msg)
+            if key != last or time.time() - lastt > 120:
+                timeline.append((time.time(), st, msg))
+                last, lastt = key, time.time()
+    threading.Thread(target=sampler, daemon=True).start()
+    try:
+        fn(*args)
+    except Exception as e:                      # the job functions handle their own errors; this is a safety net
+        with LOCK:
+            STATE.update(state="error", message=str(e))
+    finally:
+        stop.set()
+        try:
+            write_run_record(run, timeline)
+        except Exception:
+            pass
+
+
+def start_tracked(kind, body, fn, args):
+    opts = body.get("opts") or {k: v for k, v in body.items() if k not in ("roots", "out", "dest", "dry_run", "opts")}
+    meta = {"dry_run": bool(body.get("dry_run")), "source": [str(x) for x in body.get("roots", [])],
+            "dest": body.get("out") or body.get("dest") or "", "options": {k: (v if isinstance(v, (bool, int, float, str)) else str(v)) for k, v in opts.items()}}
+    threading.Thread(target=tracked, daemon=True, args=(kind, meta, fn) + tuple(args)).start()
+
+
+def list_history(limit=200):
+    out = []
+    try:
+        for p in sorted(HIST_DIR.glob("*.json"), reverse=True)[:limit]:
+            try:
+                out.append(json.loads(p.read_text(encoding="utf-8")))
+            except (OSError, ValueError):
+                pass
+    except OSError:
+        pass
+    return out
+
+
+def _page_css():
+    m = re.search(r"<style>(.*?)</style>", PAGE, re.S)
+    return m.group(1) if m else ""
+
+
+def save_report_html(rid, body_html):
+    """Write the report the page rendered as a standalone, printable HTML file."""
+    if not re.fullmatch(r"[0-9]{8}-[0-9]{6}x*", rid or ""):
+        return {"error": "bad id"}
+    p = HIST_DIR / (rid + ".json")
+    try:
+        e = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"error": "unknown run"}
+    folder = Path(e.get("folder") or "")
+    if not e.get("folder"):
+        return {"error": "no report folder"}
+    meta_rows = [("Run", e["title"] + (" (preview: nothing was changed)" if e["dry_run"] else "")),
+                 ("Result", e["state"].capitalize() + ((": " + e["message"]) if e["message"] else "")),
+                 ("When", time.strftime("%A %d %B %Y, %H:%M", time.localtime(e["started"])) + " &middot; took " + fmt_dur(e["duration"])),
+                 ("From", "<br>".join(html_escape(x) for x in e["source"]) or "-"), ("To", html_escape(e["dest"]) or "-"),
+                 ("Version", html_escape(e["version"]))]
+    doc = ('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+           '<title>Metadata Fixer report</title><style>' + _page_css() +
+           'body{padding:32px 20px}main{max-width:860px}.rhead{margin-bottom:18px}.rhead h1{font-size:26px}.rmeta{width:100%;margin:10px 0 4px}'
+           '.rmeta td:first-child{width:90px;color:var(--mute)}.rfoot{margin-top:28px;color:var(--mute);font-size:12px}'
+           '@media print{body{background:#fff;color:#000;padding:0}.card,.tile{break-inside:avoid}}</style></head><body><main>'
+           '<div class="rhead"><h1>Metadata Fixer report</h1><div class="card"><table class="rmeta">' +
+           "".join("<tr><td>%s</td><td>%s</td></tr>" % kv for kv in meta_rows) + '</table></div></div>' + body_html +
+           '<p class="rfoot">Made by Metadata Fixer on your computer. Nothing was uploaded. The full text log is saved next to this report (run.log).</p></main></body></html>')
+    try:
+        (folder / "report.html").write_text(doc, encoding="utf-8")
+        e["html"] = str(folder / "report.html")
+        p.write_text(json.dumps(e, ensure_ascii=False), encoding="utf-8")
+    except OSError as ex:
+        return {"error": str(ex)}
+    return {"ok": True, "path": e["html"]}
+
+
+def open_path(rid, what):
+    try:
+        e = json.loads((HIST_DIR / (rid + ".json")).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"error": "unknown run"}
+    target = {"report": e.get("html"), "log": e.get("log"), "folder": e.get("folder")}.get(what)
+    if not target or not Path(target).exists():
+        return {"error": "That file is not there any more"}
+    opener = "open" if sys.platform == "darwin" else ("xdg-open" if shutil.which("xdg-open") else None)
+    if not opener:
+        return {"error": "Cannot open files on this system. Path: " + target}
+    subprocess.Popen([opener, target])
+    return {"ok": True}
+
+
+def diagnostics_text():
+    with LOCK:
+        st = {k: STATE.get(k) for k in ("state", "kind", "message")}
+    L = ["Metadata Fixer diagnostics", "Version: %s" % VERSION, "System: %s, Python %s%s" % (platform.platform(), platform.python_version(), " (packaged app)" if FROZEN else ""),
+         "Tools: " + ", ".join("%s %s" % kv for kv in _tool_versions().items()), "Now: %s / %s / %s" % (st["state"], st["kind"], st["message"]), "", "Recent runs:"]
+    for e in list_history(8):
+        L.append("- %s  %s  %s%s  %s" % (time.strftime("%Y-%m-%d %H:%M", time.localtime(e["started"])), e["title"], e["state"],
+                                        " (preview)" if e["dry_run"] else "", (e.get("headline") or "")[:120]))
+    last = next((e for e in list_history(8) if e.get("log")), None)
+    if last:
+        try:
+            tail = Path(last["log"]).read_text(encoding="utf-8").splitlines()[-25:]
+            L += ["", "End of the latest log (%s):" % last["log"]] + tail
+        except OSError:
+            pass
+    L += ["", "Paths are included above; remove anything private before sharing."]
+    return "\n".join(L)
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -1531,10 +1771,10 @@ class Handler(BaseHTTPRequestHandler):
                 busy = STATE["state"] in ("scanning", "running")
             if busy:
                 return self._send(409, json.dumps({"error": "A job is already running"}))
-            threading.Thread(target=run_job, daemon=True, args=(
+            start_tracked('fix', body, run_job, (
                 body.get("roots", []), body.get("out", ""),
                 bool(body.get("dry_run")), bool(body.get("overwrite")), bool(body.get("pair_live")),
-                bool(body.get("dedupe")), bool(body.get("move")), body.get("date_policy", "earlier"))).start()
+                bool(body.get("dedupe")), bool(body.get("move")), body.get("date_policy", "earlier")))
             self._send(200, "{}")
         elif self.path == "/api/guided_start":
             with LOCK:
@@ -1543,9 +1783,23 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(409, json.dumps({"error": "A job is already running"}))
             o = body.get("opts", {})
             opts = {k: bool(o.get(k)) for k in ("fix_ext", "convert", "replace", "live", "dedupe")}
-            threading.Thread(target=run_guided, daemon=True, args=(
-                body.get("roots", []), body.get("out", ""), bool(body.get("dry_run")), opts)).start()
+            start_tracked('guided', body, run_guided, (
+                body.get("roots", []), body.get("out", ""), bool(body.get("dry_run")), opts))
             self._send(200, "{}")
+        elif self.path == "/api/save_report":
+            self._send(200, json.dumps(save_report_html(body.get("id", ""), body.get("html", ""))))
+        elif self.path == "/api/history":
+            self._send(200, json.dumps({"runs": list_history(), "dir": str(REPORTS_DIR)}))
+        elif self.path == "/api/open_run":
+            self._send(200, json.dumps(open_path(body.get("id", ""), body.get("what", "report"))))
+        elif self.path == "/api/open_reports":
+            REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+            opener = "open" if sys.platform == "darwin" else ("xdg-open" if shutil.which("xdg-open") else None)
+            if opener:
+                subprocess.Popen([opener, str(REPORTS_DIR)])
+            self._send(200, "{}")
+        elif self.path == "/api/diagnostics":
+            self._send(200, json.dumps({"text": diagnostics_text()}))
         elif self.path == "/api/update_check":
             with LOCK:
                 STATE["update"] = {"state": "checking", "files": []}
@@ -1566,8 +1820,8 @@ class Handler(BaseHTTPRequestHandler):
             o = body.get("opts", {})
             opts = {"move": bool(o.get("move")), "conflict": o.get("conflict", "both"), "dupes": o.get("dupes", "delete"),
                     "tidy": bool(o.get("tidy")), "takeout": bool(o.get("takeout")), "global_dedupe": bool(o.get("global_dedupe")), "nocase": bool(o.get("nocase", True)), "prune": True}
-            threading.Thread(target=run_merge, daemon=True, args=(
-                body.get("roots", []), body.get("dest", ""), opts, bool(body.get("dry_run")))).start()
+            start_tracked('merge', body, run_merge, (
+                body.get("roots", []), body.get("dest", ""), opts, bool(body.get("dry_run"))))
             self._send(200, "{}")
         elif self.path == "/api/convert_scan":
             try:
@@ -1584,7 +1838,7 @@ class Handler(BaseHTTPRequestHandler):
             opts = {"ext": o.get("ext") or None, "json": bool(o.get("json")), "json_other": bool(o.get("json_other")), "junk": list(o.get("junk") or []),
                     "names": o.get("names") or None, "empty": o.get("empty") or None}
             opts["junk"] = opts["junk"] or None
-            threading.Thread(target=run_cleanup, daemon=True, args=(body.get("roots", []), bool(body.get("dry_run")), opts)).start()
+            start_tracked('cleanup', body, run_cleanup, (body.get("roots", []), bool(body.get("dry_run")), opts))
             self._send(200, "{}")
         elif self.path == "/api/empty_start":
             with LOCK:
@@ -1600,9 +1854,9 @@ class Handler(BaseHTTPRequestHandler):
                 busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
             if busy:
                 return self._send(409, json.dumps({"error": "A job is already running"}))
-            threading.Thread(target=run_convert, daemon=True, args=(
+            start_tracked('convert', body, run_convert, (
                 body.get("roots", []), bool(body.get("dry_run")), body.get("exts", []),
-                bool(body.get("include_live")), body.get("quality", "high"), body.get("action", "move"), bool(body.get("estimate")))).start()
+                bool(body.get("include_live")), body.get("quality", "high"), body.get("action", "move"), bool(body.get("estimate"))))
             self._send(200, "{}")
         elif self.path == "/api/sort_start":
             with LOCK:
@@ -1698,6 +1952,7 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 .frow .fchips{flex:1 1 160px;margin-top:0;min-width:0}.frow:not(:first-child) input[type=text]{flex:1 1 160px;min-width:0;padding:5px 8px;font-size:12px}
 .sub{display:block;margin-top:7px;font-size:13px;color:var(--ink);line-height:1.4}.sub input{margin-right:6px}
 .vtypes{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:8px}.vt{font-size:13px;white-space:nowrap}.vt .vc{color:var(--mute)}
+.hrun .hhead{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.hwhen{margin-left:auto;color:var(--mute);font-size:13px}.hline{margin:6px 0 2px}.hbtns{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}.badge{padding:1px 9px;border-radius:999px;background:var(--line);font-size:12px}.badge.okb{background:color-mix(in srgb,var(--ok) 22%,var(--card));color:var(--ok)}.badge.badb{background:color-mix(in srgb,var(--bad) 22%,var(--card));color:var(--bad)}
 .cvbox{border:1px solid var(--line);border-radius:12px;padding:12px;margin:0 0 12px;background:var(--bg)}
 .cvhead{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.cvhead .mode{padding:2px 9px;border-radius:999px;background:var(--acc);color:#fff;font-size:12px}
 .cvname{font-weight:600;margin:6px 0 2px;word-break:break-all}.cvmeta{color:var(--mute);font-size:13px;margin-top:6px}
@@ -1744,6 +1999,7 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
     <button class="tab" data-tab="merge" role="tab"><b>2</b> Merge folders</button>
     <button class="tab" data-tab="clean" role="tab"><b>3</b> Clean up</button>
     <button class="tab" data-tab="convert" role="tab"><b>4</b> Convert videos</button>
+    <button class="tab" data-tab="history" role="tab"><b>&#128196;</b> History</button>
   </nav>
   <div class="status"><div class="srow"><span id="msg">Ready. Choose a tab, set it up and press Start.</span><a href="#" id="goto" style="display:none">View results &rarr;</a><button id="stopall" class="sm" style="display:none;margin-left:10px">Stop</button></div>
   <div class="bar" id="bar"><i id="fill"></i><span id="pct">0%</span></div></div>
@@ -1786,7 +2042,7 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 <div id="recent" style="font:12px ui-monospace,Menlo,monospace;color:var(--mute);line-height:1.6;overflow:hidden"></div></div>
 
 <div class="card" id="sum" style="display:none"><h2 style="margin-top:0">Summary</h2><div id="sumbody"></div>
-<div style="margin-top:12px"><button id="rev">Show reports in Finder</button></div></div>
+<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap"><button id="orep" class="p" disabled>Open full report</button><button id="olog" disabled>Open log</button><button id="rev">Show CSV in Finder</button></div><small id="repnote">Saving the report...</small></div>
 
 
 </div>
@@ -1863,6 +2119,14 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 <small>Originals are only moved or deleted after the new file has been checked (it must play and match the original&#39;s length).</small></div></div>
 <button class="p" id="vgo" style="margin-top:6px">Start converting</button></div>
 </section>
+<section class="pane" id="pane-history">
+<h2 class="ph">History and reports</h2>
+<div class="card"><small style="margin-top:0">Every run is saved here with a full report and a plain-text log, so you can see exactly what happened, even weeks later.</small>
+<div class="usef" style="margin:10px 0 0">Reports are kept in: <b id="repdir">Documents/Metadata Fixer Reports</b></div>
+<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><button id="hfolder">Open reports folder</button><button id="hdiag" data-tip="Copies your version, system, tool versions and the end of the latest log, so you can paste it when asking for help. Check it for private paths first.">Copy diagnostic info</button></div></div>
+<div id="hlist"></div>
+</section>
+
 <script>
 const $=id=>document.getElementById(id), esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 async function post(u,b){const r=await fetch(u,{method:'POST',body:JSON.stringify(b||{})});return r.json()}
@@ -1878,7 +2142,7 @@ function makeIcon(html){const b=document.createElement('button');b.type='button'
   b.onfocus=()=>{if(b.matches(':focus-visible'))showTip(b)};b.onblur=hideTip;
   b.onclick=e=>{e.preventDefault();e.stopPropagation();if(b._pt==='mouse'){showTip(b);return}tipEl._owner===b?hideTip():showTip(b)};return b}
 document.addEventListener('click',hideTip);window.addEventListener('scroll',hideTip,{passive:true});
-const PANE_SUB={guided:'The easy way: zips or folders in, a clean library out. Originals never change.',fix:'Put the real date, location and caption back into your photos.',merge:'Bring two or more folders together into one.',clean:'Tidy up leftovers once you are done.',convert:'Turn older video formats into MP4.'};
+const PANE_SUB={history:'Every run, with its full report and log.',guided:'The easy way: zips or folders in, a clean library out. Originals never change.',fix:'Put the real date, location and caption back into your photos.',merge:'Bring two or more folders together into one.',clean:'Tidy up leftovers once you are done.',convert:'Turn older video formats into MP4.'};
 function decorate(){
   document.querySelectorAll('.opt').forEach(o=>{
     const box=o.querySelector(':scope > div');if(!box)return;
@@ -1958,6 +2222,7 @@ function showSummary(s){
   h+=`<h2>What ${s.dry_run?'would be':'was'} changed</h2><div class="tiles">${tile(c.dates,'dates '+v)}${tile(c.gps,'locations '+v)}${tile(c.desc,'captions '+v)}${tile(c.people,'files with people tagged')}${tile(c.favourites,'favourites marked')}</div>`;
   h+=`<div class="tip" style="border-color:var(--acc)">${s.dry_run?'Would change':'Changed'} <b>${c.dates.toLocaleString()}</b> dates (${c.dates_added.toLocaleString()} added, ${c.dates_replaced.toLocaleString()} replaced), <b>${c.gps.toLocaleString()}</b> locations (${c.gps_added.toLocaleString()} added, ${c.gps_replaced.toLocaleString()} replaced) and <b>${c.desc.toLocaleString()}</b> captions.</div>`;
   h+='<h2>Information stored in the photos</h2>'+tbl(['Field','Added','Replaced','Left alone (different)','Already correct'],[['date','Date taken'],['gps','Location'],['desc','Description']].map(([k,l])=>{const f=s.fields[k]||{};return [l,(f.added||0).toLocaleString(),(f.replaced||0).toLocaleString(),(f.kept||0).toLocaleString(),(f.same||0).toLocaleString()]}));
+  if((s.problems||[]).length)h+='<h2>Problems ('+s.problems.length+(s.problems.length>=100?'+':'')+')</h2>'+tbl(['File','What went wrong'],s.problems.map(p=>[esc(p.file),esc(p.detail||p.status)]))+'<small>These files were skipped. Every other file was processed. The full list is in the CSV report.</small>';
   h+='<h2>Result</h2>'+tbl(['Status','Files'],Object.entries(s.status).map(([k,v])=>[k,v.toLocaleString()]));
   h+='<h2>How files were matched</h2>'+tbl(['Match type','Files'],Object.entries(s.match).map(([k,v])=>[({folder:'Same album folder',tree:'Another folder / batch','tree-ambiguous':'Another folder, several candidates (closest date chosen)',stem:'Same name, other extension (RAW+JPG, live photo)'})[k]||k,v.toLocaleString()]));
   h+='<h2>By file type</h2>'+tbl(['Type','With JSON','No JSON'],bars(s.ext));
@@ -2005,10 +2270,11 @@ function setBar(barId,fillId,pctId,pct,indet){
     for(let i=0;i<30;i++){await new Promise(x=>setTimeout(x,1000));const s=await st();if(s&&s.boot!==boot){location.reload();return}}
     $('updmsg').textContent='Updated. If the page does not reload, restart the app in Terminal.'}
 })();
-const TABS=['guided','fix','merge','clean','convert'];const tabOf=k=>({cleanup:'clean',sort:'merge'}[k]||k);let curGuided=false;const paneKind=()=>curGuided?'guided':tabOf(jobKind);let jobKind='fix';
+const TABS=['guided','fix','merge','clean','convert','history'];const tabOf=k=>({cleanup:'clean',sort:'merge'}[k]||k);let curGuided=false;const paneKind=()=>curGuided?'guided':tabOf(jobKind);let jobKind='fix';
 function showTab(t){if(!TABS.includes(t))t='fix';
   TABS.forEach(x=>{$('pane-'+x).style.display=x===t?'block':'none';document.querySelector('.tab[data-tab="'+x+'"]').classList.toggle('on',x===t)});
   try{localStorage.setItem('tab',t)}catch(e){}
+  if(t==='history')loadHistory();
   try{history.replaceState(null,'','#'+t)}catch(e){}
   updGoto()}
 function updGoto(){const a=$('goto');const cur=TABS.find(x=>$('pane-'+x).style.display==='block');
@@ -2175,6 +2441,31 @@ function showCleanup(s){
   h+='<small>Saved: a CSV listing every change (on your Desktop).</small>';
   $('sumbody').innerHTML=h;$('sum').style.display='block'}
 
+
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));const savedIds=new Set();
+async function autoSave(){
+  for(let i=0;i<40;i++){
+    const s=await (await fetch('/api/status')).json();const r=s.run;
+    if(r&&r.saved&&s.state==='done'){
+      if(savedIds.has(r.id))return;savedIds.add(r.id);
+      const res=await post('/api/save_report',{id:r.id,html:$('sumbody').innerHTML});
+      const n=$('repnote'),ob=$('orep'),ol=$('olog');
+      if(res.ok){n.textContent='Report saved. It is also listed under History.';ob.disabled=false;ol.disabled=false;ob.onclick=()=>post('/api/open_run',{id:r.id,what:'report'}).then(x=>{if(x.error)alert(x.error)});ol.onclick=()=>post('/api/open_run',{id:r.id,what:'log'}).then(x=>{if(x.error)alert(x.error)})}
+      else n.textContent='The report could not be saved ('+(res.error||'unknown')+'). The CSV files are still there.';
+      return}
+    if(s.state!=='done'&&s.state!=='running'&&s.state!=='scanning')return;
+    await sleep(500)}}
+function fmtWhen(t){const d=new Date(t*1000);return d.toLocaleDateString(undefined,{weekday:'short',day:'numeric',month:'short',year:'numeric'})+' '+d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'})}
+async function loadHistory(){
+  const r=await post('/api/history');$('repdir').textContent=r.dir||'';
+  const L=r.runs||[];
+  $('hlist').innerHTML=L.length?L.map(e=>`<div class="card hrun"><div class="hhead"><b>${esc(e.title)}</b>${e.dry_run?'<span class="badge">Preview</span>':''}<span class="badge ${e.state==='finished'?'okb':e.state==='failed'?'badb':''}">${esc(e.state)}</span><span class="hwhen">${esc(fmtWhen(e.started))}</span></div>
+  <div class="hline">${esc(e.headline||e.message||'')}</div>
+  <small>${esc((e.source||[]).map(p=>p.split('/').filter(Boolean).pop()||p).join(', '))}${e.dest?' &rarr; '+esc(e.dest.split('/').filter(Boolean).pop()||e.dest):''} &middot; took ${esc(String(Math.round(e.duration)))}s &middot; version ${esc(e.version)}</small>
+  <div class="hbtns">${e.html?`<button class="sm" data-id="${e.id}" data-w="report">Open report</button>`:''}${e.log?`<button class="sm" data-id="${e.id}" data-w="log">Open log</button>`:''}${e.folder?`<button class="sm" data-id="${e.id}" data-w="folder">Show in Finder</button>`:''}</div></div>`).join(''):'<div class="card"><small style="margin:0">Nothing here yet. Your runs will appear here with their reports.</small></div>';
+  document.querySelectorAll('#hlist button[data-id]').forEach(b=>b.onclick=async()=>{const x=await post('/api/open_run',{id:b.dataset.id,what:b.dataset.w});if(x.error)alert(x.error)})}
+$('hfolder').onclick=()=>post('/api/open_reports');
+$('hdiag').onclick=async()=>{const r=await post('/api/diagnostics');try{await navigator.clipboard.writeText(r.text);$('hdiag').textContent='Copied'}catch(e){const t=document.createElement('textarea');t.value=r.text;document.body.appendChild(t);t.select();try{document.execCommand('copy');$('hdiag').textContent='Copied'}catch(_){prompt('Copy this:',r.text)}t.remove()}setTimeout(()=>{$('hdiag').textContent='Copy diagnostic info'},2000)};
 let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   const s=await (await fetch('/api/status')).json();$('prog').style.display='block';
   const run=s.state==='scanning'||s.state==='running';$('go').disabled=run;$('gst').disabled=run;
@@ -2192,7 +2483,7 @@ let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   $('tiles').innerHTML=liveTiles(s,c,done,nj);
   $('recent').innerHTML=(s.recent||[]).map(r=>`${esc(r.name)} &rarr; ${r.status==='duplicate'?'duplicate (skipped)':esc(r.to)+' ['+esc(r.status)+(r.live==='paired'?', live paired':'')+']'}`).reverse().join('<br>');
   const gmid=gd&&!gd.final;
-  if(s.state==='done'&&s.summary&&!gmid)showSummary(s.summary);
+  if(s.state==='done'&&s.summary&&!gmid){const was=$('sum').style.display;showSummary(s.summary);if(s.run&&!savedIds.has(s.run.id)){$('repnote').textContent='Saving the report...';$('orep').disabled=true;$('olog').disabled=true;autoSave()}}
   renderCvLive(s);updGoto();
   {const sb=$('stopall');const showStop=run&&!(s.kind==='convert'&&s.cv);sb.style.display=showStop?'inline-block':'none';if(!s.cancel){sb.disabled=false;sb.textContent='Stop'}else{sb.disabled=true;sb.textContent='Stopping...'}}
   if(['done','error','idle'].includes(s.state)&&!gmid)clearInterval(timer);
