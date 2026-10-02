@@ -2234,7 +2234,7 @@ def run_similar_scan(roots, threshold, dupe=None):
                         continue
                 mem.append({"path": m["path"], "name": os.path.basename(m["path"]), "where": os.path.dirname(rel) or ".", "size": m["size"],
                             "w": m["w"], "h": m["h"], "date": m["date"], "gps": m["gps"], "best": k == 0,
-                            "fav": m.get("fav", False), "edited": m.get("edited", False), "album": m.get("album", False), "kw": m.get("keywords", 0), "meta": m.get("meta", 0)})
+                            "fav": m.get("fav", False), "edited": m.get("edited", False), "screenshot": m.get("screenshot", False), "sharp": m.get("sharp"), "album": m.get("album", False), "kw": m.get("keywords", 0), "meta": m.get("meta", 0)})
             view.append(mem)
         reclaim = sum(m["size"] for g in groups for m in g[1:])
         with LOCK:
@@ -4656,7 +4656,7 @@ function showSimilar(s){
   let h=`<div class="tiles">${tile(s.scanned,'pictures checked')}${tile(s.total_groups,'similar groups','')}${tile(s.extra,'extra copies','')}</div>`;
   if(!s.groups.length){h+='<div class="tip">No similar photos found at this setting.</div>';$('sumbody').innerHTML=h;$('sum').style.display='block';return}
   h+=`<small>Potential space: <b>${esc(s.reclaim)}</b>. The best copy of each group (chosen by your keeper rules) is kept; the others are ticked to be set aside. Untick any you want to keep. ${s.total_groups>s.groups.length?'Showing the first '+s.groups.length+' groups.':''}</small>`;
-  h+=s.groups.map((g,i)=>`<div class="card simgrp"><div class="simrow">${g.map((m,k)=>`<label class="simitem"><img loading="lazy" src="/thumb?p=${encodeURIComponent(m.path)}" alt=""><div class="simcap"><b title="${esc(m.name)}">${esc(m.name)}</b><span>${esc(m.where)}</span><span>${m.w&&m.h?m.w+' &times; '+m.h+' &middot; ':''}${fmtB(m.size)}${m.date?' &middot; '+esc(m.date.slice(0,10)):''}${m.gps?' &middot; has location':''}</span><span>${m.fav?'<span class="tagpill">&#11088; favourite</span>':''}${m.edited?'<span class="tagpill">edited</span>':''}${m.album?'<span class="tagpill">in an album</span>':''}${m.kw?'<span class="tagpill">'+m.kw+' keywords</span>':''}</span></div>${m.best?'<span class="badge okb">Best: kept</span>':`<span class="simsel"><input type="checkbox" class="simaside" data-p="${esc(m.path)}" checked> Set aside</span>`}</label>`).join('')}</div></div>`).join('');
+  h+=s.groups.map((g,i)=>`<div class="card simgrp"><div class="simrow">${g.map((m,k)=>`<label class="simitem"><img loading="lazy" src="/thumb?p=${encodeURIComponent(m.path)}" alt=""><div class="simcap"><b title="${esc(m.name)}">${esc(m.name)}</b><span>${esc(m.where)}</span><span>${m.w&&m.h?m.w+' &times; '+m.h+' &middot; ':''}${fmtB(m.size)}${m.date?' &middot; '+esc(m.date.slice(0,10)):''}${m.gps?' &middot; has location':''}</span><span>${m.fav?'<span class="tagpill">&#11088; favourite</span>':''}${m.edited?'<span class="tagpill">edited</span>':''}${m.album?'<span class="tagpill">in an album</span>':''}${m.kw?'<span class="tagpill">'+m.kw+' keywords</span>':''}${m.screenshot?'<span class="tagpill">screenshot</span>':''}${m.sharp!=null&&m.sharp<30?'<span class="tagpill">looks blurry</span>':''}</span></div>${m.best?'<span class="badge okb">Best: kept</span>':`<span class="simsel"><input type="checkbox" class="simaside" data-p="${esc(m.path)}" checked> Set aside</span>`}</label>`).join('')}</div></div>`).join('');
   h+='<div class="hbtns" style="margin-top:14px"><button class="p" id="simapply">Set aside the ticked photos</button><button id="simnone">Untick all</button><button id="simall">Tick all</button></div><small>They are moved, not deleted, and stay in their folder structure inside <i>_similar_set_aside</i>. You can undo this from History.</small>';
   $('sumbody').innerHTML=h;$('sum').style.display='block';
   const setAll=v=>document.querySelectorAll('.simaside').forEach(c=>c.checked=v);
@@ -5045,7 +5045,7 @@ let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
 })();
 
 // ---- duplicate matching and keeper rules (shared by Similar, Guided and Fix) ----
-const DP_RULES={favorite:'A favourite (5 stars) beats one that is not',edited:'An edited version beats an untouched one',resolution:'More pixels (higher resolution) wins',filesize:'A bigger file wins (less compressed)',metadata:'More complete information inside (date, location, caption, title, keywords) wins',album:'A photo already sorted into an album wins',keywords:'More keywords wins',format:'Modern format (HEIC) beats JPEG beats the rest',yearfolder:"A copy in a 'Photos from YYYY' folder wins",oldest:'The older file wins',newest:'The newer file wins'};
+const DP_RULES={sharp:'The sharper picture wins (a blurry copy loses)',notscreenshot:'A real photo beats a screenshot',favorite:'A favourite (5 stars) beats one that is not',edited:'An edited version beats an untouched one',resolution:'More pixels (higher resolution) wins',filesize:'A bigger file wins (less compressed)',metadata:'More complete information inside (date, location, caption, title, keywords) wins',album:'A photo already sorted into an album wins',keywords:'More keywords wins',format:'Modern format (HEIC) beats JPEG beats the rest',yearfolder:"A copy in a 'Photos from YYYY' folder wins",oldest:'The older file wins',newest:'The newer file wins'};
 const DP_DEFAULT=['favorite','edited','resolution','filesize','metadata','album','yearfolder'];
 const DP_MUST={name:'The file name must match',datetime:'The date and time taken must match',dimensions:'The width and height must match',format:'The file format must match',size:'The file size must match'};
 let DP=(function(){try{const j=JSON.parse(localStorage.getItem('dupeprefs')||'null');if(j&&Array.isArray(j.order)){j.bursts=j.bursts==='best'?'best':'keep';j.on=Array.isArray(j.on)?j.on:DP_DEFAULT.slice();j.must=Array.isArray(j.must)?j.must:[];j.order=j.order.filter(k=>DP_RULES[k]);Object.keys(DP_RULES).forEach(k=>{if(j.order.indexOf(k)<0)j.order.push(k)});return j}}catch(e){}return {bursts:'keep',order:DP_DEFAULT.concat(Object.keys(DP_RULES).filter(k=>DP_DEFAULT.indexOf(k)<0)),on:DP_DEFAULT.slice(),must:[]}})();
@@ -5085,7 +5085,7 @@ const PROFILES={
  thorough:{icon:'\u{1F3AF}',name:'Thorough',blurb:'Does everything safe, as well as it can. Takes longer.',time:5,risk:2,reward:4,
   g:{gdedupe:1,glive:1,gnd:1,gtz:1,gsd:'medium',gnb:0,gfd:1,gfx:0,ggps:0,gnear:0,galb:1,gow:1,gext:1,gcv:0,gedit:'both'},
   f:{dedupe:1,live:1,ndates:1,ftz:1,fsd:'medium',fnb:0,fdates:1,fdfix:0,fgps:0,near:0,albums:1,ow:1,move:0,datepol:'earlier',edited:'both'},
-  o:{simsens:'6',pbatch:'5',ppace:'verify',padapt:1,palb:1},dp:{bursts:'keep',must:[]}},
+  o:{simsens:'6',pbatch:'5',ppace:'verify',padapt:1,palb:1},dp:{bursts:'keep',must:[],extra:['sharp','notscreenshot']}},
  risky:{icon:'\u{1F3B2}',name:'I like risk',blurb:'Maximum clean-up and guessing. Review the preview carefully.',time:3,risk:5,reward:5,
   g:{gdedupe:1,glive:1,gnd:1,gtz:1,gsd:'low',gnb:1,gfd:1,gfx:1,ggps:1,gnear:1,galb:1,gow:1,gext:1,gcv:1,gedit:'edited'},
   f:{dedupe:1,live:1,ndates:1,ftz:1,fsd:'low',fnb:1,fdates:1,fdfix:1,fgps:1,near:1,albums:1,ow:1,move:0,datepol:'earlier',edited:'edited'},
@@ -5097,7 +5097,7 @@ function setOpt(id,v){const el=document.getElementById(id);if(!el)return;if(el.t
 function applyProfile(k,fromUser){const P=PROFILES[k];if(!P)return;PROF=k;PROF_CUSTOM=false;try{localStorage.setItem('profile',k)}catch(e){}
   Object.entries(P.g).forEach(([i,v])=>setOpt(i,v));Object.entries(P.f).forEach(([i,v])=>setOpt(i,v));Object.entries(P.o).forEach(([i,v])=>setOpt(i,v));
   $('gdry').checked=true;$('dry').checked=true;
-  DP.bursts=P.dp.bursts;DP.must=P.dp.must.slice();saveDP();renderProfile()}
+  DP.bursts=P.dp.bursts;DP.must=P.dp.must.slice();DP.on=DP_DEFAULT.concat(P.dp.extra||[]);saveDP();renderProfile()}
 function renderProfile(){const P=PROFILES[PROF];
   $('profpills').innerHTML=Object.entries(PROFILES).map(([k,v])=>`<button class="profpill ${k===PROF&&!PROF_CUSTOM?'on':''}" data-prof="${k}" title="${v.blurb}"><b>${v.icon}<br>${v.name}</b></button>`).join('');
   $('profinfo').innerHTML=`<span>Time ${dots(P.time,'')}</span><span>Risk ${dots(P.risk,'risk')}</span><span>Reward ${dots(P.reward,'rew')}</span>${PROF_CUSTOM?'<span class="badge warnb">Customised: you changed some options</span>':''}<span class="blurb">${P.blurb}</span>`;

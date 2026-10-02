@@ -3884,6 +3884,8 @@ KEEPER_RULES = {
     "yearfolder": "A copy in a 'Photos from YYYY' folder wins",
     "oldest": "The older file wins",
     "newest": "The newer file wins",
+    "sharp": "The sharper picture wins (more fine detail, so a blurry copy loses)",
+    "notscreenshot": "A real photo beats a screenshot",
 }
 DEFAULT_KEEPER = ["favorite", "edited", "resolution", "filesize", "metadata", "album", "yearfolder"]
 MATCH_CRITERIA = {
@@ -3895,7 +3897,7 @@ MATCH_CRITERIA = {
 }
 _EDITOR_RE = re.compile(r"photoshop|lightroom|snapseed|pixelmator|affinity|gimp|capture one|darktable|luminar|picsart|vsco|facetune|canva", re.I)
 EXIF_FACT_TAGS = ["-ImageWidth", "-ImageHeight", "-DateTimeOriginal", "-GPSLatitude", "-GPSLongitude", "-Rating", "-Software",
-                  "-Title", "-ImageDescription", "-Description", "-Subject", "-Keywords", "-BurstUUID", "-CreateDate"]
+                  "-Title", "-ImageDescription", "-Description", "-Subject", "-Keywords", "-BurstUUID", "-CreateDate", "-Make", "-Model"]
 
 
 def _as_list(v):
@@ -3917,6 +3919,8 @@ def member_facts(path, size, it):
          "edited": ("-edited" in name or "(edited)" in name or bool(_EDITOR_RE.search(str(it.get("Software") or "")))),
          "album": is_album_folder(p.parent.name) or bool(kws), "keywords": len(kws), "kw": sorted(kws)[:20],
          "title": bool(str(it.get("Title") or "").strip()), "ext": p.suffix.lower(), "year_folder": p.parent.name.startswith("Photos from")}
+    f["screenshot"] = is_screenshot(p.name, p.suffix.lower(), f["w"], f["h"], it)
+    f["sharp"] = None
     bm = re.search(r"BURST(\d{8,})", p.name, re.I)
     f["burst"] = str(it.get("BurstUUID")) if it.get("BurstUUID") else ("g" + bm.group(1)[:14] if bm else "")
     if not f["date"]:
@@ -3955,6 +3959,10 @@ def keeper_key(f, rules=None):
             k.append(f["mtime"])
         elif r == "newest":
             k.append(-f["mtime"])
+        elif r == "sharp":
+            k.append(-(f.get("sharp") or 0))
+        elif r == "notscreenshot":
+            k.append(bool(f.get("screenshot")))
     k.append(f["path"])
     return tuple(k)
 
@@ -4009,6 +4017,67 @@ def carry_over(keeper, dropped):
     return c
 
 LAST_SIMILAR = {"bursts": 0}
+
+# ---- Sharpness and screenshots ------------------------------------------------------------------------------------------
+SCREENSHOT_NAME_RE = re.compile(r"screen ?shot|screen ?capture|screenshot|capture d.{0,2}cran|bildschirmfoto|captura de pantalla|schermafbeelding", re.I)
+SCREEN_SIZES = {(1170, 2532), (1179, 2556), (1284, 2778), (1290, 2796), (750, 1334), (828, 1792), (1125, 2436), (1242, 2688), (1080, 1920), (1080, 2340),
+                (1080, 2400), (1440, 3040), (1440, 3200), (2560, 1600), (2880, 1800), (1920, 1080), (2560, 1440), (3024, 1964), (3456, 2234), (2048, 2732), (1668, 2388)}
+
+
+def is_screenshot(name, ext, w, h, it):
+    """A screen capture: named like one, or a PNG with no camera information at a typical screen size."""
+    if SCREENSHOT_NAME_RE.search(name):
+        return True
+    if ext == ".png" and not (it.get("Make") or it.get("Model")) and (w, h) in (SCREEN_SIZES | {(b, a) for a, b in SCREEN_SIZES}):
+        return True
+    return False
+
+
+def ffmpeg_gray(path, w, h):
+    """Raw grey pixels of a picture scaled to w x h (bytes), or b"" when it cannot be read."""
+    link = None
+    src = str(path)
+    if "%" in src:
+        try:
+            fd, link = tempfile.mkstemp(suffix=Path(src).suffix.lower(), prefix="mf_gray_")
+            os.close(fd)
+            os.unlink(link)
+            os.symlink(os.path.abspath(src), link)
+            src = link
+        except OSError:
+            link = None
+    try:
+        r = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-i", src, "-frames:v", "1", "-vf", "scale=%d:%d:flags=area,format=gray" % (w, h), "-f", "rawvideo", "-"],
+                           capture_output=True, timeout=60)
+        raw = r.stdout if r.returncode == 0 else b""
+        return raw if len(raw) == w * h else b""
+    except (OSError, subprocess.TimeoutExpired):
+        return b""
+    finally:
+        if link:
+            try:
+                os.unlink(link)
+            except OSError:
+                pass
+
+
+def sharpness_score(path):
+    """How much fine detail a picture has (variance of the Laplacian on a 160x120 grey copy). Higher is sharper; None if unreadable.
+    Comparable between copies of the same picture; for different pictures it is only a rough hint."""
+    W, H = 160, 120
+    raw = ffmpeg_gray(path, W, H)
+    if not raw:
+        return None
+    vals = []
+    for y in range(1, H - 1):
+        row = y * W
+        for x in range(1, W - 1):
+            i = row + x
+            vals.append(4 * raw[i] - raw[i - 1] - raw[i + 1] - raw[i - W] - raw[i + W])
+    n = len(vals)
+    mean = sum(vals) / n
+    return round(sum((v - mean) ** 2 for v in vals) / n, 1)
+
 
 
 def is_burst_group(mem):
@@ -4126,6 +4195,9 @@ def find_similar_photos(roots, threshold=6, progress=None, should_stop=None, wor
             f = member_facts(p, sizes.get(p, 0), info.get(p, {}))
             f["hash"] = hashes[p]
             mem.append(f)
+        if rules and "sharp" in rules:
+            for f in mem:
+                f["sharp"] = sharpness_score(f["path"])
         for sub in split_by_criteria(mem, must):
             if bursts == "keep":
                 if is_burst_group(sub):
@@ -4549,6 +4621,23 @@ def health_scan(roots, deep=False, progress=None, should_stop=None, exif_cap=400
         deep_stats = {"read": n_read, "pool": len(pool), "mismatch": mism, "no_date": no_date, "no_gps": no_gps, "year_mismatch": yr_mismatch,
                       "future": future, "month_mismatch": month_mis, "fillable": fillable, "guessable": guessable, "loc_mismatch": loc_mis, "loc_examples": loc_ex, "date_examples": date_ex, "future_examples": fut_ex, "place_examples": place_ex,
                       "models": models.most_common(5), "mism_list": mism_list, "sampled": not deep or len(pool) > exif_cap}
+    # screenshots (by name, and by look when the file was read) and very soft pictures (a sample)
+    shots = [f for f in files if SCREENSHOT_NAME_RE.search(os.path.basename(f[0]))]
+    shot_b = sum(f[1] for f in shots)
+    blur = {"n": 0, "soft": 0, "examples": []}
+    if shutil.which("ffmpeg"):
+        imgs = [f for f in files if f[2] in SIMILAR_EXT and f[1] > 0 and not SCREENSHOT_NAME_RE.search(os.path.basename(f[0]))]
+        brnd = random.Random(13)
+        for f in brnd.sample(imgs, min(len(imgs), 200 if deep else 50)):
+            stop()
+            sc = sharpness_score(f[0])
+            if sc is None:
+                continue
+            blur["n"] += 1
+            if sc < 30:
+                blur["soft"] += 1
+                if len(blur["examples"]) < 5:
+                    blur["examples"].append(os.path.basename(f[0]))
     # ---------------------------------------------------------------- findings
     def add(fid, cat, sev, title, detail, count=0, nbytes=0, tab="", label="", extra=None):
         F.append({"id": fid, "cat": cat, "sev": sev, "title": title, "detail": detail, "count": count, "bytes": nbytes, "tab": tab, "label": label, **(extra or {})})
@@ -4593,6 +4682,11 @@ def health_scan(roots, deep=False, progress=None, should_stop=None, exif_cap=400
         if deep_stats["guessable"]:
             add("guessable", "meta", "info", "No location, but the folder names a place", "%s photos have no location, but the folder name mentions a place you could safely guess (for example %s). Backstory can add an approximate location and label it as a guess." % (f"{deep_stats['guessable']:,}", "; ".join(deep_stats["place_examples"][:2])),
                 deep_stats["guessable"], 0, "guided", "Open Guided", {"examples": deep_stats["place_examples"]})
+    if shots:
+        add("screenshots", "files", "info", "Screenshots", "%s look like screenshots (%s). Many people keep them out of the photo library." % (_pl(len(shots), "picture"), fmt_bytes(shot_b)), len(shots), shot_b, "similar", "Review similar")
+    if blur["n"] and blur["soft"] >= 2 and blur["soft"] / blur["n"] >= 0.05:
+        add("blurry", "files", "info", "Pictures that look very soft or blurry", "About %d%% of the %d pictures checked have almost no fine detail (a hint only: a plain sky or a smooth wall can look the same). Examples are listed." % (round(100 * blur["soft"] / blur["n"]), blur["n"]),
+            blur["soft"], 0, "", "", {"examples": blur["examples"]})
     if empty:
         add("empty", "folders", "info", "Empty folders", "%s hold no files." % _pl(len(empty), "folder"), len(empty), 0, "clean", "Open Clean up")
     if sim:

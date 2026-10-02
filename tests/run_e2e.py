@@ -1014,12 +1014,30 @@ def t_context_dates_and_locations():
     assert lat and abs(float(lat) - 48.86) < 0.01 and sm["changes"]["gps_gpx"] == 1, (lat, sm["changes"])
 
 
+def t_blur_and_screenshots():
+    d = WORK / "blur"; d.mkdir()
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "mandelbrot=size=640x480", "-frames:v", "1", "-q:v", "2", str(d / "sharp.jpg")], check=True)
+    ffmpeg("-i", str(d / "sharp.jpg"), "-vf", "boxblur=6:3", "-q:v", "2", str(d / "soft.jpg"))
+    assert fx.sharpness_score(d / "sharp.jpg") > 5 * fx.sharpness_score(d / "soft.jpg")
+    gr, _ = fx.find_similar_photos([str(d)], 10, rules=["sharp"])
+    assert gr and os.path.basename(gr[0][0]["path"]) == "sharp.jpg", [[os.path.basename(m["path"]) for m in g_] for g_ in gr]
+    assert fx.is_screenshot("Screenshot 2024-01-01 at 10.00.00.png", ".png", 100, 100, {}) and fx.is_screenshot("a.png", ".png", 1170, 2532, {}) and not fx.is_screenshot("a.png", ".png", 1170, 2532, {"Make": "Apple"})
+    assert not fx.is_screenshot("IMG_1.jpg", ".jpg", 4000, 3000, {})
+    # screenshots lose to a real photo when that rule is on
+    a = {"path": "/x/Screenshot 1.png", "size": 10, "w": 10, "h": 10, "screenshot": True, "fav": False, "edited": False, "meta": 0, "album": False, "keywords": 0, "year_folder": False, "ext": ".png", "mtime": 0}
+    b = dict(a, path="/x/IMG_1.jpg", screenshot=False, ext=".jpg")
+    assert fx.keeper_key(b, ["notscreenshot"]) < fx.keeper_key(a, ["notscreenshot"])
+    h = d.parent / "shots"; jpeg(h / "Screenshot 2024-02-02 at 09.00.00.jpg", seed=91); jpeg(h / "IMG_1.jpg", seed=92)
+    r = fx.health_scan([str(h)], False)
+    assert any(f["id"] == "screenshots" and f["count"] == 1 for f in r["findings"]), [f["id"] for f in r["findings"]]
+
+
 ORDER = ["t_fix_copy", "t_fix_namedate", "t_fix_inplace", "t_fix_move", "t_fix_dryrun_changes_nothing", "t_fix_zip", "t_zip_resume", "t_zip_needs_dest", "t_zip_corrupt",
          "t_edited_policies", "t_cancel_mid_run", "t_unreadable_and_zero", "t_dest_not_writable", "t_exiftool_missing", "t_low_disk_zip", "t_assess_and_recommend",
          "t_assess_multi_and_photoslib", "t_guided_end_to_end", "t_guided_no_dest", "t_merge_variants", "t_merge_refuses_unsafe", "t_merge_move_in_place", "t_cleanup_all",
          "t_cleanup_refuses_broad", "t_consolidate", "t_convert", "t_convert_stop", "t_similar_apply_undo", "t_health_and_formats", "t_undo_copy_run", "t_photos_plan_and_run",
          "t_photos_applescript_injection_safe", "t_photos_errors", "t_monitor_rules", "t_monitor_job_paste", "t_compare_and_near", "t_diagnostics", "t_history_report",
-         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs", "t_audit_regressions", "t_dates_and_places", "t_resilient_copy", "t_rerun_over_http", "t_keeper_rules_and_matching", "t_bursts_and_compare_rules", "t_qa_hunt_regressions", "t_timezone_correct_dates", "t_preflight_report", "t_albums_and_live_arrival", "t_receipt", "t_context_dates_and_locations"]
+         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs", "t_audit_regressions", "t_dates_and_places", "t_resilient_copy", "t_rerun_over_http", "t_keeper_rules_and_matching", "t_bursts_and_compare_rules", "t_qa_hunt_regressions", "t_timezone_correct_dates", "t_preflight_report", "t_albums_and_live_arrival", "t_receipt", "t_context_dates_and_locations", "t_blur_and_screenshots"]
 if __name__ == "__main__":
     only = sys.argv[1:]
     for n in ORDER:
