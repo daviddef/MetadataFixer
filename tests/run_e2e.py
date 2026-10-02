@@ -664,6 +664,10 @@ def t_dates_and_places():
     assert sm["changes"]["gps_guessed"] == 1 and sm["changes"]["dates_corrected"] >= 2, sm["changes"]
     kw = subprocess.run(["exiftool", "-s3", "-Subject", str(out / "Johannesburg 2019" / "a.jpg")], capture_output=True, text=True).stdout
     assert "guessed" in kw, kw
+    assert sm["changes"]["flag_loc"] == 1, sm["changes"]       # Japan 2018 folder, location 10N 20E
+    why = [r for r in fx.health_scan([str(base)], True)["findings"] if r["id"] == "locmis"]
+    assert why and why[0]["count"] == 1, why
+    assert fx.location_problem(0, 0, None) and not fx.location_problem(-26.2, 28.0, fx.guess_place("/x/Johannesburg/a.jpg", ["/x"]))
     # 'missing' mode never changes an existing date
     out2 = WORK / "san_out2"
     g.run_job([str(base)], str(out2), False, False, folder_dates="missing", guess_gps=False)

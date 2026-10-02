@@ -30,7 +30,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.03-d"
+VERSION = "2026.10.03-e"
 class Cancelled(Exception):
     pass
 
@@ -137,6 +137,7 @@ def summarise(rows, sidecars, roots, dry_run):
                "gps_guessed": sum(1 for r in rows if r.get("gps_guess")),
                "flag_future": sum(1 for r in rows if r.get("date_flag") == "future" and r.get("date_fix") != "corrected"),
                "flag_year": sum(1 for r in rows if r.get("date_flag") == "year" and r.get("date_fix") != "corrected"),
+               "flag_loc": sum(1 for r in rows if r.get("gps_flag")),
                "flag_month": sum(1 for r in rows if r.get("date_flag") == "month")}
     replaced_files = sum(1 for r in rows if r["status"] in ("updated", "would-update")
                          and "replaced" in (r.get("date"), r.get("gps"), r.get("desc")))
@@ -181,6 +182,8 @@ def summarise(rows, sidecars, roots, dry_run):
         tips.append("%d photos have a date in the future, which cannot be right. Turn on 'Correct dates that disagree with the folder name' to fix those that sit in a dated folder." % cc["flag_future"])
     if cc["flag_year"]:
         tips.append("%d photos have a date that does not fit the year in their folder name (the picture may have lost its metadata). Turn on 'Correct dates that disagree with the folder name' to set them from the folder." % cc["flag_year"])
+    if cc["flag_loc"]:
+        tips.append("%d photos have a location that looks wrong (far from the place their folder names, or at 0, 0). They were not changed; see the 'gps_flag' column in the report." % cc["flag_loc"])
     kept = sum(fields[k].get("kept", 0) for k in fields)
     if kept:
         tips.append("%d existing date/location/description values differ from Google's but were left alone. "

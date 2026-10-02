@@ -477,7 +477,7 @@ def pick_closest(m, candidates):
 
 REPORT_FIELDS = ["file", "sidecar", "match", "status", "detail", "live", "output",
                  "date", "date_before", "date_google", "date_note",
-                 "gps", "gps_before", "gps_google", "gps_guess", "date_fix", "date_flag",
+                 "gps", "gps_before", "gps_google", "gps_guess", "gps_flag", "date_fix", "date_flag",
                  "desc", "desc_before", "desc_google",
                  "people", "favourite"]
 
@@ -1373,6 +1373,31 @@ def gps_args(lat, lon, is_video, guessed=True):
     return a
 
 
+LARGE_COUNTRIES = {"Russia", "United States", "Canada", "China", "Brazil", "Australia", "India", "Argentina", "Mexico", "Indonesia", "South Africa", "Alaska", "Patagonia"}
+
+
+def km_between(lat1, lon1, lat2, lon2):
+    import math
+    a = math.sin(math.radians(lat2 - lat1) / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(math.radians(lon2 - lon1) / 2) ** 2
+    return 6371 * 2 * math.asin(min(1.0, math.sqrt(a)))
+
+
+def location_problem(lat, lon, place):
+    """Why a stored location looks wrong, or None: it sits at 0,0 (a classic error), or far from the place the folder names."""
+    try:
+        lat, lon = float(lat), float(lon)
+    except (TypeError, ValueError):
+        return None
+    if abs(lat) < 0.5 and abs(lon) < 0.5:
+        return "at 0, 0 (the middle of the ocean off Africa), which is almost always an error"
+    if place:
+        lim = 300 if place["kind"] == "city" else (4500 if place["place"] in LARGE_COUNTRIES else 1500)
+        km = km_between(lat, lon, place["lat"], place["lon"])
+        if km > lim:
+            return "about %s km from %s, the place named by folder '%s'" % (f"{int(km):,}", place["place"], place["folder"])
+    return None
+
+
 GUESS_TAG = "Backstory: location guessed from folder name"
 
 
@@ -1407,6 +1432,10 @@ def apply_sanity(m, args, ext, d, ex_now, final_taken, row, exif_args, taken):
         row["date_flag"] = prob if prob != "missing" else ""
         row["date_note"] = "date set from the folder name '%s'%s" % (hint["folder"], "" if prob == "missing" else " (the photo said %s)" % (str(before)[:10] or "a wrong date"))
         used = True
+    if ex_now.get("lat") is not None and ex_now.get("lon") is not None:
+        why = location_problem(ex_now["lat"], ex_now["lon"], guess_place(m, getattr(args, "roots", None)))
+        if why:
+            row["gps_flag"] = why                                  # reported only: a stored location is never changed here
     if gg and ex_now.get("lat") is None and not (row.get("gps") in ("added", "replaced", "same", "kept")):
         pl = guess_place(m, getattr(args, "roots", None))
         if pl:
@@ -3964,7 +3993,8 @@ def health_scan(roots, deep=False, progress=None, should_stop=None, exif_cap=400
         pool = [f for f in files if f[2] in MEDIA_EXT]
         rnd = random.Random(11)
         pick = pool if (deep and len(pool) <= exif_cap) else rnd.sample(pool, min(len(pool), exif_cap if deep else 400))
-        mism = no_date = no_gps = yr_mismatch = n_read = future = month_mis = fillable = guessable = 0
+        mism = no_date = no_gps = yr_mismatch = n_read = future = month_mis = fillable = guessable = loc_mis = 0
+        loc_ex = []
         date_ex, fut_ex, place_ex = [], [], []
         models = Counter()
         mism_list = []
@@ -3975,7 +4005,7 @@ def health_scan(roots, deep=False, progress=None, should_stop=None, exif_cap=400
             os.close(fd)
             try:
                 Path(arg).write_text("\n".join(f[0] for f in pick[k:k + 300]), encoding="utf-8", errors="surrogateescape")
-                r = subprocess.run(["exiftool", "-charset", "filename=utf8", "-j", "-n", "-FileTypeExtension", "-DateTimeOriginal", "-CreateDate", "-GPSLatitude", "-Model", "-@", arg],
+                r = subprocess.run(["exiftool", "-charset", "filename=utf8", "-j", "-n", "-FileTypeExtension", "-DateTimeOriginal", "-CreateDate", "-GPSLatitude", "-GPSLongitude", "-Model", "-@", arg],
                                    capture_output=True, text=True)
                 for it in json.loads(r.stdout or "[]"):
                     n_read += 1
@@ -4004,6 +4034,12 @@ def health_scan(roots, deep=False, progress=None, should_stop=None, exif_cap=400
                             month_mis += 1
                         if why in ("future", "year") and len(date_ex if why == "year" else fut_ex) < 6:
                             (date_ex if why == "year" else fut_ex).append("%s (in '%s') says %s" % (os.path.basename(p), (date_hint_from_path(p, roots) or {}).get("folder", os.path.basename(os.path.dirname(p))), d[:10]))
+                    if it.get("GPSLatitude") is not None and it.get("GPSLongitude") is not None:
+                        why_ = location_problem(it["GPSLatitude"], it["GPSLongitude"], guess_place(p, roots))
+                        if why_:
+                            loc_mis += 1
+                            if len(loc_ex) < 6:
+                                loc_ex.append("%s is %s" % (os.path.basename(p), why_))
                     if it.get("GPSLatitude") is None:
                         no_gps += 1
                         pg = guess_place(p, roots)
@@ -4018,7 +4054,7 @@ def health_scan(roots, deep=False, progress=None, should_stop=None, exif_cap=400
             finally:
                 Path(arg).unlink(missing_ok=True)
         deep_stats = {"read": n_read, "pool": len(pool), "mismatch": mism, "no_date": no_date, "no_gps": no_gps, "year_mismatch": yr_mismatch,
-                      "future": future, "month_mismatch": month_mis, "fillable": fillable, "guessable": guessable, "date_examples": date_ex, "future_examples": fut_ex, "place_examples": place_ex,
+                      "future": future, "month_mismatch": month_mis, "fillable": fillable, "guessable": guessable, "loc_mismatch": loc_mis, "loc_examples": loc_ex, "date_examples": date_ex, "future_examples": fut_ex, "place_examples": place_ex,
                       "models": models.most_common(5), "mism_list": mism_list, "sampled": not deep or len(pool) > exif_cap}
     # ---------------------------------------------------------------- findings
     def add(fid, cat, sev, title, detail, count=0, nbytes=0, tab="", label="", extra=None):
@@ -4058,6 +4094,9 @@ def health_scan(roots, deep=False, progress=None, should_stop=None, exif_cap=400
                 deep_stats["future"], 0, "guided", "Open Guided", {"examples": deep_stats["future_examples"]})
         if deep_stats["fillable"]:
             add("fillable", "meta", "info", "No date inside, but the folder name has one", "%s photos have no date taken, yet their folder name gives the year. Backstory can fill it in." % f"{deep_stats['fillable']:,}", deep_stats["fillable"], 0, "guided", "Open Guided")
+        if deep_stats["loc_mismatch"]:
+            add("locmis", "meta", "warn", "Locations that look mismatched", "%s photos have a location that is far from where their folder says they were taken (or sits at 0, 0, which is almost always an error). Nothing is changed automatically: check the examples." % f"{deep_stats['loc_mismatch']:,}",
+                deep_stats["loc_mismatch"], 0, "", "Review", {"examples": deep_stats["loc_examples"]})
         if deep_stats["guessable"]:
             add("guessable", "meta", "info", "No location, but the folder names a place", "%s photos have no location, but the folder name mentions a place you could safely guess (for example %s). Backstory can add an approximate location and label it as a guess." % (f"{deep_stats['guessable']:,}", "; ".join(deep_stats["place_examples"][:2])),
                 deep_stats["guessable"], 0, "guided", "Open Guided", {"examples": deep_stats["place_examples"]})
