@@ -635,7 +635,7 @@ import errno
 RESIL = {"stop": None, "say": None, "tries": 6, "delays": (3, 8, 20, 45, 90, 180), "chunk": 4 << 20, "gentle": 0.0,
          "retries": 0, "bad_run": 0, "abort": False, "wait_drive": 600, "events": []}
 TRANSIENT = {errno.EIO, errno.ENXIO, errno.ENODEV, errno.ETIMEDOUT, errno.EBUSY, errno.EAGAIN, errno.EINTR, errno.ENOTCONN,
-             errno.ESTALE, errno.EHOSTDOWN, errno.ECONNRESET, errno.ENETDOWN, errno.ENOENT, errno.EPIPE, errno.EPROTO, getattr(errno, "EREMOTEIO", -1)}
+             errno.ESTALE, errno.EHOSTDOWN, errno.ECONNRESET, errno.ENETDOWN, errno.EPIPE, errno.EPROTO, getattr(errno, "EREMOTEIO", -1)}
 
 
 def reset_resilience(stop=None, say=None, tries=6):
@@ -678,8 +678,19 @@ def _wait_for(path):
 
 
 def _copy_resumable(src, part, chunk):
-    size = os.path.getsize(src)
-    have = os.path.getsize(part) if os.path.exists(part) else 0
+    st = os.stat(src)
+    size = st.st_size
+    meta = part + ".meta"
+    stamp = "%d:%d" % (size, int(st.st_mtime))
+    try:
+        ok_meta = open(meta, encoding="utf-8").read() == stamp
+    except OSError:
+        ok_meta = False
+    have = os.path.getsize(part) if (os.path.exists(part) and ok_meta) else 0      # only resume a part file we started for THIS source
+    if have == 0 and os.path.exists(part):
+        os.unlink(part)
+    with open(meta, "w", encoding="utf-8") as mh:
+        mh.write(stamp)
     if have > size:
         have = 0
     have = max(0, have - chunk)                              # the last piece may be damaged: copy it again
@@ -716,10 +727,17 @@ def safe_copy(src, dest):
     last = None
     for attempt in range(1, RESIL["tries"] + 1):
         try:
-            if not os.path.exists(src) and not _wait_for(src):
-                raise OSError(errno.ENOENT, "the source drive is not connected")
+            if not os.path.exists(src):
+                if os.path.isdir(os.path.dirname(os.path.abspath(src))):
+                    raise FileNotFoundError(errno.ENOENT, "the file is not there (deleted, or a broken link)", src)      # not a drive problem: no retry
+                if not _wait_for(src):
+                    raise OSError(errno.EIO, "the source drive is not connected")
             _copy_resumable(src, part, RESIL["chunk"] if not RESIL["gentle"] else 256 * 1024)
             os.replace(part, dest)
+            try:
+                os.unlink(part + ".meta")
+            except OSError:
+                pass
             RESIL["bad_run"] = 0
             if RESIL["gentle"] > 0.01:
                 RESIL["gentle"] = RESIL["gentle"] / 2                  # the drive is behaving again: speed back up
@@ -737,14 +755,16 @@ def safe_copy(src, dest):
                 RESIL["events"].append("%s: %s (try %d)" % (os.path.basename(src), e.strerror or e, attempt))
             _say("The drive hiccuped on %s (%s). Pausing %ds, then trying again (%d of %d)" % (os.path.basename(src), e.strerror or e, delay, attempt, RESIL["tries"] - 1))
             _nap(delay)
-    try:
-        if os.path.exists(part):
-            os.unlink(part)
-    except OSError:
-        pass
-    RESIL["bad_run"] += 1
-    if RESIL["bad_run"] >= 3:
-        RESIL["abort"] = True                                  # stop hammering a drive that has stopped answering
+    for junk in (part, part + ".meta"):
+        try:
+            if os.path.exists(junk):
+                os.unlink(junk)
+        except OSError:
+            pass
+    if _transient(last):                                       # only a drive-type error counts towards "the drive stopped answering"
+        RESIL["bad_run"] += 1
+        if RESIL["bad_run"] >= 3:
+            RESIL["abort"] = True                              # stop hammering a drive that has stopped answering
     raise last
 
 
@@ -794,12 +814,18 @@ def place_file(src, dest, move):
     dest = Path(dest)
     part = dest.with_name(dest.name + ".part")
     if move:
+        moved = False
         try:
             os.rename(str(src), str(part))
-            os.replace(part, dest)
-            return
+            moved = True
         except OSError:
             pass
+        if moved:
+            try:
+                os.replace(part, dest)
+            except OSError:
+                safe_move(part, dest)                          # the file is now at 'part': finish from there
+            return
         safe_move(src, dest)
     else:
         safe_copy(src, dest)
@@ -1254,18 +1280,38 @@ def _path_names(path, roots, limit=None):
     return [n for n in names if n]
 
 
+PLACE_FILLER = {"trip", "trips", "holiday", "holidays", "vacation", "vacations", "visit", "photos", "photo", "pictures", "pics", "album", "weekend", "tour",
+                "to", "in", "from", "the", "my", "our", "and", "of", "on", "at", "a", "images", "snaps", "travel", "travels", "adventure", "stay", "week", "days",
+                "day", "break", "getaway", "road", "city", "break", "january", "february", "march", "april", "may", "june", "july", "august", "september", "october",
+                "november", "december", "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec", "spring", "summer", "autumn", "winter", "fall"}
+
+
 def guess_place(path, roots=None, limit=None):
-    """A best-guess place from the folder names: {"place","lat","lon","kind","folder"} or None. Nearest folder wins; a city beats a country."""
+    """A best-guess place from the folder names: {"place","lat","lon","kind","folder"} or None. Nearest folder wins; a city beats a
+    country. A folder only counts when the WHOLE name is about the place (plus years and words like trip, holiday, old), so
+    'Johannesburg 2019' and 'Japan trip' match but 'Paris Hilton', 'Turkey Trot' and "Jordan's birthday" do not."""
     idx = _gaz_index()
     for folder in _path_names(path, roots, limit):
         words = re.findall(r"[a-z0-9]+", _fold(PAREN_RE.sub("", folder)))
-        best = None
-        for n in range(min(_GAZ["maxn"], len(words)), 0, -1):          # the longest name first: "New York" before "York"
-            hits = [idx[k] for k in (" ".join(words[i:i + n]) for i in range(len(words) - n + 1)) if k in idx]
-            if hits:
-                best = next((h for h in hits if h[3] == "t"), hits[0])    # a city beats a country
-                break
-        if best:
+        spans, i = [], 0
+        while i < len(words):
+            hit = None
+            for n in range(min(_GAZ["maxn"], len(words) - i), 0, -1):          # the longest name first: "New York" before "York"
+                h = idx.get(" ".join(words[i:i + n]))
+                if h:
+                    hit = (h, n)
+                    break
+            if hit:
+                spans.append(hit[0])
+                i += hit[1]
+            else:
+                w = words[i]
+                if not (w.isdigit() or w in PLACE_FILLER or w in AFFIX_WORDS):
+                    spans = []                                                  # a word we cannot explain: this is not a place folder
+                    break
+                i += 1
+        if spans:
+            best = next((h for h in spans if h[3] == "t"), spans[0])
             return {"place": best[0], "lat": best[1], "lon": best[2], "kind": "city" if best[3] == "t" else "country", "folder": folder}
     return None
 
@@ -1274,7 +1320,7 @@ _MONTHS = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6, "jul": 7,
            "january": 1, "february": 2, "march": 3, "april": 4, "june": 6, "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12}
 _YMD = re.compile(r"(?<!\d)((?:19|20)\d\d)[-_. /]?(0[1-9]|1[0-2])[-_. /]?(0[1-9]|[12]\d|3[01])(?!\d)")
 _YM = re.compile(r"(?<!\d)((?:19|20)\d\d)[-_. /](0[1-9]|1[0-2])(?!\d)")
-_MY = re.compile(r"(?<![a-z])(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)[a-z]*[\s,._-]*((?:19|20)\d\d)(?!\d)", re.I)
+_MY = re.compile(r"(?<![a-z])(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?![a-z])[\s,._-]*((?:19|20)\d\d)(?!\d)", re.I)
 _YEAR = re.compile(r"(?<!\d)((?:19|20)\d\d)(?!\d)")
 
 
@@ -1290,7 +1336,8 @@ def date_hint_from_name(name, now=None):
             return None
         if y > this_year or t > now + 86400:
             return None
-        return {"year": y, "month": mo, "day": d, "precision": prec, "epoch": int(t)}
+        return {"year": y, "month": mo, "day": d, "precision": prec, "epoch": int(t),
+                "strict": bool(re.fullmatch(r"(photos from |pictures from |photos |pics )?[\W_]*(?:(?:19|20)\d\d(?:[-_. /](?:0[1-9]|1[0-2]))?(?:[-_. /](?:0[1-9]|[12]\d|3[01]))?|[a-z]{3,9}[\s,._-]*(?:19|20)\d\d)[\W_]*", name.strip(), re.I))}
     years = set(_YEAR.findall(name))
     if len(years) > 1 and not _YMD.search(name):
         return None                                           # "2015-2017": a range says nothing precise
@@ -1416,6 +1463,8 @@ def apply_sanity(m, args, ext, d, ex_now, final_taken, row, exif_args, taken):
     cur = final_taken or (_epoch(ex_now.get("date", "")) if ex_now.get("date") and not ex_now["date"].startswith("0000") else None)
     hint = date_hint_from_path(m, getattr(args, "roots", None))
     prob = date_problem(hint, cur, now)
+    if prob in ("year", "month") and not (hint and hint.get("strict")):
+        prob = None                                              # a loose name like "Room 2019 items" is a clue for filling gaps, never for judging a date
     if prob in ("future", "year", "month") and not (fd == "fix" and prob in ("future", "year") and hint):
         row["date_flag"] = prob                                  # reported, not changed
         row["date_note"] = {"future": "this photo's date is in the future, so it is wrong",
@@ -3571,7 +3620,9 @@ def is_burst_group(mem):
     if len(ids) == 1 and "" not in ids:
         return True
     ts_ = [_epoch(m["date"]) for m in mem if m.get("date")]
-    return len(mem) >= 3 and len(ts_) == len(mem) and max(ts_) - min(ts_) <= 3
+    # copies of one photo (original, "(1)", "-edited") are not a burst: frames of a burst have different names
+    fam = {DUP_RE.sub("", re.sub(r"[-_ ]?(edited|copy)$", "", Path(m["path"]).stem.lower())).strip() for m in mem}
+    return len(mem) >= 3 and len(fam) >= 3 and len(ts_) == len(mem) and max(ts_) - min(ts_) <= 3
 
 
 def explain_keeper(fa, fb, rules=None):
@@ -4066,7 +4117,10 @@ def health_scan(roots, deep=False, progress=None, should_stop=None, exif_cap=400
                             fillable += 1
                     else:
                         ep = _epoch(d)
-                        why = date_problem(date_hint_from_path(p, roots), ep) if ep else None
+                        hint_ = date_hint_from_path(p, roots)
+                        why = date_problem(hint_, ep) if ep else None
+                        if why in ("year", "month") and not (hint_ and hint_.get("strict")):
+                            why = None
                         if why == "future":
                             future += 1
                         elif why == "year":

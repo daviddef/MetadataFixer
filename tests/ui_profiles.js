@@ -19,4 +19,7 @@ await pg.click('#gnear');const cust=await pg.evaluate(()=>document.getElementByI
 await pg.click('[data-prof=risky]');const bu=await pg.evaluate(()=>DP.bursts);if(bu!=='best')bad.push('risky bursts='+bu);
 await pg.click('[data-prof=balanced]');
 const reload=await pg.evaluate(()=>localStorage.getItem('profile'));if(reload!=='balanced')bad.push('profile not saved');
+await pg.evaluate(()=>localStorage.setItem('dupeprefs',JSON.stringify({order:['favorite','oldest']})));
+await pg.reload({waitUntil:'domcontentloaded'});await pg.waitForTimeout(600);
+const n=await pg.evaluate(()=>document.querySelectorAll('.dprow').length);if(n<10)bad.push('dupeprefs not normalised: '+n+' rows');
 console.log(JSON.stringify({bad,errs}));await b.close()})();

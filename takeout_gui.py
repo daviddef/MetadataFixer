@@ -30,7 +30,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.03-g"
+VERSION = "2026.10.03-h"
 class Cancelled(Exception):
     pass
 
@@ -42,7 +42,7 @@ def check_cancel():
 
 def stopped_state(what="Nothing further was changed."):
     with LOCK:
-        STATE.update(state="idle", phase=None, cv=None, message="Stopped by you. " + what)
+        STATE.update(state="idle", phase=None, cv=None, cancel=False, message="Stopped by you. " + what)
 
 
 STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}, "recent": [], "clean": {"state": "idle"}, "update": {"state": "idle", "files": []}, "phase": None, "kind": "fix", "cv": None, "cancel": False, "guided": None, "photos": None, "run": None, "version": VERSION, "boot": time.time()}
@@ -3011,6 +3011,7 @@ def tracked(kind, meta, fn, *args):
     fx.reset_resilience(check_cancel, say_retry)
     with LOCK:
         STATE["retry"] = None
+        STATE["cancel"] = False
     try:
         fn(*args)
     except Exception as e:                      # the job functions handle their own errors; this is a safety net
@@ -3041,8 +3042,12 @@ def tracked(kind, meta, fn, *args):
 def start_tracked(kind, body, fn, args):
     opts = body.get("opts") or {k: v for k, v in body.items() if k not in ("roots", "out", "dest", "dry_run", "opts")}
     meta = {"dry_run": bool(body.get("dry_run")), "source": [str(x) for x in body.get("roots", [])],
-            "endpoint": REQ.get("path", ""), "again": (REQ.get("body") if len(json.dumps(REQ.get("body") or {}, default=str)) < 200000 else None),
+            "endpoint": getattr(_REQ, "path", ""), "again": (getattr(_REQ, "body", None) if len(json.dumps(getattr(_REQ, "body", None) or {}, default=str)) < 200000 else None),
             "dest": body.get("out") or body.get("dest") or "", "options": {k: (v if isinstance(v, (bool, int, float, str)) else str(v)) for k, v in opts.items()}}
+    with LOCK:                                       # claim the job slot atomically: two quick clicks must not start two jobs
+        if STATE["state"] in ("scanning", "running"):
+            raise Busy()
+        STATE.update(state="scanning", cancel=False, message="Starting...")
     threading.Thread(target=tracked, daemon=True, args=(kind, meta, fn) + tuple(args)).start()
 
 
@@ -3133,7 +3138,11 @@ def diagnostics_text():
 
 
 RERUNNABLE = {"/api/start", "/api/guided_start", "/api/merge_start", "/api/convert_start", "/api/cleanup_start", "/api/photos_start", "/api/consolidate_start"}
-REQ = {"path": "", "body": {}}      # the request being handled, so a run can be repeated later
+_REQ = threading.local()      # the request being handled by THIS thread, so a run can be repeated later
+
+
+class Busy(Exception):
+    pass
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -3186,7 +3195,7 @@ class Handler(BaseHTTPRequestHandler):
         if org and org.split("://", 1)[-1].rsplit(":", 1)[0].strip("[]") not in ("127.0.0.1", "localhost", "::1"):
             return self._send(403, "{}")
         try:
-            n = min(int(self.headers.get("Content-Length") or 0), 50_000_000)
+            n = max(0, min(int(self.headers.get("Content-Length") or 0), 50_000_000))
             body = json.loads(self.rfile.read(n) or b"{}")
             if not isinstance(body, dict):
                 raise ValueError
@@ -3195,7 +3204,18 @@ class Handler(BaseHTTPRequestHandler):
         self._dispatch(self.path, body)
 
     def _dispatch(self, path, body):
-        REQ.update(path=path, body=body)
+        _REQ.path, _REQ.body = path, body
+        try:
+            self._route(path, body)
+        except Busy:
+            self._send(409, json.dumps({"error": "A job is already running"}))
+        except (TypeError, ValueError, KeyError, AttributeError, IndexError, OSError) as ex:      # odd input must never drop the connection
+            try:
+                self._send(400, json.dumps({"error": "That request could not be understood (%s)" % type(ex).__name__}))
+            except OSError:
+                pass
+
+    def _route(self, path, body):
         if path == "/api/choose":
             pick = choose_zips if body.get("kind") == "zip" else choose_folders
             self._send(200, json.dumps({"paths": pick(body.get("prompt", "Choose folders"))}))
@@ -3464,7 +3484,10 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 rep = STATE["report"]
             if rep:
-                subprocess.run(["open", "-R", rep])
+                try:
+                    subprocess.run(["open", "-R", rep])
+                except OSError:
+                    pass
             self._send(200, "{}")
         else:
             self._send(404, "{}")
@@ -4728,12 +4751,13 @@ function showCleanup(s){
 
 
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));const savedIds=new Set();
+function cleanSum(){const c=$('sumbody').cloneNode(true);c.querySelectorAll('[data-final]').forEach(b=>{b.textContent=b.dataset.final;b.removeAttribute('data-final');b.removeAttribute('data-cu')});return c.innerHTML}
 async function autoSave(){
   for(let i=0;i<40;i++){
     const s=await (await fetch('/api/status')).json();const r=s.run;
     if(r&&r.saved&&s.state==='done'){
       if(savedIds.has(r.id))return;savedIds.add(r.id);
-      const res=await post('/api/save_report',{id:r.id,html:$('sumbody').innerHTML});
+      const res=await post('/api/save_report',{id:r.id,html:cleanSum()});
       const n=$('repnote'),ob=$('orep'),ol=$('olog');
       if(res.ok){n.textContent='Report saved. It is also listed under History.';ob.disabled=false;ol.disabled=false;ob.onclick=()=>post('/api/open_run',{id:r.id,what:'report'}).then(x=>{if(x.error)alert(x.error)});ol.onclick=()=>post('/api/open_run',{id:r.id,what:'log'}).then(x=>{if(x.error)alert(x.error)})}
       else n.textContent='The report could not be saved ('+(res.error||'unknown')+'). The CSV files are still there.';
@@ -4782,7 +4806,7 @@ let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
 // ---- playful touches: count-up numbers, confetti, sparkles ----
 (function(){
   const reduce=window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches;
-  window.countUp=function(root){if(reduce||!root)return;root.querySelectorAll('.tile b').forEach(b=>{const t=b.textContent.trim();if(!/^[\d,]+$/.test(t))return;const n=parseInt(t.replace(/,/g,''),10);if(!n||n<3||b.dataset.cu)return;b.dataset.cu=1;const t0=performance.now(),d=Math.min(1100,400+n*0.4);
+  window.countUp=function(root){if(reduce||!root)return;root.querySelectorAll('.tile b').forEach(b=>{const t=b.textContent.trim();if(!/^[\d,]+$/.test(t))return;const n=parseInt(t.replace(/,/g,''),10);if(!n||n<3||b.dataset.cu)return;b.dataset.cu=1;b.dataset.final=t;const t0=performance.now(),d=Math.min(1100,400+n*0.4);
     (function f(now){const k=Math.min(1,(now-t0)/d),e=1-Math.pow(1-k,3);b.textContent=Math.round(n*e).toLocaleString();if(k<1)requestAnimationFrame(f)})(t0)})};
   let lastBang=0;
   window.confetti=function(){if(reduce||Date.now()-lastBang<4000)return;lastBang=Date.now();const w=document.createElement('div');w.className='confetti';const E=['\u{1F389}','✨','\u{1F4F8}','\u{1F31F}','\u{1F388}','\u{1F496}','\u{1F308}'];
@@ -4798,7 +4822,7 @@ let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
 const DP_RULES={favorite:'A favourite (5 stars) beats one that is not',edited:'An edited version beats an untouched one',resolution:'More pixels (higher resolution) wins',filesize:'A bigger file wins (less compressed)',metadata:'More complete information inside (date, location, caption, title, keywords) wins',album:'A photo already sorted into an album wins',keywords:'More keywords wins',format:'Modern format (HEIC) beats JPEG beats the rest',yearfolder:"A copy in a 'Photos from YYYY' folder wins",oldest:'The older file wins',newest:'The newer file wins'};
 const DP_DEFAULT=['favorite','edited','resolution','filesize','metadata','album','yearfolder'];
 const DP_MUST={name:'The file name must match',datetime:'The date and time taken must match',dimensions:'The width and height must match',format:'The file format must match',size:'The file size must match'};
-let DP=(function(){try{const j=JSON.parse(localStorage.getItem('dupeprefs')||'null');if(j&&Array.isArray(j.order)){j.bursts=j.bursts||'keep';return j}}catch(e){}return {bursts:'keep',order:DP_DEFAULT.concat(Object.keys(DP_RULES).filter(k=>DP_DEFAULT.indexOf(k)<0)),on:DP_DEFAULT.slice(),must:[]}})();
+let DP=(function(){try{const j=JSON.parse(localStorage.getItem('dupeprefs')||'null');if(j&&Array.isArray(j.order)){j.bursts=j.bursts==='best'?'best':'keep';j.on=Array.isArray(j.on)?j.on:DP_DEFAULT.slice();j.must=Array.isArray(j.must)?j.must:[];j.order=j.order.filter(k=>DP_RULES[k]);Object.keys(DP_RULES).forEach(k=>{if(j.order.indexOf(k)<0)j.order.push(k)});return j}}catch(e){}return {bursts:'keep',order:DP_DEFAULT.concat(Object.keys(DP_RULES).filter(k=>DP_DEFAULT.indexOf(k)<0)),on:DP_DEFAULT.slice(),must:[]}})();
 function getDupe(){return {bursts:DP.bursts||'keep',rules:DP.order.filter(k=>DP.on.indexOf(k)>=0&&DP_RULES[k]),must:DP.must.filter(k=>DP_MUST[k])}}
 function saveDP(){try{localStorage.setItem('dupeprefs',JSON.stringify(DP))}catch(e){}renderDP()}
 function renderDP(){document.querySelectorAll('.dpbox').forEach(box=>{const rn='dpb'+Math.random().toString(36).slice(2,6);const open=box.querySelector('details')&&box.querySelector('details').open;

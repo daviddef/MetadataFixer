@@ -845,12 +845,89 @@ def t_bursts_and_compare_rules():
     assert r["similar_n"] == 0 and r["keep_summary"]["strict_kept_both"] == 1 and r["merged_files"] == 2, (r["similar_n"], r["keep_summary"], r["merged_files"])
 
 
+def t_qa_hunt_regressions():
+    import errno, urllib.request, urllib.error
+    # Stop must not poison the next job
+    g.STATE["cancel"] = True; g.stopped_state(); assert g.STATE["cancel"] is False
+    # copies of one photo (original, (1), -edited) are not a "burst"
+    mem = [{"path": "/x/a.jpg", "date": "2020:01:01 10:00:00", "burst": ""}, {"path": "/x/a (1).jpg", "date": "2020:01:01 10:00:00", "burst": ""},
+           {"path": "/x/a-edited.jpg", "date": "2020:01:01 10:00:00", "burst": ""}]
+    assert not fx.is_burst_group(mem)
+    assert fx.is_burst_group([{"path": "/x/IMG_%d.jpg" % i, "date": "2020:01:01 10:00:0%d" % (i % 3), "burst": ""} for i in range(3)])
+    # a missing file is not a drive fault: no retries, no abort
+    d = WORK / "enoent"; d.mkdir()
+    fx.reset_resilience(None, None); fx.RESIL["delays"] = (30,) * 6
+    t0 = time.time()
+    for i in range(4):
+        os.symlink(str(d / "nothing"), str(d / ("broken%d" % i)))
+        try:
+            fx.safe_copy(d / ("broken%d" % i), d / ("out%d" % i)); assert False
+        except FileNotFoundError:
+            pass
+    assert time.time() - t0 < 3 and not fx.RESIL["abort"] and fx.RESIL["retries"] == 0
+    fx.reset_resilience(None, None)
+    # a stale .part from other data is never resumed
+    src = d / "src.bin"; src.write_bytes(os.urandom(200000))
+    (d / "dst.bin.part").write_bytes(os.urandom(150000))
+    fx.RESIL["chunk"] = 1000
+    try:
+        fx.safe_copy(src, d / "dst.bin")
+    finally:
+        fx.RESIL["chunk"] = 4 << 20
+    assert (d / "dst.bin").read_bytes() == src.read_bytes() and not (d / "dst.bin.part.meta").exists()
+    # folder names: whole-name matches only
+    for bad in ("Jordan's birthday", "Paris Hilton", "Turkey Trot", "Perth Amboy", "Sydney Pollack", "Orlando Bloom", "Florence and the machine"):
+        assert fx.guess_place("/lib/%s/a.jpg" % bad, ["/lib"]) is None, bad
+    for good in ("Johannesburg 2019", "Japan trip 2025", "Japan 2025-old", "New York weekend", "South Africa"):
+        assert fx.guess_place("/lib/%s/a.jpg" % good, ["/lib"]), good
+    assert fx.date_hint_from_name("Marathon 2019")["month"] is None and fx.date_hint_from_name("Mayfair 2019")["month"] is None
+    assert fx.date_hint_from_name("Room 2019 items")["strict"] is False and fx.date_hint_from_name("2019")["strict"] and fx.date_hint_from_name("Photos from 2019")["strict"]
+    base = WORK / "loose"; jpeg(base / "Room 2019 items" / "a.jpg", seed=41)
+    subprocess.run(["exiftool", "-q", "-overwrite_original", "-AllDates=2021:05:05 10:00:00", str(base / "Room 2019 items" / "a.jpg")], check=True)
+    g.run_job([str(base)], str(WORK / "loose_out"), False, False, folder_dates="fix", guess_gps=True); state_ok()
+    assert exif(WORK / "loose_out" / "Room 2019 items" / "a.jpg", "DateTimeOriginal")[0].startswith("2021:05:05"), "a loose folder name overwrote a real date"
+    # HTTP: double start, odd bodies
+    srv = g.ThreadingHTTPServer(("127.0.0.1", 0), g.Handler); port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    tok = urllib.request.urlopen("http://127.0.0.1:%d/" % port).read().decode().split("X-Backstory-Token':'")[1].split("'")[0]
+    def post(path, body, raw=None):
+        rq = urllib.request.Request("http://127.0.0.1:%d%s" % (port, path), data=raw if raw is not None else json.dumps(body).encode(), headers={"X-Backstory-Token": tok})
+        try:
+            with urllib.request.urlopen(rq, timeout=20) as r:
+                return r.status, r.read()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read()
+        except Exception as e:
+            return -1, str(e).encode()
+    try:
+        big = WORK / "dstart"
+        for i in range(30):
+            jpeg(big / ("p%d.jpg" % i), seed=100 + i)
+        results = []
+        def go():
+            results.append(post("/api/start", {"roots": [str(big)], "out": str(WORK / "dstart_out"), "dry_run": True})[0])
+        ths = [threading.Thread(target=go) for _ in range(8)]
+        [t.start() for t in ths]; [t.join() for t in ths]
+        assert results.count(200) == 1 and results.count(409) == 7, results
+        for _ in range(100):
+            if g.STATE["state"] in ("done", "error", "idle"):
+                break
+            time.sleep(0.2)
+        for path, body in (("/api/start", {"roots": 5, "opts": []}), ("/api/photos_start", {"opts": 3}), ("/api/similar_scan", {"roots": 5}),
+                           ("/api/similar_apply", {"items": 5}), ("/api/undo_info", {"id": []}), ("/api/upload_status", {"library": 7})):
+            code, out = post(path, body)
+            assert code in (200, 400, 404, 409) and (not out or out[:1] in (b"{", b"[")), (path, code, out[:80])
+        code, _ = post("/api/history", None, raw=b"[1,2]"); assert code == 400
+    finally:
+        srv.shutdown()
+
+
 ORDER = ["t_fix_copy", "t_fix_namedate", "t_fix_inplace", "t_fix_move", "t_fix_dryrun_changes_nothing", "t_fix_zip", "t_zip_resume", "t_zip_needs_dest", "t_zip_corrupt",
          "t_edited_policies", "t_cancel_mid_run", "t_unreadable_and_zero", "t_dest_not_writable", "t_exiftool_missing", "t_low_disk_zip", "t_assess_and_recommend",
          "t_assess_multi_and_photoslib", "t_guided_end_to_end", "t_guided_no_dest", "t_merge_variants", "t_merge_refuses_unsafe", "t_merge_move_in_place", "t_cleanup_all",
          "t_cleanup_refuses_broad", "t_consolidate", "t_convert", "t_convert_stop", "t_similar_apply_undo", "t_health_and_formats", "t_undo_copy_run", "t_photos_plan_and_run",
          "t_photos_applescript_injection_safe", "t_photos_errors", "t_monitor_rules", "t_monitor_job_paste", "t_compare_and_near", "t_diagnostics", "t_history_report",
-         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs", "t_audit_regressions", "t_dates_and_places", "t_resilient_copy", "t_rerun_over_http", "t_keeper_rules_and_matching", "t_bursts_and_compare_rules"]
+         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs", "t_audit_regressions", "t_dates_and_places", "t_resilient_copy", "t_rerun_over_http", "t_keeper_rules_and_matching", "t_bursts_and_compare_rules", "t_qa_hunt_regressions"]
 if __name__ == "__main__":
     only = sys.argv[1:]
     for n in ORDER:
