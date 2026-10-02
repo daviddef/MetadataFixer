@@ -2641,7 +2641,59 @@ SIMILAR_EXT = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp", ".tif", ".tif
 SIMILAR_SKIP_DIRS = {"_similar_set_aside", "_duplicates", ORIGINALS_DIR, "_merge_conflicts", "_unrecognised"}
 
 
+HASH_CACHE = {"path": None, "map": None, "lock": threading.Lock()}
+
+
+def set_hash_cache(path):
+    """Where fingerprints are remembered between runs (a rescan of an unchanged library then takes seconds)."""
+    HASH_CACHE["path"], HASH_CACHE["map"] = str(path), None
+
+
+def _hash_cache_load():
+    if HASH_CACHE["map"] is None:
+        m = {}
+        try:
+            with open(HASH_CACHE["path"], encoding="utf-8") as fh:
+                for line in fh:
+                    try:
+                        k, v = json.loads(line)
+                        m[k] = v
+                    except (ValueError, TypeError):
+                        continue
+        except (OSError, TypeError):
+            pass
+        HASH_CACHE["map"] = m
+    return HASH_CACHE["map"]
+
+
 def dhash_image(path):
+    """dhash_image_raw with a memory of earlier answers: same path, size and modified time means the same picture."""
+    if not HASH_CACHE["path"]:
+        return dhash_image_raw(path)
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    key = "%s|%d|%d" % (path, st.st_size, int(st.st_mtime))
+    with HASH_CACHE["lock"]:
+        m = _hash_cache_load()
+        if key in m:
+            return m[key]
+    h = dhash_image_raw(path)
+    with HASH_CACHE["lock"]:
+        m[key] = h
+        try:
+            os.makedirs(os.path.dirname(HASH_CACHE["path"]), exist_ok=True)
+            if os.path.exists(HASH_CACHE["path"]) and os.path.getsize(HASH_CACHE["path"]) > 60_000_000:
+                os.unlink(HASH_CACHE["path"])               # keep the cache small
+            with open(HASH_CACHE["path"], "a", encoding="utf-8") as fh:
+                fh.write(json.dumps([key, h]) + "\n")
+        except OSError:
+            pass
+    return h
+
+
+def dhash_image_raw(path):
     """A 64-bit fingerprint of how a picture looks (a 'difference hash'); similar pictures give fingerprints that differ
     in only a few bits. Returns an int, or None if the picture cannot be read."""
     def run(cmd, data=None):

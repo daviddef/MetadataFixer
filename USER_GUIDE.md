@@ -107,6 +107,15 @@ Add every library to the Source list: Takeout zip files, folders, and even a Pho
 
 For Google Takeout sources the dates, locations and captions are restored from the `.json` files; for other libraries the files are copied as they are (with dates from file names where a date is missing). A **Photos library** is only ever read: its photos are copied out, but its albums, edits and Photos-only metadata are not carried over. To keep those, export from Photos first (File > Export).
 
+### Comparing two libraries ("how alike are they?")
+
+Open the **Merge** tab and use **Compare libraries**. Pick two libraries (folders, a Photos library or zips) and Backstory tells you, without changing anything:
+- how alike they are, as a percentage;
+- which photos are in both, which are only in the first and which are only in the second;
+- photos that are **nearly the same** (the same picture saved at a different size or quality) and not just byte-for-byte copies, with small thumbnails so you can see the difference.
+
+When you then merge, tick **Also skip near-identical pictures** to keep only the best version of each. This option is off by default, because it is a judgement about pictures: look at the comparison first.
+
 To merge two **folders** without any metadata work, the **Merge** tab does that, with control over name clashes.
 
 ## Guided: Fix my Takeout (the easy way)
@@ -186,6 +195,22 @@ What it looks for:
 **Statistics.** Library size by file type, photos and videos by year, the biggest folders and files, RAW photos (how many have a JPEG or HEIC with the same name, and how much space each takes; Backstory never deletes RAW files), Live Photos and the most common cameras.
 
 **Check again automatically.** Choose every hour, 6 hours or day. This runs only while Backstory is open and never while another job is running. A health check that runs in the background all the time, even when the app is closed, is on the roadmap.
+
+## Full diagnostics (Health tab)
+
+**Run full diagnostics** gives one verdict ("healthy", "needs attention" or "problem") in plain words. It combines four checks and shows what to do next for each:
+1. **Library health**: empty, wrongly named and duplicate files, older formats, folders that look alike.
+2. **Photos upload progress**: whether Apple Photos is progressing or stuck, with time left. Uploads are matched by file name **and** size, so a different picture with the same name is never counted as uploaded.
+3. **Photos and iCloud logs**: problems in the system logs, explained with fixes.
+4. **This Mac**: free space, battery, power mode and heat.
+
+Nothing is changed by diagnostics.
+
+## Speed and safety notes
+
+- A repeat scan of an unchanged library is fast: Backstory remembers how each picture looks.
+- A zip with a damaged or password-protected file inside no longer stops the run: that file is listed in the report, the rest carry on, and that zip is not marked as finished so you can run it again.
+- The app only answers requests from its own window.
 
 ## Storyboard: before and after
 
