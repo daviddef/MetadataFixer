@@ -1,10 +1,28 @@
-# MetadataFixer user guide
+# Metadata Fixer user guide
 
-Restores the real date, location, description and people to photos and videos exported from Google Photos with Google Takeout.
+Restores the real date, location, caption and people to photos and videos exported from Google Photos with Google Takeout, and helps you tidy the result. Free. Everything runs on your own computer; nothing is uploaded.
+
+Questions or problems: **thestocksoup@gmail.com** (see [Support](#support)).
+
+## Quick start
+
+1. **Back up first.** Keep your original Takeout zip files (or folders) somewhere safe. Metadata Fixer never changes your zips and, by default, only makes copies, but a backup is always the right first step.
+2. Open the app and go to the **Guided** tab.
+3. In the bar at the top, press **Add zip files...** (or **Add folders...**) and choose your Takeout. Then choose a **Destination**: a new, empty folder on a drive with enough free space.
+4. Press **Check my files**. The app looks at your real files and recommends what to do and why.
+5. Press **Preview the recommended plan**. Nothing is changed in a preview. Read the summary.
+6. If you are happy, untick **Preview only** and press **Fix my Takeout**. Your finished library appears in the Destination. Your originals are untouched.
+
+## Before you start: important
+
+- **You are responsible for your files.** Keep backups. See [Safety, limitations and disclaimer](#safety-limitations-and-disclaimer).
+- **Preview first.** Every tab starts with **Preview only** ticked. A preview shows what would happen and changes nothing.
+- Options marked with a warning sign can delete, overwrite, rename or merge things. Read them before you tick them.
+- If something looks wrong, press **Stop**. Then check the report before running anything again.
 
 ## Why you need this
 
-A Takeout export gives you photos and videos plus a `.json` file for each one. The date, GPS location, description and tagged people live **only in the `.json`**, not in the photo, and the `.json` can be in a different folder or a different `Takeout N` batch from its photo. This tool finds the right `.json` for every file and writes the information back.
+A Takeout export gives you photos and videos plus a `.json` file for each one. The date, GPS location, caption and tagged people live **only in the `.json`**, not in the photo, and the `.json` can be in a different folder or a different zip from its photo. This tool finds the right `.json` for every file and writes the information back.
 
 ## Plain-language glossary
 
@@ -15,47 +33,61 @@ A Takeout export gives you photos and videos plus a `.json` file for each one. T
 - **Replace / overwrite:** off means "only fill in what is missing"; on means "use Google's version even if the photo already has something".
 - **Live Photo:** an iPhone photo with a 2-3 second video. Takeout splits it into a still and a video; the pairing option links them again.
 - **Duplicate:** a byte-for-byte identical copy of the same file.
+- **Destination:** the folder where your finished, fixed copies are created.
 
 ## What you need
 
-- A Mac (the app's folder pickers use macOS; the command line also works on Linux/Windows)
-- Python 3.8+ (`python3 --version`)
-- exiftool: `brew install exiftool`
-- All your Takeout zips **extracted** into folders (the tool reads folders, not zips)
-- Free disk space roughly equal to your photo library if you use an output folder (recommended)
+- **The Mac app (recommended):** download the `.dmg` from the Releases page, drag the app to Applications and open it. ExifTool and ffmpeg are included.
+- **Or run from the source files:** a Mac (or Linux/Windows for the command line), Python 3.8+, ExifTool (`brew install exiftool`) and, for video conversion, ffmpeg (`brew install ffmpeg`).
+- Free disk space: for zip files, about twice your largest single zip while it is processed, plus room for the finished library. The Guided checklist shows what you have.
 
-## Updates
+## Install and updates
 
-The app checks the MetadataFixer repository for a newer version when it starts, every time you load or reload the page, and every 30 minutes while it is open. You can also press **Check for updates** next to the version number in the header, which says "Up to date" or shows the update banner. If there is one, a banner appears at the top of the page listing the changed files. Press **Update now** and the app downloads the two program files, checks they are valid, keeps your old copies as `takeout_gui.py.bak` and `takeout_fix_metadata.py.bak`, restarts itself and reloads the page. It will not update while a job is running, and it never changes anything until you press the button. Your reports and output folders are untouched.
+**Mac app:** the app checks for a newer release when it starts and shows a banner with a download link. Download the new version and replace the old app in Applications.
 
-- Needs an internet connection. If you are offline, nothing happens and the app works as normal.
-- To skip the check, start it with `python3 takeout_gui.py --no-update-check`.
-- If you ever want to go back, copy the `.bak` files over the current ones.
-- Only these two files, from `https://raw.githubusercontent.com/daviddef/MetadataFixer/main/`, are downloaded.
-
-## Install
-
+**From source:**
 ```
 git clone https://github.com/daviddef/MetadataFixer ~/MetadataFixer
+cd ~/MetadataFixer
+python3 takeout_gui.py
 ```
-
-Or download `takeout_fix_metadata.py` and `takeout_gui.py` from the repo into one folder. The two files must be from the same version.
+A page opens at `http://127.0.0.1:8765`. It is served only on your own computer. The app checks for a newer version when it starts, when you reload the page, and every 30 minutes; press **Check for updates** next to the version number to check now. When an update is available a banner lists the changed files. **Update now** downloads them, checks they are valid, keeps your old copies as `.bak`, restarts, and reloads the page. It never updates while a job is running and never without you pressing the button. To skip the check: `python3 takeout_gui.py --no-update-check`. To go back, copy the `.bak` files over the current ones.
 
 ## Reading the screen
 
-To keep each tab uncluttered, the longer explanations sit behind small **i** buttons. Hover over one (or tap it on a phone or tablet, tap again to close) to read it. Each tab also has a one-line description under its title, and the full introduction behind the **i** next to the title. Warnings that matter, such as "(empties the source folders)", stay visible in the option's own label.
+The longer explanations sit behind small **i** buttons: hover over one (or tap it on a phone) to read it. Each tab has a one-line description under its title. Warnings that matter, such as "(empties the source folders)", stay visible.
 
-## Layout
-
-The app has six tabs: **Guided** (the easy way), **Fix** (metadata), **Merge** (folders) (also sorts Takeout folders and removes duplicates), **3 Clean up** (`.json` files, junk, names, empty folders) **Convert** (videos) and **History**.
+The app has seven tabs: **Guided** (the easy way), **Fix** (metadata), **Merge** (folders), **Clean up** (`.json` files, junk, names, empty folders), **Convert** (videos), **History** (past runs and reports) and **Help** (this guide, support and the disclaimer).
 
 ## The warning sign
 
-Options marked with a warning sign (⚠️) can delete, overwrite, merge or empty things. Everything else is low risk. Every tab has **Preview only** as its first option, ticked by default.
+Options marked with a warning sign (⚠️) can delete, overwrite, merge, rename or empty things. Everything else is low risk. Every tab has **Preview only** as its first option, ticked by default.
 
 ## Stopping a job
 
 Every job (preview or real) has a **Stop** button in the status bar at the top. Stopping is safe: files already handled stay done, nothing is left half-written, and running the same settings again carries on where it stopped. Stopping a preview changes nothing.
+
+## Choosing your folders (once, for every tab)
+
+The title block at the top holds two rows that every tab uses, so you only choose them once:
+
+- **Source:** the Takeout zip files or folders to work on. Press **Add zip files...** or **Add folders...** (hold Cmd in the Finder dialog to pick several), or **Edit list** to type or paste one path per line, or drag items onto the title block. Each item shows as a chip; press the **x** to remove it.
+- **Destination:** where the fixed, sorted or merged copies go. Type or paste a path, or press **Choose...**. Guided, Fix and Merge use it; the other tabs ignore it.
+- Both are remembered in your browser. The tabs and progress bar stay frozen at the top as you scroll.
+- **Order matters in one place:** when you merge in place, everything goes into the **first** source folder. Use **Edit list** to reorder.
+- Because the same list is used everywhere, check it before a destructive step: Clean up and the confirmation prompts list the folders they will act on.
+
+## Check my files (recommendations)
+
+On the **Guided** tab, **Check my files** reads your Source (zip files or folders) and tells you what it found and what it suggests, based on your real data:
+
+- how many photos and videos you have, and how many have a Google `.json` (so how much can be restored);
+- a sample of your files, to estimate how many lack a date or location;
+- exact duplicates and the space they take;
+- Live Photo pairs, files with no or a wrong file extension, old video formats, junk files and empty folders;
+- whether your Destination has enough free space, and any zip files that look incomplete.
+
+It then lists recommendations, each with the numbers behind it and a risk level, and offers **Apply recommended settings** or **Preview the recommended plan**. Checking changes nothing and takes a short time even for large libraries because it reads zip tables of contents instead of unpacking them. The recommendations are suggestions, not guarantees: always read the preview.
 
 ## Guided: Fix my Takeout (the easy way)
 
@@ -63,7 +95,7 @@ The **Guided** tab does the whole job in one go, in the safe order, for people w
 
 1. In the bar at the top, add your Takeout **zip files** (press **Add zip files...**, or **Add folders...** and choose the folder that holds the zips) or the folders you already unzipped.
 2. Choose a **Destination**: where the finished library will be created. Your originals are never changed.
-3. Leave **Preview only** ticked and press **Fix my Takeout**. You get a summary of what would happen.
+3. (Recommended) Press **Check my files** first and follow its suggestions. Then leave **Preview only** ticked and press **Fix my Takeout**. You get a summary of what would happen.
 4. Untick Preview and run it for real.
 
 What it does, in order:
@@ -72,6 +104,7 @@ What it does, in order:
 - Optionally **converts old videos to MP4** afterwards (not part of a preview). The old videos go into an `_original_videos` folder.
 
 You see which step is running in the status bar, and **Stop** works at any time. If a run is interrupted, run it again with the same settings and it carries on.
+
 
 ## Takeout zip files
 
@@ -84,6 +117,7 @@ You do not need to unzip Google Takeout downloads. Add the `.zip` files (or the 
 - Zips that finished are remembered in the Destination, so an interrupted run carries on with the remaining zips.
 - Limits: Live Photo pairing works when the still and its video are in the same zip (Google normally keeps them together). The other tabs (Merge, Clean up, Convert) work on folders, not zip files.
 
+
 ## Reports, logs and history
 
 Every run is recorded automatically:
@@ -95,60 +129,33 @@ Reports and logs are saved in `Documents/Metadata Fixer Reports`, one folder per
 
 On the Guided tab, a short **checklist** shows whether your Takeout and Destination are set, whether the Destination has enough free space for your zip files, and whether ExifTool and ffmpeg are installed.
 
+
 ## Dates from file names
 
 Photos with no Google `.json` and no date of their own can get a date from their name: `IMG_20190704_123456.jpg`, `PXL_20210512_153045123.jpg`, `VID_20180102_030405.mp4`, `Screenshot 2019-07-04 at 12.34.56.png`, `IMG-20190704-WA0001.jpg`. This is ticked by default on Guided and Fix. It only fills in a **missing** date and never changes one that is already there. The time is used as written in the name; if the name has only a date, noon is used. The summary shows how many dates came from names.
 
-## Choosing your folders (once, for every tab)
 
-The title block at the top holds two rows that every tab uses, so you only choose them once:
+## The Fix tab (all the options)
 
-- **Source:** the folders to work on. Press **Add folders...** (hold Cmd in the Finder dialog to pick several), or **Edit list** to type or paste one path per line, or drag folders onto the title block. Each folder shows as a chip; press the **x** on a chip to remove it.
-- **Destination:** where the fixed, sorted or merged copies go. Type or paste a path, or press **Choose...**. Fix and Merge use it; the other tabs ignore it. Leave it empty to fix files in place (Fix), or, with Move ticked, to merge everything into the first source folder (Merge).
-- Both are remembered in your browser. Under the title block, the tabs and the progress bar stay frozen at the top of the window as you scroll.
-- Each tab shows which folders and destination it is using.
-- **Order matters in one place:** when you merge in place, everything goes into the **first** source folder. Use **Edit list** to reorder.
-- Because the same list is used everywhere, check it before a destructive step: the Clean up tab and the confirmation prompts list the folders they will act on.
+Use **Fix** when you want full control instead of Guided.
 
-## Using the app (recommended)
-
-```
-cd ~/MetadataFixer
-python3 takeout_gui.py
-```
-
-A page opens at `http://127.0.0.1:8765`. It runs only on your computer. Leave Terminal open while you use it; press Ctrl+C there to quit.
-
-### 1. Add your Takeout folders
-Use the **Folders bar** at the top (see above). Add **every** Takeout batch. A photo in one batch can find its `.json` in another, so the more batches you include, the fewer files are left unmatched. Dropping folders from Finder onto the box works only if your browser passes the path; otherwise use the button.
-
-### 2. Choose a destination
-Set the **Destination** in the header (a new empty folder is best). Fixed copies and reports are saved there, and your Takeout originals are not touched. If you leave it empty, files are edited in place (you are asked to confirm).
-
-### 3. Pick options
 | Option | Default | What it does |
 |---|---|---|
-| Preview only (dry run) | **on** | Matches files and reports counts. Changes nothing. |
+| Preview only | **on** | Matches files and reports counts. Changes nothing. |
 | Remove exact duplicates | **on** | Skips byte-identical copies of the same photo (repeated across Takeouts or albums); keeps the one in `Photos from YYYY`. |
-| Move instead of copy | off | Moves files into the output folder instead of copying. Saves disk space but empties your Takeout folders as it goes. |
-| Re-pair Live Photos | off | Re-links iPhone Live Photo videos to their still (see below). |
-| When a photo already has a date and Google's is different | **Keep the earlier date** | Google sometimes records the day a photo was uploaded or re-saved, which is later than when it was taken, so the earlier of the two wins. Other choices: always keep the photo's own date, or always use Google's. A photo with no date gets Google's. |
-| Replace location and caption already stored in the photo (overwrite) | on | Off: only fill in a missing location or caption. On: replace a different one with Google's. |
+| Move instead of copy | off | Moves files into the Destination instead of copying. Saves space but empties your source folders as it goes. Not available for zip files. |
+| Re-pair Live Photos | on | Re-links iPhone Live Photo videos to their still (see Live Photos). |
+| Replace location and caption already stored in the photo | on | Off: only fill in a missing location or caption. On: replace a different one with Google's. |
+| Use the date in the file name when there is no .json | on | Fills in a missing date from the name. Never changes an existing date. |
+| When a photo already has a date and Google's is different | **Keep the earlier date** | See How dates are decided. |
 
-### 4. Run a preview first
-Leave Preview on and press **Start**. Read the summary (below). If **No JSON found** is high, add more Takeout folders and preview again.
-
-### 5. Run it for real
-Untick **Preview only**. Because Google's exports often carry wrong dates, tick **Replace location and caption already stored in the photo** too. Press **Start**. Large libraries take a while; the progress bar and live counts show how far along it is.
-
-### 6. Check the result
-Use **Show reports in Finder**, and spot-check a few files:
+Always run a preview first and read the summary. If **No JSON found** is high, add more Takeout zips or folders and preview again. Spot-check a few files after a real run:
 ```
 exiftool -DateTimeOriginal -GPSPosition -ImageDescription "/path/to/output/Photos from 2012/DSC_2865.JPG"
 ```
-Keep your Takeout folders until you are happy with the output.
+Keep your Takeout until you are happy with the output.
 
-## Restructuring: copy vs move
+## Copy or move (Fix tab)
 
 With an output folder the tool **builds a new, merged library there and leaves your Takeout folders untouched** (a second copy, so you need roughly as much free space again). Tick **Move** to relocate files instead; it uses no extra space but empties the Takeout folders, so have another backup first.
 
@@ -230,7 +237,7 @@ Takeout splits a Live Photo into a still (`IMG_1234.HEIC`) and a video (`IMG_123
 - Works only where the still still has its Apple ID. Others are counted as "Still has no Apple ID" or "No matching still" and remain separate videos.
 - Check a few pairs in the Photos app after importing.
 
-## Convert old videos to MP4 (tab 4)
+## Convert old videos to MP4 (Convert tab)
 
 The **Convert videos** tab turns older video formats into `.mp4`, which plays on every phone, TV and app, and is usually smaller. It needs **ffmpeg** (`brew install ffmpeg`).
 
@@ -257,9 +264,9 @@ How it works:
 - **Default types:** every type is ticked except `.mov` (which is often an iPhone Live Photo video or a modern phone clip). Your tick boxes are remembered.
 - **Sizes:** a preview shows how many videos (and how much space) would be re-wrapped versus re-encoded, and the largest ones; the exact saving can only be known after converting. During a real run a **space saved so far** tile updates as each video finishes. The final summary shows total size **before, after and saved** (with a percentage), a breakdown by method (re-wrapped vs re-encoded) and by file type, and a **Biggest savings** table. Re-wrapped videos stay about the same size; re-encoded ones usually shrink a lot. The saving is real free space only if the originals are deleted; if you keep them or move them to `_original_videos`, they still use disk space until you delete them.
 
-Suggested order: run Part 1 (it creates the Live Photo `.MOV` files), then tab 4 for your other videos.
+Suggested order: run Fix first (it creates the Live Photo `.MOV` files), then Convert for your other videos.
 
-## Merge folders (tab 2)
+## Merge folders (Merge tab)
 
 Brings two or more folders together into one, for any folders, including Google Takeout exports (this tab replaces the old *Sort* tab). Folders with the same name at any depth are merged, their files are combined, identical files are kept once, and different files with the same name are handled the way you choose.
 
@@ -277,7 +284,7 @@ Choices:
 
 Safety: sources that overlap, or a destination inside a source, are refused. App and library bundles (such as `.photoslibrary`) are moved as one item. Invisible system files are left out. An interrupted merge can be run again with the same settings: files already placed are skipped. A CSV of every file and where it went is saved on your Desktop; the summary shows each source folder, the folders that came together, and every name clash.
 
-## Clean up (tab 3)
+## Clean up (Clean up tab)
 
 One tab, five optional tasks. Tick what you want; they always run in this order, so earlier steps leave work for later ones (for example, deleting cache files leaves folders empty, which the last step removes). Use **Preview only** first: it lists everything that would happen and changes nothing.
 
@@ -301,7 +308,7 @@ Safety:
 
 ```
 python3 takeout_fix_metadata.py "/path/to/Takeouts" --dry-run
-python3 takeout_fix_metadata.py "/path/to/Takeouts" --out "/path/to/Fixed" --overwrite --pair-live
+python3 takeout_fix_metadata.py "/path/to/Takeouts" --out "/path/to/Fixed" --overwrite --pair-live --dedupe --name-dates
 ```
 
 | Flag | Meaning |
@@ -309,30 +316,74 @@ python3 takeout_fix_metadata.py "/path/to/Takeouts" --out "/path/to/Fixed" --ove
 | `--dry-run` | Match and report only |
 | `--out DIR` | Write fixed copies here instead of editing in place |
 | `--overwrite` | Replace existing EXIF values |
+| `--date-policy` | `earlier` (default), `photo` or `google` |
 | `--pair-live` | Re-pair Live Photos (needs `--out`) |
 | `--dedupe` | Skip byte-identical duplicate files |
+| `--name-dates` | Use a date in the file name when a file has no `.json` and no date |
 | `--move` | Move into `--out` instead of copying (needs `--out`) |
 | `--report FILE` | Where to save the CSV (default `takeout_report.csv`) |
 | `--workers N` | Parallel workers (default 4) |
 
-The command line takes one folder; put your batches under a common parent folder, or use the app for several.
+The command line takes one folder (not zip files); put your batches under a common parent folder, or use the app.
 
 ## Troubleshooting
 
 | Problem | Fix |
 |---|---|
-| "exiftool not found" | `brew install exiftool` |
-| Lots of **No JSON** | Add the other Takeout batches and preview again. If *JSON with no photo* is also zero, the missing sidecars were not in your export |
-| Dates look wrong by some hours | Timezone: Google's times are UTC |
-| **Kept** counts are high | Tick **Replace information already stored in the photo** |
+| "exiftool not found" | `brew install exiftool` (the Mac app includes it) |
+| Lots of **No JSON** | Add the other Takeout zips or folders and preview again. If *JSON with no photo* is also zero, the missing info files were not in your export |
+| Dates look wrong by some hours | Time zone: Google's times are UTC |
+| **Kept** counts are high | Tick **Replace location and caption already stored in the photo** |
 | Folder buttons do nothing | Type or paste the paths instead |
 | `Input/output error` (Errno 5) on a file | The drive could not read or write that file (a failing drive, loose cable or power, or a damaged file). The tool skips the file, records it as `copy-error` in the report and carries on. Check the drive in Disk Utility (First Aid), try copying that file in Finder, then run the same job again |
-| A run stopped or was interrupted | Run it again with the **same output folder**. Files already placed are skipped (the tool keeps a hidden progress log (`.metadatafixer_fix.jsonl`, `.metadatafixer_sort.jsonl` or `.metadatafixer_merge.jsonl`, one per tab) in the output folder, and for sorting it also recognises identical files already there), so you get no `_1` copies |
-| `exiftool-error` rows | See the `detail` column in the report |
+| A run stopped or was interrupted | Run it again with the **same Destination**. Files and zips already finished are skipped (the tool keeps hidden progress logs in the Destination), so you get no `_1` copies |
+| `exiftool-error` rows | See the `detail` column in the report and the Problems table |
 | Live Photo not recognised in Photos | The still probably lost its Apple ID; see the Live Photos section |
+| "Not enough free space" | Free some space or choose another Destination. For zips you need about twice your largest zip while it is processed |
+| A zip "could not be read" | It is probably incomplete or damaged: download it again from Google Takeout |
+| The app does not open on a Mac ("unidentified developer") | Right-click the app, choose Open, then Open. Release builds are signed and notarized; unsigned test builds are not |
 
-## Safety
+If you are stuck, open **History**, press **Copy diagnostic info**, and email it to **thestocksoup@gmail.com**.
 
-- Use an output folder so originals stay untouched.
-- Preview first; nothing is changed until you untick Preview.
-- If you edit in place, work on a copy.
+## Safety, limitations and disclaimer
+
+### Staying safe
+- **Back up before you start.** Keep your original zip files or folders until you have checked the result.
+- Use a **Destination** so originals stay untouched. Zip files are never modified.
+- **Preview first.** Nothing is changed until you untick Preview only.
+- Read the **warning sign (⚠️)** options before ticking them. Deleting `.json` files, junk, empty folders, original videos, and **Move** cannot be undone from inside the app.
+- Spot-check a few results in your photo app before deleting anything.
+- If you edit files in place (no Destination), work on a copy.
+
+### What this tool cannot do
+- It is **not a backup tool** and does not check that your photos are safe elsewhere.
+- It works from a Google Takeout export. It cannot read Google Photos directly, upload anything, or recover photos that are not in your export.
+- It writes metadata only to formats ExifTool can write. Some video formats (AVI, MKV, WMV, MPG, MTS and similar) only get their file modified time fixed.
+- Matching a photo to its `.json` uses name rules and is not perfect. Rare cases may match the wrong file or not match at all; the report shows how each file was matched.
+- Duplicate removal compares file contents. Album membership is not preserved when a duplicate is skipped.
+- Live Photo pairing needs the still to still have its Apple ID, and (in zip mode) both parts in the same zip.
+- Times from Google are UTC; the tool cannot know your local time zone for a photo.
+- Video conversion that re-encodes is lossy by nature. Quick re-wraps are not. Estimates of sizes and times are rough.
+- Date-from-filename is a guess based on the name, used only when there is no other date.
+- It has been tested mainly on macOS with typical Takeout exports. Unusual drives, network shares, very old or very new OS versions, damaged files, and very large libraries may behave differently.
+- It does not guarantee that your photo app (Apple Photos, Lightroom, etc.) will display or import the results the way you expect.
+
+### Disclaimer
+Metadata Fixer is free software provided **"as is"**, without warranty of any kind, express or implied, including but not limited to merchantability, fitness for a particular purpose, accuracy, and non-infringement. **You use it entirely at your own risk.**
+
+It changes, copies, moves, renames and (when you choose the relevant options) deletes files. You are responsible for your own backups and for checking what each option does before you run it, including by using Preview. **To the maximum extent permitted by law, the author and contributors are not liable for any loss or damage of any kind arising from the use of, or inability to use, this software**, including but not limited to loss, corruption or alteration of photos, videos, metadata or other data, loss of albums or organisation, incorrect dates or locations, hardware or drive problems, lost time, or any indirect or consequential loss, whether or not caused by a bug, a mistake, or by you choosing the wrong option.
+
+Nothing in this disclaimer excludes or limits any right or liability that cannot lawfully be excluded or limited, such as rights you may have under consumer protection law where you live.
+
+Metadata Fixer is an independent project. It is **not affiliated with, endorsed by or sponsored by Google, Apple or any other company**. Google, Google Photos, Takeout, Apple, iPhone, Live Photos, macOS and other names are trademarks of their owners and are used only to describe compatibility.
+
+The software is released under the MIT License (see `LICENSE`). Third-party components and their licenses are listed in `THIRD_PARTY_NOTICES.md`.
+
+## Support
+
+Email **thestocksoup@gmail.com**. This is a free project, so replies are best-effort and there is no guaranteed response time or service level. To help us help you, include:
+- what you were trying to do and what happened;
+- the output of **History > Copy diagnostic info** (check it for private paths first);
+- the `run.log` from the run, if there is one (History > Open log).
+
+Please do not send your photos. You can also report problems or suggest features at https://github.com/daviddef/MetadataFixer/issues.

@@ -43,7 +43,7 @@ python3 -m PyInstaller --noconfirm --windowed --name "Metadata Fixer" \
   ${SIGN_ID:+--codesign-identity "$SIGN_ID" --osx-entitlements-file packaging/entitlements.plist} \
   --paths "$ROOT" \
   --add-binary "$WORK/bin/ffmpeg:bin" --add-binary "$WORK/bin/ffprobe:bin" \
-  --add-data "$WORK/exiftool:exiftool" \
+  --add-data "$WORK/exiftool:exiftool" --add-data "$ROOT/USER_GUIDE.md:." --add-data "$ROOT/LICENSE:." --add-data "$ROOT/THIRD_PARTY_NOTICES.md:." \
   --hidden-import takeout_gui --hidden-import takeout_fix_metadata \
   --distpath dist --workpath "$WORK/pyi" --specpath "$WORK" \
   packaging/app_main.py

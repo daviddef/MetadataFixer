@@ -29,7 +29,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.02-c"
+VERSION = "2026.10.02-d"
 class Cancelled(Exception):
     pass
 
@@ -1404,6 +1404,8 @@ def run_clean(folders, include_other):
 
 UPDATE_BASE = os.environ.get("METADATAFIXER_UPDATE_BASE", "https://raw.githubusercontent.com/daviddef/MetadataFixer/main/")
 UPDATE_FILES = ["takeout_gui.py", "takeout_fix_metadata.py"]
+DOC_FILES = ["USER_GUIDE.md", "THIRD_PARTY_NOTICES.md", "LICENSE"]   # documents travel with updates too (a missing one is ignored)
+SUPPORT_EMAIL = "thestocksoup@gmail.com"
 HERE = Path(__file__).resolve().parent
 
 
@@ -1457,8 +1459,13 @@ def check_update():
         return
     try:
         changed = []
-        for name in UPDATE_FILES:
-            remote = _fetch(name)
+        for name in UPDATE_FILES + DOC_FILES:
+            try:
+                remote = _fetch(name)
+            except Exception:
+                if name in UPDATE_FILES:
+                    raise
+                continue
             local = (HERE / name).read_bytes() if (HERE / name).exists() else b""
             if remote and hashlib.sha256(remote).digest() != hashlib.sha256(local).digest():
                 changed.append(name)
@@ -1484,6 +1491,13 @@ def apply_update():
             if b"def main" not in data:
                 raise ValueError(f"{name} does not look like the right file")
             fresh[name] = data
+        for name in DOC_FILES:
+            try:
+                data = _fetch(name)
+                if data.strip():
+                    fresh[name] = data
+            except Exception:
+                pass
         for name, data in fresh.items():
             path = HERE / name
             if path.exists():
@@ -1532,6 +1546,21 @@ def doctor(roots, dest):
         except OSError:
             out["dest_ok"] = False
     return out
+
+
+def read_doc(name):
+    """A documentation file: the local copy, or the published one when this install does not have it yet."""
+    for base in (HERE, HERE.parent):
+        p = base / name
+        if p.exists():
+            try:
+                return p.read_text(encoding="utf-8")
+            except OSError:
+                pass
+    try:
+        return _fetch(name).decode("utf-8")
+    except Exception:
+        return ""
 
 
 # ---- Reports, run logs and history -------------------------------------------------------------------------
@@ -1629,6 +1658,8 @@ def write_run_record(run, timeline):
     for t, tst, tmsg in timeline:
         L.append("%s  [%s] %s" % (time.strftime("%H:%M:%S", time.localtime(t)), tst, tmsg))
     L.append("%s  [end] %s" % (time.strftime("%H:%M:%S", time.localtime(ended)), state))
+    L += ["", "Metadata Fixer is free software provided as is, without warranty. Back up your photos and read each preview before a real run.",
+          "Support: " + SUPPORT_EMAIL]
     try:
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "run.log").write_text("\n".join(L) + "\n", encoding="utf-8")
@@ -1726,7 +1757,7 @@ def save_report_html(rid, body_html):
            '@media print{body{background:#fff;color:#000;padding:0}.card,.tile{break-inside:avoid}}</style></head><body><main>'
            '<div class="rhead"><h1>Metadata Fixer report</h1><div class="card"><table class="rmeta">' +
            "".join("<tr><td>%s</td><td>%s</td></tr>" % kv for kv in meta_rows) + '</table></div></div>' + body_html +
-           '<p class="rfoot">Made by Metadata Fixer on your computer. Nothing was uploaded. The full text log is saved next to this report (run.log).</p></main></body></html>')
+           '<p class="rfoot">Made by Metadata Fixer on your computer. Nothing was uploaded. The full text log is saved next to this report (run.log). Provided as is, without warranty: keep backups of your originals. Support: ' + SUPPORT_EMAIL + '</p></main></body></html>')
     try:
         (folder / "report.html").write_text(doc, encoding="utf-8")
         e["html"] = str(folder / "report.html")
@@ -1820,6 +1851,9 @@ class Handler(BaseHTTPRequestHandler):
             start_tracked('guided', body, run_guided, (
                 body.get("roots", []), body.get("out", ""), bool(body.get("dry_run")), opts))
             self._send(200, "{}")
+        elif self.path == "/api/guide":
+            self._send(200, json.dumps({"guide": read_doc("USER_GUIDE.md"), "notices": read_doc("THIRD_PARTY_NOTICES.md"),
+                                        "license": read_doc("LICENSE"), "email": SUPPORT_EMAIL, "version": VERSION}))
         elif self.path == "/api/doctor":
             self._send(200, json.dumps(doctor(body.get("roots", []), body.get("dest", ""))))
         elif self.path == "/api/save_report":
@@ -2055,7 +2089,33 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
 .gc small{margin:0 0 0 auto;font-size:12.5px;display:inline}
 .gc.bad{background:color-mix(in srgb,var(--bad) 10%,var(--card))}
 @media(max-width:620px){.card{padding:16px}.tab{padding:8px 9px;font-size:13px}.tab b{font-size:15px}.hero h1{font-size:23px}}
-</style></head><body><main>
+
+.foot{margin:34px 0 8px;text-align:center;color:var(--mute);font-size:12.5px;line-height:1.7}
+#ack{position:fixed;inset:0;z-index:100;background:rgba(10,12,20,.55);backdrop-filter:blur(6px);display:none;align-items:center;justify-content:center;padding:16px;overflow:auto}
+.ackbox{background:var(--card);color:var(--ink);border-radius:20px;max-width:560px;padding:24px 26px;box-shadow:0 30px 80px -20px rgba(0,0,0,.5)}
+.ackbox h2{font-size:22px;margin:0 0 6px}.ackbox ul{padding-left:20px;margin:8px 0 14px}.ackbox li{margin:6px 0}
+.ackrow{display:flex;gap:10px;align-items:flex-start;margin:6px 0 14px;font-weight:600}
+.ackbtns{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.hsubnav{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 12px}.hsubnav button{border-radius:999px;padding:7px 14px}.hsubnav button.on{background:var(--acc);color:#fff;border-color:var(--acc)}
+.md h1{font-size:24px;margin:0 0 10px}.md h2{font-size:19px;margin:26px 0 8px;padding-top:8px;border-top:1px solid var(--line)}.md h3{font-size:16px;margin:18px 0 6px}
+.md p{margin:8px 0}.md ul,.md ol{padding-left:22px;margin:8px 0}.md li{margin:4px 0}.md pre{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:12px;overflow:auto;font-size:12.5px}
+.md pre code{background:none;padding:0}.md table{margin:10px 0;display:block;overflow-x:auto}.md blockquote{border-left:3px solid var(--acc);margin:10px 0;padding:2px 12px;color:var(--mute)}
+.gtools{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}.gtools input{flex:1 1 200px}.gtools select{flex:1 1 200px;max-width:100%}
+.hlight{background:color-mix(in srgb,var(--warn) 30%,transparent);border-radius:3px}
+</style></head><body><div id="ack" style="display:none"><div class="ackbox" role="dialog" aria-modal="true" aria-labelledby="acktitle">
+<h2 id="acktitle">Before you start</h2>
+<p>Metadata Fixer changes, copies, moves and (if you choose) deletes files. Please read this once:</p>
+<ul>
+<li><b>Back up your originals</b> (your Takeout zip files or folders) before you begin.</li>
+<li><b>Preview first.</b> Every tab starts with <i>Preview only</i> ticked. It changes nothing.</li>
+<li>Options marked &#9888;&#65039; can delete, overwrite, rename or merge files. Read them before ticking them.</li>
+<li>This free software is provided <b>&ldquo;as is&rdquo;, without warranty</b>. <b>You use it at your own risk</b>, and to the maximum extent permitted by law the author is not liable for any loss or damage, including lost or changed photos and data.</li>
+</ul>
+<label class="ackrow"><input type="checkbox" id="ackbox"> I have read this, I will keep backups, and I accept it.</label>
+<div class="ackbtns"><button class="p" id="ackgo" disabled>Continue</button><button id="ackmore" class="sm">Read the full safety notice</button></div>
+<small>Support: thestocksoup@gmail.com</small>
+</div></div>
+<main>
 <div id="upd" style="display:none" class="card"><b>A newer version is available.</b> <span id="updmsg"></span>
 <div style="margin-top:8px"><button class="p" id="updgo">Update now</button> <button id="updno">Not now</button></div></div>
 <header class="hero">
@@ -2089,6 +2149,7 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
     <button class="tab" data-tab="clean" role="tab"><b>&#129529;</b> Clean up</button>
     <button class="tab" data-tab="convert" role="tab"><b>&#127902;&#65039;</b> Convert</button>
     <button class="tab" data-tab="history" role="tab"><b>&#128196;</b> History</button>
+    <button class="tab" data-tab="help" role="tab"><b>&#10067;</b> Help</button>
   </nav>
   <div class="status"><div class="srow"><span id="msg">Ready. Choose a tab, set it up and press Start.</span><a href="#" id="goto" style="display:none">View results &rarr;</a><button id="stopall" class="sm" style="display:none;margin-left:10px">Stop</button></div>
   <div class="bar" id="bar"><i id="fill"></i><span id="pct">0%</span></div></div>
@@ -2216,6 +2277,13 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
 <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><button id="hfolder">Open reports folder</button><button id="hdiag" data-tip="Copies your version, system, tool versions and the end of the latest log, so you can paste it when asking for help. Check it for private paths first.">Copy diagnostic info</button></div></div>
 <div id="hlist"></div>
 </section>
+<section class="pane" id="pane-help">
+<h2 class="ph">Help</h2>
+<div class="hsubnav" id="hsubnav"><button data-v="guide" class="on">User guide</button><button data-v="safety">Safety &amp; disclaimer</button><button data-v="support">Support</button><button data-v="about">About</button></div>
+<div class="card" id="hview"></div>
+</section>
+<footer class="foot">Free software provided &ldquo;as is&rdquo;, without warranty. Back up your photos first. &middot; <a href="#" data-help="safety">Safety &amp; disclaimer</a> &middot; Support: <a href="mailto:thestocksoup@gmail.com">thestocksoup@gmail.com</a></footer>
+
 
 <script>
 var docTimer=null,DOC=null;
@@ -2233,7 +2301,7 @@ function makeIcon(html){const b=document.createElement('button');b.type='button'
   b.onfocus=()=>{if(b.matches(':focus-visible'))showTip(b)};b.onblur=hideTip;
   b.onclick=e=>{e.preventDefault();e.stopPropagation();if(b._pt==='mouse'){showTip(b);return}tipEl._owner===b?hideTip():showTip(b)};return b}
 document.addEventListener('click',hideTip);window.addEventListener('scroll',hideTip,{passive:true});
-const PANE_SUB={history:'Every run, with its full report and log.',guided:'The easy way: zips or folders in, a clean library out. Originals never change.',fix:'Put the real date, location and caption back into your photos.',merge:'Bring two or more folders together into one.',clean:'Tidy up leftovers once you are done.',convert:'Turn older video formats into MP4.'};
+const PANE_SUB={help:'The user guide, safety notice and how to get support.',history:'Every run, with its full report and log.',guided:'The easy way: zips or folders in, a clean library out. Originals never change.',fix:'Put the real date, location and caption back into your photos.',merge:'Bring two or more folders together into one.',clean:'Tidy up leftovers once you are done.',convert:'Turn older video formats into MP4.'};
 function decorate(){
   document.querySelectorAll('.opt').forEach(o=>{
     const box=o.querySelector(':scope > div');if(!box)return;
@@ -2362,11 +2430,12 @@ function setBar(barId,fillId,pctId,pct,indet){
     for(let i=0;i<30;i++){await new Promise(x=>setTimeout(x,1000));const s=await st();if(s&&s.boot!==boot){location.reload();return}}
     $('updmsg').textContent='Updated. If the page does not reload, restart the app in Terminal.'}
 })();
-const TABS=['guided','fix','merge','clean','convert','history'];const tabOf=k=>({cleanup:'clean',sort:'merge'}[k]||k);let curGuided=false;const paneKind=()=>curGuided?'guided':tabOf(jobKind);let jobKind='fix';
+const TABS=['guided','fix','merge','clean','convert','history','help'];const tabOf=k=>({cleanup:'clean',sort:'merge'}[k]||k);let curGuided=false;const paneKind=()=>curGuided?'guided':tabOf(jobKind);let jobKind='fix';
 function showTab(t){if(!TABS.includes(t))t='fix';
   TABS.forEach(x=>{$('pane-'+x).style.display=x===t?'block':'none';document.querySelector('.tab[data-tab="'+x+'"]').classList.toggle('on',x===t)});
   try{localStorage.setItem('tab',t)}catch(e){}
   if(t==='history')loadHistory();
+  if(t==='help'&&!$('hview').dataset.loaded){$('hview').dataset.loaded='1';helpView('guide')}
   try{history.replaceState(null,'','#'+t)}catch(e){}
   updGoto()}
 function updGoto(){const a=$('goto');const cur=TABS.find(x=>$('pane-'+x).style.display==='block');
@@ -2446,6 +2515,74 @@ $('gst').onclick=async()=>{
   $('sum').style.display='none';curGuided=true;
   const r=await post('/api/guided_start',{roots:roots(),out:dest(),dry_run:$('gdry').checked,opts:{fix_ext:$('gext').checked,convert:$('gcv').checked,replace:$('gow').checked,live:$('glive').checked,dedupe:$('gdedupe').checked,name_dates:$('gnd').checked}});
   if(r.error){alert(r.error);curGuided=false}else{placeResults('guided');$('prog').style.display='block';poll()}};
+
+// ---- Help: user guide (rendered from USER_GUIDE.md), safety notice, support, about
+function slug(t){return t.toLowerCase().replace(/[^a-z0-9 -]/g,'').trim().replace(/\s+/g,'-')}
+function mdInline(t){
+  return t.split(/(`[^`]+`)/).map(p=>{
+    if(p.length>1&&p[0]==='`'&&p[p.length-1]==='`')return '<code>'+esc(p.slice(1,-1))+'</code>';
+    p=esc(p).replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>').replace(/(^|[^*\w])\*([^*\s][^*]*?)\*/g,'$1<i>$2</i>');
+    return p.replace(/\[([^\]]+)\]\(([^)]+)\)/g,(m,a,b)=>/^(https?:|mailto:)/.test(b)?`<a href="${b}" target="_blank" rel="noopener">${a}</a>`:b[0]==='#'?`<a href="${b}" data-jump="${b.slice(1)}">${a}</a>`:a)}).join('')}
+function md(src){
+  const L=src.replace(/\r/g,'').split('\n');let h='',i=0,para=[];
+  const flush=()=>{if(para.length){h+='<p>'+mdInline(para.join(' '))+'</p>';para=[]}};
+  while(i<L.length){let l=L[i];
+    if(/^```/.test(l)){flush();let c=[];i++;while(i<L.length&&!/^```/.test(L[i]))c.push(L[i++]);i++;h+='<pre><code>'+esc(c.join('\n'))+'</code></pre>';continue}
+    let m=l.match(/^(#{1,4})\s+(.*)$/);
+    if(m){flush();const n=m[1].length;h+=`<h${n} id="${slug(m[2])}">${mdInline(m[2])}</h${n}>`;i++;continue}
+    if(/^\s*\|.*\|\s*$/.test(l)&&i+1<L.length&&/^\s*\|[\s:|-]+\|\s*$/.test(L[i+1])){flush();
+      const cells=r=>r.trim().replace(/^\||\|$/g,'').split('|').map(x=>x.trim());
+      const head=cells(l);i+=2;const rows=[];while(i<L.length&&/^\s*\|.*\|\s*$/.test(L[i]))rows.push(cells(L[i++]));
+      h+='<table><tr>'+head.map(x=>'<th>'+mdInline(x)+'</th>').join('')+'</tr>'+rows.map(r=>'<tr>'+r.map(x=>'<td>'+mdInline(x)+'</td>').join('')+'</tr>').join('')+'</table>';continue}
+    if(/^\s*([-*]|\d+\.)\s+/.test(l)){flush();const ord=/^\s*\d+\./.test(l);let items=[];
+      while(i<L.length&&/^\s*([-*]|\d+\.)\s+/.test(L[i])||(i<L.length&&/^\s{2,}\S/.test(L[i])&&items.length)){
+        if(/^\s*([-*]|\d+\.)\s+/.test(L[i]))items.push(L[i].replace(/^\s*([-*]|\d+\.)\s+/,''));else items[items.length-1]+=' '+L[i].trim();i++}
+      h+=(ord?'<ol>':'<ul>')+items.map(x=>'<li>'+mdInline(x)+'</li>').join('')+(ord?'</ol>':'</ul>');continue}
+    if(/^>\s?/.test(l)){flush();h+='<blockquote>'+mdInline(l.replace(/^>\s?/,''))+'</blockquote>';i++;continue}
+    if(/^---+\s*$/.test(l)){flush();h+='<hr>';i++;continue}
+    if(!l.trim()){flush();i++;continue}
+    para.push(l.trim());i++}
+  flush();return h}
+let GUIDE=null;
+async function loadGuide(){if(!GUIDE)GUIDE=await post('/api/guide');return GUIDE}
+function jumpTo(id){const e=document.getElementById(id);if(e){e.scrollIntoView({behavior:'smooth',block:'start'})}}
+function bindJumps(root){root.querySelectorAll('a[data-jump]').forEach(a=>a.onclick=ev=>{ev.preventDefault();const id=a.dataset.jump;if(id==='support'){helpView('support');return}if(id==='safety-limitations-and-disclaimer'){helpView('safety');return}jumpTo(id)})}
+function guideSections(text){const parts=text.split(/\n(?=## )/);return parts}
+async function helpView(v){
+  document.querySelectorAll('#hsubnav button').forEach(b=>b.classList.toggle('on',b.dataset.v===v));
+  if(!document.getElementById('pane-help').offsetParent)showTab('help');
+  const box=$('hview');box.innerHTML='<small style="margin:0">Loading...</small>';
+  const g=await loadGuide();const email=g.email||'thestocksoup@gmail.com';
+  if(v==='guide'){
+    if(!g.guide){box.innerHTML='<p>The guide could not be loaded (it needs the USER_GUIDE.md file, or an internet connection). You can read it at <a href="https://github.com/daviddef/MetadataFixer/blob/main/USER_GUIDE.md" target="_blank" rel="noopener">github.com/daviddef/MetadataFixer</a>.</p>';return}
+    const secs=guideSections(g.guide);
+    const titles=secs.map(x=>(x.match(/^#{1,2}\s+(.*)$/m)||[])[1]).filter(Boolean);
+    box.innerHTML='<div class="gtools"><input type="text" id="gsearch" placeholder="Search the guide..." spellcheck="false"><select id="gjump"><option value="">Jump to a section...</option>'+secs.slice(1).map(x=>{const t=(x.match(/^##\s+(.*)$/m)||[])[1];return t?`<option value="${slug(t)}">${esc(t)}</option>`:''}).join('')+'</select></div><div class="md" id="gmd">'+secs.map((x,k)=>`<div class="gsec">${md(x)}</div>`).join('')+'</div>';
+    bindJumps(box);$('gjump').onchange=e=>{if(e.target.value)jumpTo(e.target.value);e.target.value=''};
+    $('gsearch').oninput=e=>{const q=e.target.value.trim().toLowerCase();document.querySelectorAll('#gmd .gsec').forEach(s=>{s.style.display=!q||s.textContent.toLowerCase().includes(q)?'':'none'})};
+    return}
+  if(v==='safety'){
+    const secs=guideSections(g.guide||'');const sec=secs.find(x=>/^##\s+Safety, limitations and disclaimer/m.test(x));
+    box.innerHTML='<div class="md">'+(sec?md(sec):'<h2>Safety and disclaimer</h2><p>Back up your photos first. This free software is provided as is, without warranty, and you use it at your own risk. To the maximum extent permitted by law the author is not liable for any loss or damage.</p>')+'</div>';return}
+  if(v==='support'){
+    box.innerHTML=`<div class="md"><h2>Support</h2><p>Email <a href="mailto:${email}">${email}</a>. This is a free project, so replies are best-effort with no guaranteed response time.</p><p>To help us help you, include what you were trying to do, what happened, and the diagnostic info below. Please do not send your photos.</p></div>
+    <div class="hbtns"><button class="p" id="sup1">Copy diagnostic info and email support</button><button id="sup2">Copy support email address</button></div><small id="supnote"></small>`;
+    $('sup1').onclick=async()=>{const r=await post('/api/diagnostics');let ok=false;try{await navigator.clipboard.writeText(r.text);ok=true}catch(e){}
+      $('supnote').textContent=ok?'Diagnostic info copied. Paste it into the email (Cmd+V). Check it for private paths first.':'Could not copy automatically: use History > Copy diagnostic info.';
+      location.href='mailto:'+email+'?subject='+encodeURIComponent('Metadata Fixer support ('+g.version+')')+'&body='+encodeURIComponent('What I was trying to do:\n\nWhat happened:\n\nDiagnostic info (paste here):\n')};
+    $('sup2').onclick=async()=>{try{await navigator.clipboard.writeText(email);$('supnote').textContent='Copied '+email}catch(e){prompt('Support email:',email)}};return}
+  if(v==='about'){
+    box.innerHTML=`<div class="md"><h2>About</h2><p><b>Metadata Fixer</b> version ${esc(g.version)}. Free, open source (MIT License). Everything runs on your computer; nothing is uploaded.</p><p>Not affiliated with Google or Apple. Support: <a href="mailto:${email}">${email}</a>. Project: <a href="https://github.com/daviddef/MetadataFixer" target="_blank" rel="noopener">github.com/daviddef/MetadataFixer</a></p>${md(g.notices||'')}<h2>License</h2><pre>${esc(g.license||'MIT License')}</pre></div>`;return}
+}
+document.querySelectorAll('#hsubnav button').forEach(b=>b.onclick=()=>helpView(b.dataset.v));
+document.querySelectorAll('a[data-help]').forEach(a=>a.onclick=e=>{e.preventDefault();showTab('help');helpView(a.dataset.help)});
+// first-run notice
+(function(){let ok=false;try{ok=localStorage.getItem('ack-v1')==='1'}catch(e){}
+  const ack=$('ack');if(ok)return;ack.style.display='flex';
+  $('ackbox').onchange=()=>{$('ackgo').disabled=!$('ackbox').checked};
+  $('ackgo').onclick=()=>{try{localStorage.setItem('ack-v1','1')}catch(e){}ack.style.display='none'};
+  $('ackmore').onclick=()=>{ack.style.display='none';showTab('help');helpView('safety');
+    const back=document.createElement('div');back.className='tip';back.innerHTML='Read the notice, then <a href="#" id="ackback">go back and accept it</a>.';$('hview').prepend(back);$('ackback').onclick=e=>{e.preventDefault();ack.style.display='flex'}}})();
 function showMerge(s){
   const w=s.dry_run?'would be ':'';
   let h=`<div class="tiles">${tile(s.total,'files found')}${tile(s.brought,'files '+w+(s.move?'moved':'copied')+' in','ok')}${tile(s.in_place_files,'already in place')}${tile(s.identical,'identical copies (kept once)')}${tile(s.clashes,'name clashes resolved')}${tile(s.merged_dirs,'folders '+w+'merged from 2+ sources')}${s.json_along?tile(s.json_along,'.json files brought along'):''}${tile(s.failed,'problems',s.failed?'bad':'')}</div>`;
