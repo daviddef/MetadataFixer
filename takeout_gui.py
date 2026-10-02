@@ -29,7 +29,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.02-f"
+VERSION = "2026.10.02-g"
 class Cancelled(Exception):
     pass
 
@@ -1676,12 +1676,54 @@ def run_assess(roots, dest):
             STATE.update(state="error", message=str(e))
 
 
+def run_consolidate(groups, roots, dry_run, dupes_action):
+    with LOCK:
+        STATE.update(state="scanning", cancel=False, total=len(groups), done=0, counts={}, message="Merging similar folders...", report="",
+                     summary=None, scan=None, extra={}, recent=[], phase=None, kind="consolidate", cv=None, **({} if IN_GUIDED[0] else {"guided": None}))
+    try:
+        folders = check_clean_folders(roots)
+        rootset = [f.resolve() for f in folders]
+        ok = []
+        for g in groups:
+            par = Path(g.get("parent", "")).resolve()
+            if not any(par == r or r in par.parents for r in rootset):
+                raise ValueError("A folder to merge is outside the folders you chose: " + str(par))
+            ok.append({"parent": str(par), "target": str(g.get("target", "")), "members": [str(m) for m in g.get("members", [])]})
+        if not ok:
+            raise ValueError("Tick at least one group to merge")
+
+        def prog(stage, done, total):
+            check_cancel()
+            with LOCK:
+                STATE.update(state="running", done=done, total=total, message="Merging similar folders (%d of %d)" % (done, total))
+        rows = fx.consolidate_groups(ok, dupes_action, dry_run, prog, check_cancel)
+        sm = {"kind": "consolidate", "dry_run": dry_run, "groups": len(rows),
+              "merged": sum(1 for r in rows if r["action"] in ("merged", "would-merge")),
+              "moved": sum(r["moved"] for r in rows), "dupes": sum(r["dupes"] for r in rows), "conflicts": sum(r["conflicts"] for r in rows),
+              "failed": sum(1 for r in rows if r["action"] == "failed"),
+              "rows": [{"parent": os.path.basename(r["parent"]) or r["parent"], "target": r["target"], "members": r["members"], "moved": r["moved"],
+                        "dupes": r["dupes"], "conflicts": r["conflicts"], "action": r["action"], "detail": r["detail"]} for r in rows],
+              "tips": []}
+        if dry_run:
+            sm["tips"].append("This was a preview: nothing was moved. Untick Preview only to merge these folders.")
+        else:
+            sm["tips"].append("Identical files were kept once (%s). Different files with the same name were kept as name_1. Merged folders are gone from their old places: this cannot be undone from the app." % (
+                "the extra copy deleted" if dupes_action == "delete" else "the extra copy moved to a _duplicates folder"))
+        with LOCK:
+            STATE.update(state="done", message="Finished", summary=sm, phase=None)
+    except Cancelled:
+        stopped_state("Folders already merged stay merged.")
+    except Exception as e:
+        with LOCK:
+            STATE.update(state="error", message=str(e))
+
+
 # ---- Reports, run logs and history -------------------------------------------------------------------------
 APP_HOME = Path(os.environ.get("METADATAFIXER_HOME") or (
     Path.home() / "Library" / "Application Support" / "MetadataFixer" if sys.platform == "darwin" else Path.home() / ".metadatafixer"))
 HIST_DIR = APP_HOME / "history"
 REPORTS_DIR = Path(os.environ.get("METADATAFIXER_REPORTS") or (Path.home() / "Documents" / "Backstory Reports"))
-KIND_TITLE = {"assess": "Check my files", "fix": "Fix metadata", "merge": "Merge folders", "cleanup": "Clean up", "convert": "Convert videos", "guided": "Guided: Fix my Takeout"}
+KIND_TITLE = {"assess": "Check my files", "consolidate": "Merge similar folders", "fix": "Fix metadata", "merge": "Merge folders", "cleanup": "Clean up", "convert": "Convert videos", "guided": "Guided: Fix my Takeout"}
 
 
 def _headline(sm):
@@ -1690,6 +1732,8 @@ def _headline(sm):
         return ""
     k = sm.get("kind")
     try:
+        if k == "consolidate":
+            return "%s folder groups merged, %s files moved, %s duplicates" % (sm.get("merged", 0), f"{sm.get('moved', 0):,}", f"{sm.get('dupes', 0):,}")
         if k == "assess":
             return "%s files checked, %s recommendations" % (f"{sm['facts']['media']:,}", len(sm.get("recs", [])) + len(sm.get("extras", [])))
         if k == "guided":
@@ -1955,6 +1999,21 @@ class Handler(BaseHTTPRequestHandler):
                 body.get("roots", []), body.get("out", ""),
                 bool(body.get("dry_run")), bool(body.get("overwrite")), bool(body.get("pair_live")),
                 bool(body.get("dedupe")), bool(body.get("move")), body.get("date_policy", "earlier"), bool(body.get("name_dates"))))
+            self._send(200, "{}")
+        elif self.path == "/api/similar_folders":
+            try:
+                folders = check_clean_folders(body.get("roots", []))
+                self._send(200, json.dumps({"groups": fx.find_similar_folders([str(f) for f in folders], bool(body.get("maybe", True)))}))
+            except ValueError as e:
+                self._send(200, json.dumps({"error": str(e)}))
+        elif self.path == "/api/consolidate_start":
+            with LOCK:
+                busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
+            if busy:
+                return self._send(409, json.dumps({"error": "A job is already running"}))
+            dup = body.get("dupes", "delete") if body.get("dupes") in ("delete", "aside") else "delete"
+            start_tracked("consolidate", dict(body, opts={"dupes": dup}), run_consolidate,
+                          (body.get("groups", []), body.get("roots", []), bool(body.get("dry_run")), dup))
             self._send(200, "{}")
         elif self.path == "/api/assess_start":
             with LOCK:
@@ -2395,6 +2454,14 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
 <label class="sub" data-tip="Off by default: the folders you add at the top are always kept, even if everything inside them is removed."><input type="checkbox" id="cetop"> &#9888;&#65039; Also remove my chosen folders if they end up empty</label></div></div>
 
 <button class="p" id="cgo" style="margin-top:6px">Start</button></div>
+<div class="card" id="simcard">
+<b>Smart folder consolidation</b>
+<small style="margin-top:4px">Finds folders that look like the same thing under different names, such as <i>Japan 2025</i>, <i>delete-Japan 2025</i> and <i>Japan 2025-old</i>, and merges them into one. You review every group before anything happens.</small>
+<div class="opt"><input type="checkbox" id="simmaybe" checked><div>Also look for likely spelling differences<small>For example <i>Italy 2024</i> and <i>Itly 2024</i>. These are shown as &ldquo;Check this&rdquo; and are not ticked for you.</small></div></div>
+<button id="simfind">Find similar folders</button>
+<div id="simout"></div>
+</div>
+
 </section>
 <section class="pane" id="pane-convert">
 <h2 class="ph">Convert old videos to MP4</h2>
@@ -2520,6 +2587,7 @@ function showSummary(s){
   if(s.kind==='convert'){showConvert(s);return}
   if(s.kind==='guided'){showGuided(s);return}
   if(s.kind==='assess'){showAssess(s);return}
+  if(s.kind==='consolidate'){showConsolidate(s);return}
   let h=`<div class="tiles">${tile(s.total,'media files')}${tile(s.duplicates,'exact duplicates skipped')}${tile(s.matched,'unique files matched ('+s.pct_matched+'%)','ok')}${tile(s.no_json,'no JSON found',s.no_json?'bad':'ok')}${tile(s.orphans,'JSON with no photo')}${s.name_dates?tile(s.name_dates,'dates from file names','ok'):''}</div>`;
   h+=s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
   h+=`<div class="tiles">${tile(s.replaced_files,'files with a value replaced')}${tile((s.live||{}).paired||0,'Live Photos paired')}</div>`;
@@ -2575,7 +2643,7 @@ function setBar(barId,fillId,pctId,pct,indet){
     for(let i=0;i<30;i++){await new Promise(x=>setTimeout(x,1000));const s=await st();if(s&&s.boot!==boot){location.reload();return}}
     $('updmsg').textContent='Updated. If the page does not reload, restart the app in Terminal.'}
 })();
-const TABS=['guided','fix','merge','clean','convert','history','help'];const tabOf=k=>({cleanup:'clean',sort:'merge',assess:'guided'}[k]||k);let curGuided=false;const paneKind=()=>curGuided?'guided':tabOf(jobKind);let jobKind='fix';
+const TABS=['guided','fix','merge','clean','convert','history','help'];const tabOf=k=>({consolidate:'clean',cleanup:'clean',sort:'merge',assess:'guided'}[k]||k);let curGuided=false;const paneKind=()=>curGuided?'guided':tabOf(jobKind);let jobKind='fix';
 function showTab(t){if(!TABS.includes(t))t='fix';
   TABS.forEach(x=>{$('pane-'+x).style.display=x===t?'block':'none';document.querySelector('.tab[data-tab="'+x+'"]').classList.toggle('on',x===t)});
   try{localStorage.setItem('tab',t)}catch(e){}
@@ -2750,6 +2818,39 @@ $('gchk').onclick=async()=>{
   $('sum').style.display='none';curGuided=false;
   const r=await post('/api/assess_start',{roots:roots(),out:dest()});
   if(r.error)alert(r.error);else{placeResults('assess');$('prog').style.display='block';poll()}};
+
+let SIM=[];
+function renderSim(){
+  const o=$('simout');
+  if(!SIM.length){o.innerHTML='<div class="tip" style="margin-top:12px">No similar folders found.</div>';return}
+  o.innerHTML='<div style="margin-top:12px"><small style="margin-top:0">'+SIM.length+' group'+(SIM.length===1?'':'s')+' found. The folder name shown in the box is the one everything is merged into: change it if you like.</small>'+SIM.map((g,i)=>`<div class="rec simg"><input type="checkbox" data-i="${i}" class="simck" ${g.confidence==='high'?'checked':''}><div style="flex:1;min-width:0"><div><b>${esc(g.parent.split('/').slice(-2).join('/'))}</b> <span class="badge ${g.confidence==='high'?'okb':'warnb'}">${g.confidence==='high'?'Same name, different words':'Check this'}</span></div>
+  <div class="why">${g.members.map(m=>esc(m.name)+' <span class="mutes">('+m.files.toLocaleString()+' files)</span>').join('<br>')}</div>
+  <div style="margin-top:6px">Merge into: <input type="text" class="simt" data-i="${i}" value="${esc(g.target)}" spellcheck="false" style="max-width:320px"></div></div></div>`).join('')+
+  `<div class="opt"><input type="checkbox" id="simdry" checked><div>Preview only<small>Shows what would be merged and changes nothing.</small></div></div>
+  <div class="opt"><div style="flex:1"><label for="simdup" style="font-weight:600">&#9888;&#65039; Identical files</label><select id="simdup" class="sel"><option value="delete">Keep one copy and delete the extra (permanent)</option><option value="aside">Keep one copy and move the extra to a _duplicates folder</option></select></div></div>
+  <button class="p" id="simgo">Merge the ticked groups</button></div>`;
+  $('simgo').onclick=simRun}
+async function simRun(){
+  const groups=[];document.querySelectorAll('.simck').forEach(c=>{if(c.checked){const i=+c.dataset.i;const t=document.querySelector('.simt[data-i="'+i+'"]').value.trim();groups.push({parent:SIM[i].parent,target:t,members:SIM[i].members.map(m=>m.name)})}});
+  if(!groups.length){alert('Tick at least one group');return}
+  const real=!$('simdry').checked;
+  if(real&&!confirm('This will move files out of '+groups.length+' folder group'+(groups.length===1?'':'s')+' and merge them into one folder each. It cannot be undone from the app. Make sure you have a backup. Continue?'))return;
+  if(real&&$('simdup').value==='delete'){const t=prompt('Identical extra copies will be permanently deleted.\nType DELETE to confirm.');if(t!=='DELETE')return}
+  $('sum').style.display='none';curGuided=false;
+  const r=await post('/api/consolidate_start',{roots:croots(),groups,dry_run:$('simdry').checked,dupes:$('simdup').value});
+  if(r.error)alert(r.error);else{placeResults('clean');$('prog').style.display='block';poll()}}
+$('simfind').onclick=async()=>{
+  if(!croots().length){alert('Add your folders in the bar at the top first');return}
+  $('simfind').disabled=true;$('simfind').textContent='Looking...';
+  const r=await post('/api/similar_folders',{roots:croots(),maybe:$('simmaybe').checked});
+  $('simfind').disabled=false;$('simfind').textContent='Find similar folders';
+  if(r.error){alert(r.error);return}SIM=r.groups||[];renderSim()};
+function showConsolidate(s){
+  const w=s.dry_run?'would be ':'';
+  let h=`<div class="tiles">${tile(s.merged,'folder groups '+w+'merged','ok')}${tile(s.moved,'files '+w+'moved')}${tile(s.dupes,'identical copies')}${tile(s.conflicts,'name clashes')}${s.failed?tile(s.failed,'problems','bad'):''}</div>`;
+  h+=s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
+  h+=tbl(['Merged into','In','From','Files','Identical','Result'],s.rows.map(r=>[esc(r.target),esc(r.parent),esc((r.members||[]).join(', ')),r.moved.toLocaleString(),r.dupes.toLocaleString(),esc(r.action+(r.detail?': '+r.detail:''))]));
+  $('sumbody').innerHTML=h;$('sum').style.display='block'}
 function showMerge(s){
   const w=s.dry_run?'would be ':'';
   let h=`<div class="tiles">${tile(s.total,'files found')}${tile(s.brought,'files '+w+(s.move?'moved':'copied')+' in','ok')}${tile(s.in_place_files,'already in place')}${tile(s.identical,'identical copies (kept once)')}${tile(s.clashes,'name clashes resolved')}${tile(s.merged_dirs,'folders '+w+'merged from 2+ sources')}${s.json_along?tile(s.json_along,'.json files brought along'):''}${tile(s.failed,'problems',s.failed?'bad':'')}</div>`;
@@ -2825,7 +2926,7 @@ function showConvert(s){
 
 function liveTiles(s,c,done,nj){
   if(!s.total)return '';const x=s.extra||{};const err=(x.errors?tile(x.errors,'files with errors','bad'):'');
-  if(jobKind==='assess')return '';
+  if(jobKind==='assess'||jobKind==='consolidate')return '';
   if(jobKind==='merge')return tile(s.total,'files found')+tile(x.placed||0,'brought in','ok')+tile(x.identical||0,'identical (kept once)')+tile(x.clashes||0,'name clashes')+(x.json_along?tile(x.json_along,'.json brought along'):'')+(x.errors?tile(x.errors,'problems','bad'):'');
   if(jobKind==='cleanup')return tile(x.json||0,'.json files')+tile(x.junk||0,'junk files')+tile(x.renamed||0,'renamed')+tile(x.merged||0,'folders merged')+tile(x.empty||0,'empty folders')+(x.errors?tile(x.errors,'errors','bad'):'');
   if(jobKind==='convert')return tile(s.total,'videos found')+tile(done,'checked so far')+tile(x.converted||0,'converted','ok')+(x.bytes_before?tile(fmtBytes(Math.max(0,x.bytes_before-x.bytes_after))+' ('+Math.round(100*(1-x.bytes_after/x.bytes_before))+'%)','space saved so far','ok'):'')+tile(x.skipped_live||0,'Live Photo videos skipped')+(x.errors?tile(x.errors,'could not convert','bad'):'');
@@ -2891,7 +2992,7 @@ let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   else if(s.phase&&s.phase.total){pct=100*s.phase.done/s.phase.total}
   else if(s.state==='scanning'||s.state==='running'){indet=true}
   setBar('bar','fill','pct',pct,indet);
-  const LBL=(gd&&!gd.final&&gd.steps.length)?('Guided &middot; step '+gd.i+' of '+gd.steps.length+': '+esc(gd.steps[gd.i-1]||'')):gd&&jobKind==='guided'?'Guided':{assess:'Check my files',fix:'Part 1 Fix',convert:'Part 4 Convert',cleanup:'Part 3 Clean up',merge:'Part 2 Merge'}[jobKind]||'';
+  const LBL=(gd&&!gd.final&&gd.steps.length)?('Guided &middot; step '+gd.i+' of '+gd.steps.length+': '+esc(gd.steps[gd.i-1]||'')):gd&&jobKind==='guided'?'Guided':{consolidate:'Merge similar folders',assess:'Check my files',fix:'Part 1 Fix',convert:'Part 4 Convert',cleanup:'Part 3 Clean up',merge:'Part 2 Merge'}[jobKind]||'';
   $('msg').innerHTML=(LBL?'<b>'+LBL+'</b> &middot; ':'')+(s.state==='error'?'<span class="err">'+esc(s.message)+'</span>':s.state==='done'?'<span class="ok">Finished.</span>':esc(s.message)+(s.done?` (${s.done.toLocaleString()} / ${s.total.toLocaleString()})`:''));
   const c=s.counts||{},done=s.done||0,nj=c['no-json']||0;
   $('tiles').innerHTML=liveTiles(s,c,done,nj);

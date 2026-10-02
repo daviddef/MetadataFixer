@@ -2221,6 +2221,150 @@ def assess(entries, dest="", progress=None, should_stop=None, sample_n=120):
     return F
 
 
+# ---- Smart folder consolidation: "Japan 2025", "delete-Japan 2025" and "Japan 2025-old" are one trip ----------
+import unicodedata
+import difflib
+
+AFFIX_WORDS = {"delete", "deleted", "del", "todelete", "old", "older", "oldest", "copy", "copies", "backup", "backups", "bak", "bkp",
+               "dup", "dupe", "dupes", "duplicate", "duplicates", "temp", "tmp", "new", "newer", "final", "orig", "original", "originals",
+               "archive", "archived", "unused", "trash", "donotuse", "extra", "extras", "v1", "v2", "v3"}
+
+
+def _fold(s):
+    return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii").lower() if s else s
+
+
+def name_key(name):
+    """What a folder name is really called: lower case, no accents, with leading/trailing words like delete, old, copy,
+    backup, final and '(1)' markers removed. Returns (key, had_affix)."""
+    base = PAREN_RE.sub("", name)
+    base = COPY_RE.sub("", base)
+    base = re.sub(r"[()\[\]{}]", " ", base)
+    toks = [t for t in re.split(r"[\s_.\-]+", base) if t]
+    removed = False
+    while toks and _fold(toks[0]) in AFFIX_WORDS and len(toks) > 1:
+        toks.pop(0)
+        removed = True
+    while toks and _fold(toks[-1]) in AFFIX_WORDS and len(toks) > 1:
+        toks.pop()
+        removed = True
+    key = " ".join(toks)
+    return _fold(key), removed, key
+
+
+def _count_files(path, cap=200000):
+    n = 0
+    for _, _, fns in os.walk(path):
+        n += len(fns)
+        if n >= cap:
+            break
+    return n
+
+
+def find_similar_folders(roots, maybe=True):
+    """Groups of sibling folders that look like the same thing under different names. Nothing is changed.
+    Returns [{"parent", "confidence": "high"|"maybe", "target", "members": [{"name","files","affix"}]}]."""
+    groups = []
+    for root in roots:
+        for dp, dns, _ in os.walk(root, topdown=True, followlinks=False):
+            dns[:] = [d for d in dns if not (os.path.islink(os.path.join(dp, d)) or is_bundle(d) or d.startswith(".") or d in ("_duplicates", "_unrecognised", "_merge_conflicts", ORIGINALS_DIR))]
+            kids = []
+            for d in dns:
+                key, removed, clean = name_key(d)
+                if not key:
+                    continue
+                kids.append({"name": d, "key": key, "squash": key.replace(" ", ""), "affix": removed or key != _fold(d).strip(), "clean": clean})
+            used = set()
+            by = {}
+            for k in kids:
+                by.setdefault(k["squash"], []).append(k)
+            for sq, lst in by.items():
+                if len(lst) > 1:
+                    groups.append((dp, "high", lst))
+                    used.update(x["name"] for x in lst)
+            if maybe:
+                rest = [k for k in kids if k["name"] not in used]
+                seen = set()
+                for i, a in enumerate(rest):
+                    if a["name"] in seen:
+                        continue
+                    cluster = [a]
+                    for b in rest[i + 1:]:
+                        if b["name"] in seen or len(a["squash"]) < 6:
+                            continue
+                        da, db = re.sub(r"\D", "", a["squash"]), re.sub(r"\D", "", b["squash"])
+                        if da == db and difflib.SequenceMatcher(None, a["squash"], b["squash"]).ratio() >= 0.88:
+                            cluster.append(b)
+                    if len(cluster) > 1:
+                        seen.update(x["name"] for x in cluster)
+                        groups.append((dp, "maybe", cluster))
+    out = []
+    for dp, conf, lst in groups:
+        for m in lst:
+            m["files"] = _count_files(os.path.join(dp, m["name"]))
+        # the best name: a member that carries no extra words, with the most files; else a tidied name from the biggest member
+        plain = [m for m in lst if not m["affix"]]
+        if plain:
+            target = max(plain, key=lambda m: m["files"])["name"]
+        else:
+            big = max(lst, key=lambda m: m["files"])
+            target = big["clean"]
+        out.append({"parent": dp, "confidence": conf, "target": target,
+                    "members": sorted(({"name": m["name"], "files": m["files"], "affix": bool(m["affix"])} for m in lst), key=lambda m: -m["files"])})
+    out.sort(key=lambda g: (g["confidence"] != "high", g["parent"], g["target"]))
+    return out
+
+
+def consolidate_groups(groups, dupes_action="delete", dry_run=True, progress=None, should_stop=None):
+    """Merge each group's folders into its target folder (renamed if needed). Never overwrites; identical files are
+    duplicates; different files with the same name are kept as name_1."""
+    rows = []
+    total = len(groups)
+    for i, g in enumerate(groups, 1):
+        if should_stop:
+            should_stop()
+        parent, target = g["parent"], g["target"].strip()
+        row = {"parent": parent, "target": target, "members": [], "moved": 0, "dupes": 0, "conflicts": 0, "action": "", "detail": ""}
+        if not target or "/" in target or "\\" in target or target in (".", ".."):
+            row["action"], row["detail"] = "skipped", "that is not a valid folder name"
+            rows.append(row)
+            continue
+        names = [m for m in g["members"] if os.path.isdir(os.path.join(parent, m))]
+        row["members"] = names
+        if len(names) < 2 and not (names and names[0] != target):
+            row["action"], row["detail"] = "skipped", "nothing to merge"
+            rows.append(row)
+            continue
+        try:
+            tpath = os.path.join(parent, target)
+            others = [n for n in names if n != target]
+            stats = {"moved": 0, "dupes": 0, "conflicts": 0}
+            if not os.path.isdir(tpath):
+                # no member already has the target name: the biggest one gets it
+                big = max(others, key=lambda n: _count_files(os.path.join(parent, n)))
+                if not dry_run:
+                    os.rename(os.path.join(parent, big), tpath)
+                others.remove(big)
+                stats["moved"] += 0
+            for n in others:
+                src = os.path.join(parent, n)
+                if dry_run:
+                    if os.path.isdir(tpath):
+                        _preview_merge(src, tpath, stats)
+                    else:
+                        stats["moved"] += sum(len(f) for _, _, f in os.walk(src))
+                else:
+                    merge_dir(src, tpath, dupes_action, stats)
+            row.update(stats)
+            row["action"] = "would-merge" if dry_run else "merged"
+        except OSError as e:
+            row["action"], row["detail"] = "failed", str(e)
+        rows.append(row)
+        if progress:
+            progress("groups", i, total)
+    return rows
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("root", type=Path, help="folder containing all extracted 'Takeout N' folders")
