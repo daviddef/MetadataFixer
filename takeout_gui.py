@@ -81,6 +81,7 @@ def choose_zips(prompt):
     return [p.rstrip("/") for p in r.stdout.splitlines() if p.strip()] if r.returncode == 0 else []
 
 
+TZ_ON_TIP = [False]
 BATCH_RE = re.compile(r"Takeout \d+")
 
 
@@ -172,6 +173,8 @@ def summarise(rows, sidecars, roots, dry_run):
         tips.append("%d dates written from Google look like its upload time rather than when the photo was taken "
                     "(see the 'date_note' column in the report). Check a few of them." % upload_like)
     cc = changes
+    if TZ_ON_TIP[0]:
+        tips.append("Times were converted from Google's UTC to local time (the time zone of the place where the photo was taken when it has a location, otherwise your Mac's time zone) and saved with their UTC offset, so Apple Photos shows the right hour. Videos keep UTC, as video files require.")
     if cc["dates_filled"]:
         tips.append("%d photos had no date inside; the year in their folder name was used (shown as 'date set from the folder name' in the report)." % cc["dates_filled"])
     if cc["dates_corrected"]:
@@ -248,11 +251,13 @@ def write_text_summary(path, sm):
     Path(path).write_text("\n".join(L) + "\n", encoding="utf-8")
 
 
-def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=False, date_policy="earlier", name_dates=False, albums=False, edited="both", near=False, folder_dates="", guess_gps=False, dupe=None):
+def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=False, date_policy="earlier", name_dates=False, albums=False, edited="both", near=False, folder_dates="", guess_gps=False, dupe=None, tzfix=False):
     with LOCK:
         STATE.update(state="scanning", cancel=False, total=0, done=0, counts={}, message="Scanning folders...",
                      report="", summary=None, scan=None, extra={}, recent=[], phase=None, kind="fix", **({} if IN_GUIDED[0] else {"guided": None}))
     stage_dir = None
+    fx.TZ_CFG.update(on=bool(tzfix), home=fx.home_tzname() if tzfix else None)
+    TZ_ON_TIP[0] = bool(tzfix)
     try:
         zips, folder_entries = fx.split_sources(roots)
         resolved, seen = [], set()
@@ -638,7 +643,7 @@ def _run_guided(roots, out, dry_run, opts):
                                                      "junk": None, "names": None, "empty": None})))
         steps.append(("Put dates, locations and captions back, and merge into one library", lambda: run_job(
             roots, out, dry_run, bool(opts.get("replace", True)), bool(opts.get("live", True)), bool(opts.get("dedupe", True)), False, "earlier", bool(opts.get("name_dates", True)), bool(opts.get("albums", True)), opts.get("edited", "both"), bool(opts.get("near", False)),
-            "fix" if opts.get("fix_dates") else ("missing" if opts.get("folder_dates", False) else ""), bool(opts.get("guess_gps", False)), opts.get("dupe"))))
+            "fix" if opts.get("fix_dates") else ("missing" if opts.get("folder_dates", False) else ""), bool(opts.get("guess_gps", False)), opts.get("dupe"), bool(opts.get("tzfix", False)))))
         if opts.get("convert") and not dry_run:
             steps.append(("Convert old videos to MP4", lambda: run_convert([out], False, list(fx.DEFAULT_EXT), False, "high", "move", False)))
         titles = [t for t, _ in steps]
@@ -1879,7 +1884,51 @@ def build_recommendations(F, dest):
         add("Send to Apple Photos", "photos", "In batches, with time for iCloud to catch up if space is tight.", "optional")
     if F["json"]:
         add("Remove the .json files from the finished library", "clean", "Only after you have checked everything. Optional.", "optional")
-    return {"recs": recs, "extras": extras, "warnings": warns, "plan": plan, "flow": flow}
+    # ---------------------------------------------------------------- the pre-flight check
+    pf, worst = [], 0
+
+    def item(level, title, detail=""):
+        nonlocal worst
+        pf.append({"level": level, "title": title, "detail": detail})
+        worst = max(worst, {"ok": 0, "info": 0, "warn": 1, "bad": 2}[level])
+    if media:
+        pct_ = round(100 * F["matched"] / media)
+        item("ok" if pct_ >= 90 else ("warn" if pct_ >= 60 else "bad"), "%s%% of photos and videos have a Google info file" % pct_,
+             "%s of %s. The info file holds the real date, location and caption." % (n(F["matched"]), n(media)))
+        if F["unmatched"]:
+            item("info" if F["name_date_candidates"] >= F["unmatched"] * 0.5 else "warn", "%s have no info file" % pl(F["unmatched"], "photo or video", "photos and videos"),
+                 "%s can still get a date from their file name. Their info files may be in a Takeout zip you have not added." % n(F["name_date_candidates"]))
+    else:
+        item("bad", "No photos or videos were found", "Check that you chose your Takeout zip files or the folders that hold them.")
+    if F.get("orphan_json"):
+        item("warn" if F["orphan_json"] > 0.1 * max(1, F["json"]) else "info", "%s info files have no photo" % n(F["orphan_json"]), "Their photos are probably in a zip you have not added, or were deleted from Google Photos.")
+    if F.get("supplemental_json"):
+        item("ok", "Google's newer info-file naming is supported", "%s files use the '.supplemental-metadata' name, including shortened ones." % n(F["supplemental_json"]))
+    if F.get("edited_pairs"):
+        item("info", "%s have a Google-edited copy" % pl(F["edited_pairs"], "photo", "photos"), "Both are kept unless you choose otherwise.")
+    if F["live_pairs"]:
+        item("info", "%s look like Live Photos" % pl(F["live_pairs"], "pair", "pairs"), "A still with a video of the same name.")
+    if F["dup_n"]:
+        item("info", "%s exact duplicates found" % pl(F["dup_n"], "copy", "copies"), "%s that will be copied once." % fmt_bytes(F["dup_bytes"]))
+    if F["zero_media"]:
+        item("warn", "%s empty (0 byte) files" % n(F["zero_media"]), "They will be skipped.")
+    if F["extless"]:
+        item("info", "%s files have no file type" % n(F["extless"]), "They can be repaired.")
+    for name_, err_ in F.get("bad_zips", []):
+        item("bad", "%s could not be read" % name_, str(err_))
+    if F.get("zip_gaps"):
+        item("warn", "Takeout zip numbering skips %s" % ", ".join("%03d" % g_ for g_ in F["zip_gaps"][:6]), "Add the missing zip files for a complete result.")
+    if dest and free is not None:
+        item("bad" if free < copy_need else "ok", "Space: needs about %s, %s free" % (fmt_bytes(copy_need), fmt_bytes(free)), "On the Destination drive.")
+    elif not dest:
+        item("warn", "No Destination chosen yet", "Choose where the finished library goes.")
+    if S.get("n") and S.get("with_json"):
+        k_ = S["with_json"]
+        est_ = lambda key_: round(S[key_] / max(1, k_) * F["matched"])
+        item("ok", "The restore should add about %s dates, %s locations and %s captions" % (n(est_("add_date")), n(est_("add_gps")), n(est_("add_desc"))), "Estimated from a sample of %d of your files." % S["n"])
+    verdict = ["ready", "check", "stop"][worst]
+    preflight = {"verdict": verdict, "headline": {"ready": "Ready to go: nothing blocks the restore.", "check": "Mostly ready: a few things are worth a look first.", "stop": "Not ready: fix the red items first."}[verdict], "items": pf}
+    return {"recs": recs, "extras": extras, "warnings": warns, "plan": plan, "flow": flow, "preflight": preflight}
 
 
 def run_assess(roots, dest):
@@ -1913,7 +1962,7 @@ def run_assess(roots, dest):
         rec = build_recommendations(F, dest)
         tiles = [[F["media"], "photos and videos", ""], [F["matched"], "have an info file", "ok" if F["media"] and F["matched"] >= 0.6 * F["media"] else "bad"],
                  [F["dup_n"], "exact duplicates", ""], [F["legacy_n"], "old-format videos", ""], [F["extless"], "missing a file type", "bad" if F["extless"] else ""]]
-        sm = {"kind": "assess", "dry_run": True, "facts": {k: v for k, v in F.items() if k not in ("by_ext",)}, "tiles": tiles, "size": fmt_bytes(F["media_bytes"]),
+        sm = {"kind": "assess", "dry_run": True, "facts": {k: v for k, v in F.items() if k not in ("by_ext",)}, "preflight": rec.get("preflight"), "tiles": tiles, "size": fmt_bytes(F["media_bytes"]),
               "by_ext": sorted(F["by_ext"].items(), key=lambda kv: -kv[1])[:12], "dest": dest, "sources": F.get("sources", []), "overlap": F.get("overlap", []), "story": F.get("story", []), **rec, "tips": []}
         with LOCK:
             STATE.update(state="done", message="Finished", summary=sm, phase=None)
@@ -3244,7 +3293,7 @@ class Handler(BaseHTTPRequestHandler):
                 bool(body.get("dry_run")), bool(body.get("overwrite")), bool(body.get("pair_live")),
                 bool(body.get("dedupe")), bool(body.get("move")), body.get("date_policy", "earlier"), bool(body.get("name_dates")), bool(body.get("albums")),
                 body.get("edited") if body.get("edited") in ("both", "edited", "original") else "both", bool(body.get("near")),
-                body.get("folder_dates") if body.get("folder_dates") in ("missing", "fix") else "", bool(body.get("guess_gps")), body.get("dupe")))
+                body.get("folder_dates") if body.get("folder_dates") in ("missing", "fix") else "", bool(body.get("guess_gps")), body.get("dupe"), bool(body.get("tzfix"))))
             self._send(200, "{}")
         elif path == "/api/health_start":
             with LOCK:
@@ -3896,6 +3945,7 @@ h2{margin:12px 0 4px}small{margin-top:3px}
 <div class="opt"><input type="checkbox" id="gdedupe" checked><div>Merge same-named folders and remove exact duplicates<small>Every <i>Photos from 2012</i> across all your zips becomes one folder, and the same photo repeated in several albums is kept once.</small></div></div>
 <div class="opt"><input type="checkbox" id="glive" checked><div>Re-pair Live Photos<small>Reconnects each Live Photo&#39;s still and video so Apple Photos shows them together.</small></div></div>
 <div class="opt"><input type="checkbox" id="gnd" checked><div>Use the date in the file name when there is no .json<small>Fills in a missing date from names like <i>IMG_20190704_123456</i>. Never changes a date that is already there.</small></div></div>
+<div class="opt"><input type="checkbox" id="gtz" checked><div>Correct the time zone of dates<small>Google stores times in UTC, but Apple Photos reads a time with no zone as local time, so photos can show the wrong hour or even day. This writes the local time (using the place where the photo was taken, or your Mac&#39;s time zone if it has no location) together with its UTC offset. Videos keep UTC.</small></div></div>
 <div class="opt"><input type="checkbox" id="gfd" checked><div>Fill missing dates from the folder name<small>A photo with no date inside, in a folder called <i>2017</i>, <i>2026-06</i> or <i>June 2015</i>, gets that date. A date that already exists is never changed by this.</small></div></div>
 <div class="opt"><input type="checkbox" id="gfx"><div>&#9888;&#65039; Correct dates that disagree with the folder name, and dates in the future<small>A photo in the <i>2017</i> folder that says 2025, or says 2028, almost certainly lost its metadata. This sets it from the folder name. Only tick it if you trust your folder names.</small></div></div>
 <div class="opt"><input type="checkbox" id="ggps"><div>&#9888;&#65039; Guess a location from the folder name (Johannesburg, Japan...)<small>Where a photo has <b>no</b> location and its folder names a city or country, an approximate location is added and labelled as a guess. A location that already exists is never touched.</small></div></div>
@@ -3925,6 +3975,7 @@ h2{margin:12px 0 4px}small{margin-top:3px}
 <small>Google sometimes records the day a photo was uploaded or re-saved instead of the day it was taken, and that day is always later. Keeping the earlier of the two is usually right. A photo with no date at all always gets Google&#39;s.</small></div></div>
 <div class="opt"><input type="checkbox" id="ow" checked><div>&#9888;&#65039; Replace location and caption already stored in the photo<small>Every photo has hidden facts saved inside the file itself (called EXIF). <b>Off</b>: only fill in a location or caption that is missing. <b>On</b>: replace a different one with Google&#39;s version. Your pictures themselves are never altered.</small></div></div></div>
 <div class="opt"><input type="checkbox" id="ndates" checked><div>Use the date in the file name when there is no .json<small>For photos with no Google info file and no date of their own, reads a date from names like <i>IMG_20190704_123456</i>, <i>PXL_20210512_...</i> or <i>Screenshot 2019-07-04 at 12.34.56</i>. It only fills in a missing date and never changes one that is already there.</small></div></div>
+<div class="opt"><input type="checkbox" id="ftz" checked><div>Correct the time zone of dates<small>Writes local time plus its UTC offset instead of raw UTC, using the photo&#39;s location (or this Mac&#39;s time zone when it has none), so Apple Photos shows the right hour. Videos keep UTC.</small></div></div>
 <div class="opt"><input type="checkbox" id="fdates" checked><div>Fill missing dates from the folder name<small>No date inside the photo, and the folder is called <i>2017</i>, <i>2026-06</i>, <i>June 2015</i> or <i>Photos from 2019</i>: use that. Existing dates are not changed by this.</small></div></div>
 <div class="opt"><input type="checkbox" id="fdfix"><div>&#9888;&#65039; Correct dates that disagree with the folder name, and dates in the future<small>Sets the date from the folder name when the photo says a different year (a sign it lost its metadata) or a date that has not happened yet. Preview first.</small></div></div>
 <div class="opt"><input type="checkbox" id="fgps"><div>&#9888;&#65039; Guess a location from the folder name<small>Only for photos with no location, in a folder that names a city or country. The location is the middle of that place, and each photo is labelled with a keyword so you can find them. Preview first.</small></div></div>
@@ -4182,7 +4233,7 @@ $('go').onclick=async()=>{
   if(!$('dry').checked&&!dest()&&!confirm('No output folder: files will be edited IN PLACE. Continue?'))return;
   if($('move').checked&&!$('dry').checked&&!confirm('MOVE will take files out of your Takeout folders. Make sure you have another backup. Continue?'))return;
   $('sum').style.display='none';
-  const r=await post('/api/start',{roots:roots(),out:dest(),dry_run:$('dry').checked,overwrite:$('ow').checked,pair_live:$('live').checked,dedupe:$('dedupe').checked,move:$('move').checked,date_policy:$('datepol').value,name_dates:$('ndates').checked,albums:$('albums').checked,edited:$('edited').value,near:$('near').checked,folder_dates:$('fdfix').checked?'fix':($('fdates').checked?'missing':''),guess_gps:$('fgps').checked,dupe:getDupe()});
+  const r=await post('/api/start',{roots:roots(),out:dest(),dry_run:$('dry').checked,overwrite:$('ow').checked,pair_live:$('live').checked,dedupe:$('dedupe').checked,move:$('move').checked,date_policy:$('datepol').value,name_dates:$('ndates').checked,albums:$('albums').checked,edited:$('edited').value,near:$('near').checked,folder_dates:$('fdfix').checked?'fix':($('fdates').checked?'missing':''),guess_gps:$('fgps').checked,tzfix:$('ftz').checked,dupe:getDupe()});
   if(r.error)alert(r.error);else poll();
 };
 $('rev').onclick=()=>post('/api/reveal');
@@ -4350,7 +4401,7 @@ $('gst').onclick=async()=>{
   const real=!$('gdry').checked;
   if(real&&$('gcv').checked&&!confirm('After the library is built, old videos in the Destination will be converted to MP4 and the originals moved into an _original_videos folder. Continue?'))return;
   $('sum').style.display='none';curGuided=true;
-  const r=await post('/api/guided_start',{roots:roots(),out:dest(),dry_run:$('gdry').checked,opts:{fix_ext:$('gext').checked,convert:$('gcv').checked,replace:$('gow').checked,live:$('glive').checked,dedupe:$('gdedupe').checked,name_dates:$('gnd').checked,albums:$('galb').checked,edited:$('gedit').value,near:$('gnear').checked,folder_dates:$('gfd').checked,fix_dates:$('gfx').checked,guess_gps:$('ggps').checked,dupe:getDupe()}});
+  const r=await post('/api/guided_start',{roots:roots(),out:dest(),dry_run:$('gdry').checked,opts:{fix_ext:$('gext').checked,convert:$('gcv').checked,replace:$('gow').checked,live:$('glive').checked,dedupe:$('gdedupe').checked,name_dates:$('gnd').checked,albums:$('galb').checked,edited:$('gedit').value,near:$('gnear').checked,folder_dates:$('gfd').checked,fix_dates:$('gfx').checked,guess_gps:$('ggps').checked,tzfix:$('gtz').checked,dupe:getDupe()}});
   if(r.error){alert(r.error);curGuided=false}else{placeResults('guided');$('prog').style.display='block';poll()}};
 
 // ---- Help: user guide (rendered from USER_GUIDE.md), safety notice, support, about
@@ -4421,13 +4472,15 @@ document.querySelectorAll('a[data-help]').forEach(a=>a.onclick=e=>{e.preventDefa
   $('ackmore').onclick=()=>{ack.style.display='none';showTab('help');helpView('safety');
     const back=document.createElement('div');back.className='tip';back.innerHTML='Read the notice, then <a href="#" id="ackback">go back and accept it</a>.';$('hview').prepend(back);$('ackback').onclick=e=>{e.preventDefault();ack.style.display='flex'}}})();
 
-const RECMAP={albums:'galb',dedupe:'gdedupe',live:'glive',name_dates:'gnd',fix_ext:'gext',replace:'gow',folder_dates:'gfd',fix_dates:'gfx',guess_gps:'ggps'};
+const RECMAP={tzfix:'gtz',albums:'galb',dedupe:'gdedupe',live:'glive',name_dates:'gnd',fix_ext:'gext',replace:'gow',folder_dates:'gfd',fix_dates:'gfx',guess_gps:'ggps'};
 function applyRecs(s){
   Object.entries(RECMAP).forEach(([k,id])=>{const present=(s.recs||[]).find(r=>r.id===k);const cb=document.getElementById('rc_'+k);$(id).checked=!!present&&(!cb||cb.checked)});if(!(s.recs||[]).find(r=>r.id==='folder_dates'))$('gfd').checked=false;
   $('gcv').checked=false;PROF_CUSTOM=true;renderProfile()}
+function preflightHTML(p){if(!p)return '';const ic={ok:'&#10003;',info:'i',warn:'!',bad:'&times;'};const col={ready:'var(--ok)',check:'var(--warn)',stop:'var(--bad)'}[p.verdict];
+  return `<div class="card pfcard" style="border-left:5px solid ${col}"><div style="display:flex;align-items:center;gap:8px"><b style="font-size:16px">Pre-flight check</b><span class="badge" style="background:${col};color:#fff">${p.verdict==='ready'?'Ready':p.verdict==='check'?'Check first':'Not ready'}</span></div><div class="mutes" style="margin:4px 0 6px">${esc(p.headline)}</div>`+p.items.map(i=>`<div class="gc ${i.level==='ok'?'ok':i.level==='bad'?'bad':i.level==='warn'?'':'opt2'}" style="border-radius:10px!important;margin:3px 0;padding:4px 8px!important"><i>${ic[i.level]}</i><span><b>${esc(i.title)}</b>${i.detail?' <span class="mutes">&middot; '+esc(i.detail)+'</span>':''}</span></div>`).join('')+'</div>'}
 function showAssess(s){
   const f=s.facts||{};
-  let h='<div class="tiles">'+s.tiles.map(t=>tile(t[0],t[1],t[2])).join('')+'</div><small>Total size of photos and videos: <b>'+esc(s.size)+'</b>'+(f.zips?' &middot; '+f.zips+' zip file'+(f.zips===1?'':'s'):'')+(f.folders?' &middot; '+f.folders+' folder'+(f.folders===1?'':'s'):'')+'</small>';
+  let h=preflightHTML(s.preflight)+'<div class="tiles">'+s.tiles.map(t=>tile(t[0],t[1],t[2])).join('')+'</div><small>Total size of photos and videos: <b>'+esc(s.size)+'</b>'+(f.zips?' &middot; '+f.zips+' zip file'+(f.zips===1?'':'s'):'')+(f.folders?' &middot; '+f.folders+' folder'+(f.folders===1?'':'s'):'')+'</small>';
   h+=(s.warnings||[]).map(w=>`<div class="tip">${esc(w)}</div>`).join('');
   h+=storyHTML(s.story,'Real photos from your files and what the restore would do to each one.');
   const TL={guided:'Guided',fix:'Fix',merge:'Merge',clean:'Clean up',convert:'Convert',photos:'Photos',similar:'Similar',health:'Health',history:'History'};
@@ -4909,24 +4962,24 @@ renderDP();
 // ---- styles: one tap sets the options everywhere ----
 const PROFILES={
  safest:{icon:'\u{1F6DF}',name:'Safest',blurb:'Only fills gaps. Changes nothing it does not have to.',time:3,risk:1,reward:2,
-  g:{gdedupe:1,glive:1,gnd:1,gfd:1,gfx:0,ggps:0,gnear:0,galb:1,gow:0,gext:0,gcv:0,gedit:'both'},
-  f:{dedupe:1,live:1,ndates:1,fdates:1,fdfix:0,fgps:0,near:0,albums:1,ow:0,move:0,datepol:'earlier',edited:'both'},
+  g:{gdedupe:1,glive:1,gnd:1,gtz:1,gfd:1,gfx:0,ggps:0,gnear:0,galb:1,gow:0,gext:0,gcv:0,gedit:'both'},
+  f:{dedupe:1,live:1,ndates:1,ftz:1,fdates:1,fdfix:0,fgps:0,near:0,albums:1,ow:0,move:0,datepol:'earlier',edited:'both'},
   o:{simsens:'3',pbatch:'5',ppace:'verify',padapt:0,palb:1},dp:{bursts:'keep',must:['name','dimensions']}},
  balanced:{icon:'⚖️',name:'Balanced',blurb:'The recommended mix. Good results, sensible care.',time:3,risk:2,reward:3,
-  g:{gdedupe:1,glive:1,gnd:1,gfd:1,gfx:0,ggps:0,gnear:0,galb:1,gow:1,gext:1,gcv:0,gedit:'both'},
-  f:{dedupe:1,live:1,ndates:1,fdates:1,fdfix:0,fgps:0,near:0,albums:1,ow:1,move:0,datepol:'earlier',edited:'both'},
+  g:{gdedupe:1,glive:1,gnd:1,gtz:1,gfd:1,gfx:0,ggps:0,gnear:0,galb:1,gow:1,gext:1,gcv:0,gedit:'both'},
+  f:{dedupe:1,live:1,ndates:1,ftz:1,fdates:1,fdfix:0,fgps:0,near:0,albums:1,ow:1,move:0,datepol:'earlier',edited:'both'},
   o:{simsens:'6',pbatch:'10',ppace:'verify',padapt:1,palb:1},dp:{bursts:'keep',must:[]}},
  fastest:{icon:'⚡',name:'Fastest',blurb:'Fewest passes over your files. Skips the slow extras.',time:1,risk:2,reward:1,
-  g:{gdedupe:0,glive:0,gnd:1,gfd:0,gfx:0,ggps:0,gnear:0,galb:0,gow:1,gext:0,gcv:0,gedit:'both'},
-  f:{dedupe:0,live:0,ndates:1,fdates:0,fdfix:0,fgps:0,near:0,albums:0,ow:1,move:0,datepol:'earlier',edited:'both'},
+  g:{gdedupe:0,glive:0,gnd:1,gtz:1,gfd:0,gfx:0,ggps:0,gnear:0,galb:0,gow:1,gext:0,gcv:0,gedit:'both'},
+  f:{dedupe:0,live:0,ndates:1,ftz:1,fdates:0,fdfix:0,fgps:0,near:0,albums:0,ow:1,move:0,datepol:'earlier',edited:'both'},
   o:{simsens:'3',pbatch:'25',ppace:'space',padapt:0,palb:0},dp:{bursts:'keep',must:[]}},
  thorough:{icon:'\u{1F3AF}',name:'Thorough',blurb:'Does everything safe, as well as it can. Takes longer.',time:5,risk:2,reward:4,
-  g:{gdedupe:1,glive:1,gnd:1,gfd:1,gfx:0,ggps:0,gnear:0,galb:1,gow:1,gext:1,gcv:0,gedit:'both'},
-  f:{dedupe:1,live:1,ndates:1,fdates:1,fdfix:0,fgps:0,near:0,albums:1,ow:1,move:0,datepol:'earlier',edited:'both'},
+  g:{gdedupe:1,glive:1,gnd:1,gtz:1,gfd:1,gfx:0,ggps:0,gnear:0,galb:1,gow:1,gext:1,gcv:0,gedit:'both'},
+  f:{dedupe:1,live:1,ndates:1,ftz:1,fdates:1,fdfix:0,fgps:0,near:0,albums:1,ow:1,move:0,datepol:'earlier',edited:'both'},
   o:{simsens:'6',pbatch:'5',ppace:'verify',padapt:1,palb:1},dp:{bursts:'keep',must:[]}},
  risky:{icon:'\u{1F3B2}',name:'I like risk',blurb:'Maximum clean-up and guessing. Review the preview carefully.',time:3,risk:5,reward:5,
-  g:{gdedupe:1,glive:1,gnd:1,gfd:1,gfx:1,ggps:1,gnear:1,galb:1,gow:1,gext:1,gcv:1,gedit:'edited'},
-  f:{dedupe:1,live:1,ndates:1,fdates:1,fdfix:1,fgps:1,near:1,albums:1,ow:1,move:0,datepol:'earlier',edited:'edited'},
+  g:{gdedupe:1,glive:1,gnd:1,gtz:1,gfd:1,gfx:1,ggps:1,gnear:1,galb:1,gow:1,gext:1,gcv:1,gedit:'edited'},
+  f:{dedupe:1,live:1,ndates:1,ftz:1,fdates:1,fdfix:1,fgps:1,near:1,albums:1,ow:1,move:0,datepol:'earlier',edited:'edited'},
   o:{simsens:'10',pbatch:'25',ppace:'space',padapt:1,palb:1},dp:{bursts:'best',must:[]}}
 };
 let PROF=(function(){try{const p=localStorage.getItem('profile');if(p&&PROFILES[p])return p}catch(e){}return 'balanced'})(),PROF_CUSTOM=false;

@@ -184,26 +184,192 @@ def ts(d, field):
     except (KeyError, TypeError, ValueError):
         return None
 
+# ---- Time zones: Google's times are UTC; Apple Photos reads a time with no zone as LOCAL time ------------------------------
+TZ_TEXT = """
+Africa/Johannesburg|-26.2|28.05
+Africa/Maputo|-25.97|32.57
+Africa/Windhoek|-22.56|17.08
+Africa/Lagos|6.52|3.38
+Africa/Accra|5.6|-0.19
+Africa/Dakar|14.7|-17.45
+Africa/Casablanca|33.57|-7.59
+Africa/Algiers|36.75|3.06
+Africa/Tunis|36.8|10.18
+Africa/Cairo|30.04|31.24
+Africa/Nairobi|-1.29|36.82
+Africa/Addis_Ababa|9.03|38.74
+Africa/Dar_es_Salaam|-6.8|39.28
+Africa/Kampala|0.35|32.58
+Africa/Lusaka|-15.4|28.29
+Africa/Harare|-17.83|31.05
+Indian/Mauritius|-20.16|57.5
+Indian/Maldives|4.18|73.51
+Indian/Antananarivo|-18.9|47.5
+Asia/Dubai|25.2|55.27
+Asia/Riyadh|24.7|46.7
+Asia/Tehran|35.69|51.39
+Asia/Jerusalem|31.77|35.22
+Asia/Karachi|24.86|67.0
+Asia/Kolkata|19.08|72.88
+Asia/Kolkata|28.61|77.21
+Asia/Kathmandu|27.72|85.32
+Asia/Colombo|6.93|79.86
+Asia/Dhaka|23.81|90.41
+Asia/Bangkok|13.75|100.5
+Asia/Ho_Chi_Minh|10.82|106.63
+Asia/Singapore|1.35|103.82
+Asia/Kuala_Lumpur|3.14|101.69
+Asia/Jakarta|-6.2|106.85
+Asia/Makassar|-8.65|115.2
+Asia/Manila|14.6|120.98
+Asia/Hong_Kong|22.32|114.17
+Asia/Shanghai|31.23|121.47
+Asia/Taipei|25.03|121.56
+Asia/Seoul|37.57|126.98
+Asia/Tokyo|35.68|139.65
+Asia/Ulaanbaatar|47.9|106.9
+Asia/Almaty|43.24|76.89
+Asia/Tashkent|41.3|69.24
+Asia/Novosibirsk|55.03|82.92
+Asia/Vladivostok|43.12|131.89
+Europe/London|51.51|-0.13
+Europe/Dublin|53.35|-6.26
+Europe/Lisbon|38.72|-9.14
+Atlantic/Reykjavik|64.15|-21.94
+Europe/Paris|48.86|2.35
+Europe/Madrid|40.42|-3.7
+Europe/Berlin|52.52|13.4
+Europe/Amsterdam|52.37|4.9
+Europe/Rome|41.9|12.5
+Europe/Zurich|47.38|8.54
+Europe/Vienna|48.21|16.37
+Europe/Prague|50.08|14.44
+Europe/Warsaw|52.23|21.01
+Europe/Stockholm|59.33|18.07
+Europe/Oslo|59.91|10.75
+Europe/Copenhagen|55.68|12.57
+Europe/Helsinki|60.17|24.94
+Europe/Athens|37.98|23.73
+Europe/Istanbul|41.01|28.98
+Europe/Bucharest|44.43|26.1
+Europe/Kyiv|50.45|30.52
+Europe/Moscow|55.76|37.62
+Europe/Samara|53.2|50.15
+Asia/Yekaterinburg|56.84|60.6
+America/St_Johns|47.56|-52.71
+America/Halifax|44.65|-63.57
+America/New_York|40.71|-74.01
+America/Toronto|43.65|-79.38
+America/Chicago|41.88|-87.63
+America/Denver|39.74|-104.99
+America/Phoenix|33.45|-112.07
+America/Los_Angeles|34.05|-118.24
+America/Vancouver|49.28|-123.12
+America/Anchorage|61.22|-149.9
+Pacific/Honolulu|21.31|-157.86
+America/Mexico_City|19.43|-99.13
+America/Cancun|21.16|-86.85
+America/Havana|23.11|-82.37
+America/Panama|8.98|-79.52
+America/Bogota|4.71|-74.07
+America/Lima|-12.05|-77.04
+America/Caracas|10.48|-66.9
+America/La_Paz|-16.5|-68.15
+America/Santiago|-33.45|-70.67
+America/Argentina/Buenos_Aires|-34.6|-58.38
+America/Sao_Paulo|-23.55|-46.63
+America/Manaus|-3.12|-60.02
+Atlantic/Azores|37.74|-25.67
+Australia/Perth|-31.95|115.86
+Australia/Darwin|-12.46|130.84
+Australia/Adelaide|-34.93|138.6
+Australia/Brisbane|-27.47|153.03
+Australia/Sydney|-33.87|151.21
+Australia/Hobart|-42.88|147.33
+Pacific/Auckland|-36.85|174.76
+Pacific/Fiji|-18.14|178.44
+Pacific/Tongatapu|-21.14|-175.2
+Pacific/Pago_Pago|-14.28|-170.7
+Pacific/Tahiti|-17.53|-149.57
+Pacific/Guam|13.44|144.79
+"""
+TZ_CFG = {"on": False, "home": None, "approx": 0, "exact": 0, "home_used": 0}
+_TZ_TAB = []
+
+
+def _tz_table():
+    if not _TZ_TAB:
+        for line in TZ_TEXT.strip().splitlines():
+            n, la, lo = line.split("|")
+            _TZ_TAB.append((n, float(la), float(lo)))
+    return _TZ_TAB
+
+
+def home_tzname():
+    """The time zone of this computer, as an IANA name when it can be found."""
+    try:
+        link = os.path.realpath("/etc/localtime")
+        if "zoneinfo/" in link:
+            return link.split("zoneinfo/", 1)[1]
+    except OSError:
+        pass
+    return os.environ.get("TZ") or None
+
+
+def tz_for(lat, lon):
+    """The nearest known time zone to a place: (IANA name, kilometres away)."""
+    best = min(((km_between(lat, lon, la, lo), n) for n, la, lo in _tz_table()), key=lambda x: x[0])
+    return best[1], best[0]
+
+
+def local_stamp(epoch, lat=None, lon=None, home=None):
+    """(wall-clock string 'YYYY:MM:DD HH:MM:SS', offset '+02:00', zone name, how) for a UTC moment. With a location the zone of that place
+    is used; without one the home zone. how = 'place' | 'nearby' | 'home' | 'utc'."""
+    from zoneinfo import ZoneInfo
+    utc = datetime.fromtimestamp(epoch, timezone.utc)
+    name, how = None, "utc"
+    try:
+        if lat is not None and lon is not None and (abs(float(lat)) > 0.01 or abs(float(lon)) > 0.01):
+            name, km = tz_for(float(lat), float(lon))
+            how = "place" if km < 900 else "nearby"
+        elif home:
+            name, how = home, "home"
+        if name:
+            loc = utc.astimezone(ZoneInfo(name))
+            off = loc.utcoffset()
+            mins = int(off.total_seconds() // 60)
+            sign = "+" if mins >= 0 else "-"
+            return loc.strftime("%Y:%m:%d %H:%M:%S"), "%s%02d:%02d" % (sign, abs(mins) // 60, abs(mins) % 60), name, how
+    except Exception:
+        pass
+    return utc.strftime("%Y:%m:%d %H:%M:%S"), "", "UTC", "utc"
+
+
 
 def build_args(d, ext, overwrite, skip=()):
     """exiftool arguments for one sidecar. Returns (args, taken_epoch)."""
     is_video = ext in VIDEO_EXT
     taken = ts(d, "photoTakenTime") or ts(d, "creationTime")
     a = []
-    if taken and "date" not in skip:
-        dt = datetime.fromtimestamp(taken, timezone.utc).strftime("%Y:%m:%d %H:%M:%S")
-        if is_video:
-            a += ["-api", "QuickTimeUTC=1",
-                  f"-QuickTime:CreateDate={dt}", f"-QuickTime:ModifyDate={dt}",
-                  f"-QuickTime:MediaCreateDate={dt}", f"-QuickTime:TrackCreateDate={dt}"]
-        else:
-            a += [f"-AllDates={dt}", f"-XMP:DateCreated={dt}"]
     geo = d.get("geoData") or {}
     if not (geo.get("latitude") or geo.get("longitude")):
         geo = d.get("geoDataExif") or {}
     lat, lon = geo.get("latitude"), geo.get("longitude")
     if (lat is None) != (lon is None):
         lat = lon = None
+    if taken and "date" not in skip:
+        dt = datetime.fromtimestamp(taken, timezone.utc).strftime("%Y:%m:%d %H:%M:%S")
+        if is_video:                                         # video dates are UTC by definition
+            a += ["-api", "QuickTimeUTC=1",
+                  f"-QuickTime:CreateDate={dt}", f"-QuickTime:ModifyDate={dt}",
+                  f"-QuickTime:MediaCreateDate={dt}", f"-QuickTime:TrackCreateDate={dt}"]
+        elif TZ_CFG["on"]:
+            wall, off, zn, how = local_stamp(taken, lat, lon, TZ_CFG["home"])
+            a += [f"-AllDates={wall}", f"-XMP:DateCreated={wall}"]
+            if off:
+                a += [f"-OffsetTimeOriginal={off}", f"-OffsetTime={off}", f"-OffsetTimeDigitized={off}"]
+        else:
+            a += [f"-AllDates={dt}", f"-XMP:DateCreated={dt}"]
     if "gps" in skip:
         lat = lon = None
     if (lat or lon) and is_video:
@@ -411,6 +577,14 @@ def classify(d, ext, ex, overwrite, date_policy="earlier"):
         out["date"] = "none"
     else:
         dt = datetime.fromtimestamp(taken, timezone.utc).strftime("%Y:%m:%d %H:%M:%S")
+        tzlabel = " UTC"
+        if TZ_CFG["on"] and ext not in VIDEO_EXT:
+            g0 = d.get("geoData") or {}
+            if not (g0.get("latitude") or g0.get("longitude")):
+                g0 = d.get("geoDataExif") or {}
+            wall, off, zn, how = local_stamp(taken, g0.get("latitude"), g0.get("longitude"), TZ_CFG["home"])
+            if off:
+                dt, tzlabel = wall, " (local %s, %s)" % (off, zn.split("/")[-1].replace("_", " "))
         e = ex.get("date", "")
         if not e or e.startswith("0000"):
             out["date"] = "added"
@@ -425,7 +599,7 @@ def classify(d, ext, ex, overwrite, date_policy="earlier"):
         if out["date"] in ("kept", "same") and e and not e.startswith("0000"):
             out["_taken_final"] = _epoch(e) or taken
         out["date_before"] = "" if e.startswith("0000") else e[:19]
-        out["date_google"] = dt + " UTC"
+        out["date_google"] = dt + tzlabel
         up = ts(d, "creationTime")
         if up and abs(up - taken) <= 300:
             out["date_note"] = "Google's date equals its upload time, so it may not be when the photo was taken"
@@ -2997,6 +3171,9 @@ def assess(entries, dest="", progress=None, should_stop=None, sample_n=120):
         F["unmatched"] += 1
         if date_from_name(vp.name):
             F["name_date_candidates"] += 1
+    used_json = {str(v) for v in matched_paths.values()}
+    F["orphan_json"] = sum(1 for vp, _, _ in jsons if str(vp) not in used_json and Path(DUP_RE.sub("", json_key(vp))).suffix in MEDIA_EXT)
+    F["supplemental_json"] = sum(1 for vp, _, _ in jsons if ".supplemental-metadata" in vp.name.lower() or ".supplemental-meta" in vp.name.lower())
     # Exact duplicates
     say("Looking for exact duplicates", 0, 0)
     stop()

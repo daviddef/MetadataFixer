@@ -922,12 +922,36 @@ def t_qa_hunt_regressions():
         srv.shutdown()
 
 
+def t_timezone_correct_dates():
+    d = WORK / "tzsrc"
+    jpeg(d / "Photos from 2012" / "jb.jpg", seed=51); sidecar(d / "Photos from 2012" / "jb.jpg", ts=1341136800, lat=-26.2, lon=28.05)   # 2012-07-01 10:00 UTC
+    jpeg(d / "Photos from 2012" / "tk.jpg", seed=52); sidecar(d / "Photos from 2012" / "tk.jpg", ts=1341136800, lat=35.68, lon=139.65)
+    jpeg(d / "Photos from 2012" / "nogps.jpg", seed=53); sidecar(d / "Photos from 2012" / "nogps.jpg", ts=1341136800)
+    g.run_job([str(d)], str(WORK / "tz_out"), False, False, tzfix=True); sm = state_ok()
+    o = WORK / "tz_out" / "Photos from 2012"
+    assert exif(o / "jb.jpg", "DateTimeOriginal")[0].startswith("2012:07:01 12:00:00"), exif(o / "jb.jpg", "DateTimeOriginal")
+    assert exif(o / "jb.jpg", "OffsetTimeOriginal")[0].strip() == "+02:00"
+    assert exif(o / "tk.jpg", "DateTimeOriginal")[0].startswith("2012:07:01 19:00:00") and exif(o / "tk.jpg", "OffsetTimeOriginal")[0].strip() == "+09:00"
+    home = fx.home_tzname()
+    assert exif(o / "nogps.jpg", "DateTimeOriginal")[0][:10] == "2012:07:01"
+    g.run_job([str(d)], str(WORK / "tz_out_utc"), False, False, tzfix=False); state_ok()
+    assert exif(WORK / "tz_out_utc" / "Photos from 2012" / "jb.jpg", "DateTimeOriginal")[0].startswith("2012:07:01 10:00:00")
+    assert fx.TZ_CFG["on"] is False
+
+
+def t_preflight_report():
+    g.run_assess([str(TK)], str(WORK / "pf_dest")); sm = state_ok()
+    pf = sm["preflight"]
+    assert pf["verdict"] in ("ready", "check", "stop") and pf["headline"] and any("info file" in i["title"] for i in pf["items"]), pf
+    assert any(i["title"].startswith("Space") or "Destination" in i["title"] for i in pf["items"]), pf
+
+
 ORDER = ["t_fix_copy", "t_fix_namedate", "t_fix_inplace", "t_fix_move", "t_fix_dryrun_changes_nothing", "t_fix_zip", "t_zip_resume", "t_zip_needs_dest", "t_zip_corrupt",
          "t_edited_policies", "t_cancel_mid_run", "t_unreadable_and_zero", "t_dest_not_writable", "t_exiftool_missing", "t_low_disk_zip", "t_assess_and_recommend",
          "t_assess_multi_and_photoslib", "t_guided_end_to_end", "t_guided_no_dest", "t_merge_variants", "t_merge_refuses_unsafe", "t_merge_move_in_place", "t_cleanup_all",
          "t_cleanup_refuses_broad", "t_consolidate", "t_convert", "t_convert_stop", "t_similar_apply_undo", "t_health_and_formats", "t_undo_copy_run", "t_photos_plan_and_run",
          "t_photos_applescript_injection_safe", "t_photos_errors", "t_monitor_rules", "t_monitor_job_paste", "t_compare_and_near", "t_diagnostics", "t_history_report",
-         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs", "t_audit_regressions", "t_dates_and_places", "t_resilient_copy", "t_rerun_over_http", "t_keeper_rules_and_matching", "t_bursts_and_compare_rules", "t_qa_hunt_regressions"]
+         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs", "t_audit_regressions", "t_dates_and_places", "t_resilient_copy", "t_rerun_over_http", "t_keeper_rules_and_matching", "t_bursts_and_compare_rules", "t_qa_hunt_regressions", "t_timezone_correct_dates", "t_preflight_report"]
 if __name__ == "__main__":
     only = sys.argv[1:]
     for n in ORDER:
