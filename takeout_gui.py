@@ -29,7 +29,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.02-e"
+VERSION = "2026.10.02-f"
 class Cancelled(Exception):
     pass
 
@@ -1680,7 +1680,7 @@ def run_assess(roots, dest):
 APP_HOME = Path(os.environ.get("METADATAFIXER_HOME") or (
     Path.home() / "Library" / "Application Support" / "MetadataFixer" if sys.platform == "darwin" else Path.home() / ".metadatafixer"))
 HIST_DIR = APP_HOME / "history"
-REPORTS_DIR = Path(os.environ.get("METADATAFIXER_REPORTS") or (Path.home() / "Documents" / "Metadata Fixer Reports"))
+REPORTS_DIR = Path(os.environ.get("METADATAFIXER_REPORTS") or (Path.home() / "Documents" / "Backstory Reports"))
 KIND_TITLE = {"assess": "Check my files", "fix": "Fix metadata", "merge": "Merge folders", "cleanup": "Clean up", "convert": "Convert videos", "guided": "Guided: Fix my Takeout"}
 
 
@@ -1754,7 +1754,7 @@ def write_run_record(run, timeline):
              "dry_run": bool(meta.get("dry_run")), "source": meta.get("source", []), "dest": meta.get("dest", ""),
              "options": meta.get("options", {}), "headline": _headline(sm) if state == "finished" else msg,
              "folder": "", "html": "", "log": ""}
-    L = ["Metadata Fixer run log", "=" * 60,
+    L = ["Backstory run log", "=" * 60,
          "Run:        %s%s" % (title, " (preview, nothing changed)" if entry["dry_run"] else ""),
          "Result:     %s%s" % (state.upper(), (" - " + msg) if entry["message"] else ""),
          "Started:    %s" % time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(run["started"])),
@@ -1773,7 +1773,7 @@ def write_run_record(run, timeline):
     for t, tst, tmsg in timeline:
         L.append("%s  [%s] %s" % (time.strftime("%H:%M:%S", time.localtime(t)), tst, tmsg))
     L.append("%s  [end] %s" % (time.strftime("%H:%M:%S", time.localtime(ended)), state))
-    L += ["", "Metadata Fixer is free software provided as is, without warranty. Back up your photos and read each preview before a real run.",
+    L += ["", "Backstory is free software provided as is, without warranty. Back up your photos and read each preview before a real run.",
           "Support: " + SUPPORT_EMAIL]
     try:
         folder.mkdir(parents=True, exist_ok=True)
@@ -1866,13 +1866,13 @@ def save_report_html(rid, body_html):
                  ("From", "<br>".join(html_escape(x) for x in e["source"]) or "-"), ("To", html_escape(e["dest"]) or "-"),
                  ("Version", html_escape(e["version"]))]
     doc = ('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
-           '<title>Metadata Fixer report</title><style>' + _page_css() +
+           '<title>Backstory report</title><style>' + _page_css() +
            'body{padding:32px 20px}main{max-width:860px}.rhead{margin-bottom:18px}.rhead h1{font-size:26px}.rmeta{width:100%;margin:10px 0 4px}'
            '.rmeta td:first-child{width:90px;color:var(--mute)}.rfoot{margin-top:28px;color:var(--mute);font-size:12px}'
            '@media print{body{background:#fff;color:#000;padding:0}.card,.tile{break-inside:avoid}}</style></head><body><main>'
-           '<div class="rhead"><h1>Metadata Fixer report</h1><div class="card"><table class="rmeta">' +
+           '<div class="rhead"><h1>Backstory report</h1><div class="card"><table class="rmeta">' +
            "".join("<tr><td>%s</td><td>%s</td></tr>" % kv for kv in meta_rows) + '</table></div></div>' + body_html +
-           '<p class="rfoot">Made by Metadata Fixer on your computer. Nothing was uploaded. The full text log is saved next to this report (run.log). Provided as is, without warranty: keep backups of your originals. Support: ' + SUPPORT_EMAIL + '</p></main></body></html>')
+           '<p class="rfoot">Made by Backstory on your computer. Nothing was uploaded. The full text log is saved next to this report (run.log). Provided as is, without warranty: keep backups of your originals. Support: ' + SUPPORT_EMAIL + '</p></main></body></html>')
     try:
         (folder / "report.html").write_text(doc, encoding="utf-8")
         e["html"] = str(folder / "report.html")
@@ -1900,7 +1900,7 @@ def open_path(rid, what):
 def diagnostics_text():
     with LOCK:
         st = {k: STATE.get(k) for k in ("state", "kind", "message")}
-    L = ["Metadata Fixer diagnostics", "Version: %s" % VERSION, "System: %s, Python %s%s" % (platform.platform(), platform.python_version(), " (packaged app)" if FROZEN else ""),
+    L = ["Backstory diagnostics", "Version: %s" % VERSION, "System: %s, Python %s%s" % (platform.platform(), platform.python_version(), " (packaged app)" if FROZEN else ""),
          "Tools: " + ", ".join("%s %s" % kv for kv in _tool_versions().items()), "Now: %s / %s / %s" % (st["state"], st["kind"], st["message"]), "", "Recent runs:"]
     for e in list_history(8):
         L.append("- %s  %s  %s%s  %s" % (time.strftime("%Y-%m-%d %H:%M", time.localtime(e["started"])), e["title"], e["state"],
@@ -2087,7 +2087,7 @@ class Handler(BaseHTTPRequestHandler):
 
 PAGE = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Takeout Metadata Fixer</title>
+<title>Backstory</title><link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDI0IDEwMjQiIHdpZHRoPSIxMDI0IiBoZWlnaHQ9IjEwMjQiPgo8ZGVmcz4KPGxpbmVhckdyYWRpZW50IGlkPSJiZyIgeDE9IjAiIHkxPSIwIiB4Mj0iMSIgeTI9IjEiPjxzdG9wIG9mZnNldD0iMCIgc3RvcC1jb2xvcj0iIzViNWJmMCIvPjxzdG9wIG9mZnNldD0iLjU1IiBzdG9wLWNvbG9yPSIjN2E0ZGYwIi8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjMTRiOGM0Ii8+PC9saW5lYXJHcmFkaWVudD4KPGxpbmVhckdyYWRpZW50IGlkPSJza3kiIHgxPSIwIiB5MT0iMCIgeDI9IjAiIHkyPSIxIj48c3RvcCBvZmZzZXQ9IjAiIHN0b3AtY29sb3I9IiM4ZmQzZmYiLz48c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiNmZmU2YjMiLz48L2xpbmVhckdyYWRpZW50Pgo8ZmlsdGVyIGlkPSJzaCIgeD0iLTIwJSIgeT0iLTIwJSIgd2lkdGg9IjE0MCUiIGhlaWdodD0iMTUwJSI+PGZlRHJvcFNoYWRvdyBkeD0iMCIgZHk9IjE4IiBzdGREZXZpYXRpb249IjIyIiBmbG9vZC1jb2xvcj0iIzFhMTA1MCIgZmxvb2Qtb3BhY2l0eT0iLjM1Ii8+PC9maWx0ZXI+CjxmaWx0ZXIgaWQ9InNoMiIgeD0iLTMwJSIgeT0iLTMwJSIgd2lkdGg9IjE2MCUiIGhlaWdodD0iMTcwJSI+PGZlRHJvcFNoYWRvdyBkeD0iMCIgZHk9IjgiIHN0ZERldmlhdGlvbj0iMTAiIGZsb29kLWNvbG9yPSIjM2ExMDAwIiBmbG9vZC1vcGFjaXR5PSIuMzUiLz48L2ZpbHRlcj4KPC9kZWZzPgo8cmVjdCB3aWR0aD0iMTAyNCIgaGVpZ2h0PSIxMDI0IiByeD0iMjMwIiBmaWxsPSJ1cmwoI2JnKSIvPgo8Y2lyY2xlIGN4PSI4NjAiIGN5PSIxNzAiIHI9IjIzMCIgZmlsbD0iI2ZmZiIgb3BhY2l0eT0iLjA3Ii8+CjxnIHRyYW5zZm9ybT0icm90YXRlKC03IDQ4MCA1MjApIiBmaWx0ZXI9InVybCgjc2gpIj4KICA8cmVjdCB4PSIxOTAiIHk9IjE1MCIgd2lkdGg9IjYwMCIgaGVpZ2h0PSI3MjAiIHJ4PSIzNCIgZmlsbD0iI2ZmZmRmOCIvPgogIDxyZWN0IHg9IjI0MCIgeT0iMjAwIiB3aWR0aD0iNTAwIiBoZWlnaHQ9IjQ3MCIgcng9IjE0IiBmaWxsPSJ1cmwoI3NreSkiLz4KICA8Y2lyY2xlIGN4PSI2MTAiIGN5PSIzMjAiIHI9IjYyIiBmaWxsPSIjZmZiMzQ3Ii8+CiAgPHBhdGggZD0iTTI0MCA2MDAgTDQwMCA0MzAgTDUwMCA1NDAgTDU5MCA0NTAgTDc0MCA2MTAgTDc0MCA2NTYgYTE0IDE0IDAgMCAxIC0xNCAxNCBMMjU0IDY3MCBhMTQgMTQgMCAwIDEgLTE0IC0xNCBaIiBmaWxsPSIjM2Y2ZmQ4Ii8+CiAgPHBhdGggZD0iTTI0MCA2NDAgTDM2MCA1NDAgTDQ3MCA2MzAgTDU2MCA1NjAgTDc0MCA2NTAgTDc0MCA2NTYgYTE0IDE0IDAgMCAxIC0xNCAxNCBMMjU0IDY3MCBhMTQgMTQgMCAwIDEgLTE0IC0xNCBaIiBmaWxsPSIjMmM0ZmE4Ii8+CiAgPHJlY3QgeD0iMjUwIiB5PSI3MjIiIHdpZHRoPSIzMzAiIGhlaWdodD0iMjYiIHJ4PSIxMyIgZmlsbD0iI2M5Y2JlMCIvPgogIDxyZWN0IHg9IjI1MCIgeT0iNzcyIiB3aWR0aD0iMjIwIiBoZWlnaHQ9IjI2IiByeD0iMTMiIGZpbGw9IiNkY2RkZWQiLz4KPC9nPgo8ZyBmaWx0ZXI9InVybCgjc2gyKSIgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNjkwIDYxMCkiPgogIDxwYXRoIGQ9Ik0wIC0xNTAgQy04NCAtMTUwIC0xNDYgLTg4IC0xNDYgLTEwIEMtMTQ2IDc4IC01MCAxNTAgMCAyMzIgQzUwIDE1MCAxNDYgNzggMTQ2IC0xMCBDMTQ2IC04OCA4NCAtMTUwIDAgLTE1MCBaIiBmaWxsPSIjZmY1YTRlIiBzdHJva2U9IiNmZmYiIHN0cm9rZS13aWR0aD0iMjIiLz4KICA8Y2lyY2xlIGN4PSIwIiBjeT0iLTEwIiByPSI1NCIgZmlsbD0iI2ZmZiIvPgogIDxwYXRoIGQ9Ik0tMjYgLTggbDIwIDIyIGwzOCAtNDYiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2ZmNWE0ZSIgc3Ryb2tlLXdpZHRoPSIyMCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+CjwvZz4KPC9zdmc+Cg==">
 <style>
 :root{--bg:#f6f6f4;--card:#fff;--ink:#1d1d1b;--mute:#6b6b66;--line:#dcdcd6;--acc:#2563eb;--ok:#15803d;--bad:#b91c1c;--warn:#b45309}
 @media (prefers-color-scheme:dark){:root{--bg:#161615;--card:#1f1f1e;--ink:#eeeeea;--mute:#9a9a94;--line:#34342f;--acc:#60a5fa;--ok:#4ade80;--bad:#f87171;--warn:#fbbf24}}
@@ -2233,7 +2233,7 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
 .badge.warnb{background:color-mix(in srgb,var(--warn) 22%,var(--card));color:var(--warn)}
 </style></head><body><div id="ack" style="display:none"><div class="ackbox" role="dialog" aria-modal="true" aria-labelledby="acktitle">
 <h2 id="acktitle">Before you start</h2>
-<p>Metadata Fixer changes, copies, moves and (if you choose) deletes files. Please read this once:</p>
+<p>Backstory changes, copies, moves and (if you choose) deletes files. Please read this once:</p>
 <ul>
 <li><b>Back up your originals</b> (your Takeout zip files or folders) before you begin.</li>
 <li><b>Preview first.</b> Every tab starts with <i>Preview only</i> ticked. It changes nothing.</li>
@@ -2249,18 +2249,32 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
 <div style="margin-top:8px"><button class="p" id="updgo">Update now</button> <button id="updno">Not now</button></div></div>
 <header class="hero">
   <div class="brand">
-    <svg class="logo" viewBox="0 0 64 64" role="img" aria-label="Metadata Fixer logo">
-      <defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4f8cff"/><stop offset="1" stop-color="#7c5cff"/></linearGradient></defs>
-      <rect width="64" height="64" rx="15" fill="url(#lg)"/>
-      <rect x="11" y="14" width="38" height="30" rx="5" fill="#fff" opacity=".95"/>
-      <circle cx="22" cy="24" r="4" fill="#ffb84d"/>
-      <path d="M13 41l11-11 8 8 6-6 9 9v3a2 2 0 0 1-2 2H15a2 2 0 0 1-2-2z" fill="#4f8cff" opacity=".9"/>
-      <circle cx="47" cy="45" r="11" fill="#22c55e" stroke="#fff" stroke-width="3"/>
-      <path d="M42 45.5l3.6 3.6L52 42.5" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-    </svg>
+    <svg class="logo" viewBox="0 0 1024 1024" role="img" aria-label="Backstory logo"><defs>
+<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5b5bf0"/><stop offset=".55" stop-color="#7a4df0"/><stop offset="1" stop-color="#14b8c4"/></linearGradient>
+<linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8fd3ff"/><stop offset="1" stop-color="#ffe6b3"/></linearGradient>
+<filter id="sh" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#1a1050" flood-opacity=".35"/></filter>
+<filter id="sh2" x="-30%" y="-30%" width="160%" height="170%"><feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#3a1000" flood-opacity=".35"/></filter>
+</defs>
+<rect width="1024" height="1024" rx="230" fill="url(#bg)"/>
+<circle cx="860" cy="170" r="230" fill="#fff" opacity=".07"/>
+<g transform="rotate(-7 480 520)" filter="url(#sh)">
+  <rect x="190" y="150" width="600" height="720" rx="34" fill="#fffdf8"/>
+  <rect x="240" y="200" width="500" height="470" rx="14" fill="url(#sky)"/>
+  <circle cx="610" cy="320" r="62" fill="#ffb347"/>
+  <path d="M240 600 L400 430 L500 540 L590 450 L740 610 L740 656 a14 14 0 0 1 -14 14 L254 670 a14 14 0 0 1 -14 -14 Z" fill="#3f6fd8"/>
+  <path d="M240 640 L360 540 L470 630 L560 560 L740 650 L740 656 a14 14 0 0 1 -14 14 L254 670 a14 14 0 0 1 -14 -14 Z" fill="#2c4fa8"/>
+  <rect x="250" y="722" width="330" height="26" rx="13" fill="#c9cbe0"/>
+  <rect x="250" y="772" width="220" height="26" rx="13" fill="#dcdded"/>
+</g>
+<g filter="url(#sh2)" transform="translate(690 610)">
+  <path d="M0 -150 C-84 -150 -146 -88 -146 -10 C-146 78 -50 150 0 232 C50 150 146 78 146 -10 C146 -88 84 -150 0 -150 Z" fill="#ff5a4e" stroke="#fff" stroke-width="22"/>
+  <circle cx="0" cy="-10" r="54" fill="#fff"/>
+  <path d="M-26 -8 l20 22 l38 -46" fill="none" stroke="#ff5a4e" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+</g>
+</svg>
     <div>
-      <h1>Takeout Metadata Fixer</h1>
-      <p class="tag">Put the right date, place and caption back on your Google Photos export. <span id="ver" style="opacity:.6;white-space:nowrap"></span> <a href="#" id="vercheck" style="font-size:13px;white-space:nowrap">Check for updates</a> <span id="vermsg" style="font-size:13px;white-space:nowrap"></span></p>
+      <h1>Backstory</h1>
+      <p class="tag">Give every photo its backstory back: real dates, places and captions from your Google Photos export. <span id="ver" style="opacity:.6;white-space:nowrap"></span> <a href="#" id="vercheck" style="font-size:13px;white-space:nowrap">Check for updates</a> <span id="vermsg" style="font-size:13px;white-space:nowrap"></span></p>
     </div>
   </div>
   <div class="fbar" id="fbar">
@@ -2403,7 +2417,7 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
 <section class="pane" id="pane-history">
 <h2 class="ph">History and reports</h2>
 <div class="card"><small style="margin-top:0">Every run is saved here with a full report and a plain-text log, so you can see exactly what happened, even weeks later.</small>
-<div class="usef" style="margin:10px 0 0">Reports are kept in: <b id="repdir">Documents/Metadata Fixer Reports</b></div>
+<div class="usef" style="margin:10px 0 0">Reports are kept in: <b id="repdir">Documents/Backstory Reports</b></div>
 <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><button id="hfolder">Open reports folder</button><button id="hdiag" data-tip="Copies your version, system, tool versions and the end of the latest log, so you can paste it when asking for help. Check it for private paths first.">Copy diagnostic info</button></div></div>
 <div id="hlist"></div>
 </section>
@@ -2700,10 +2714,10 @@ async function helpView(v){
     <div class="hbtns"><button class="p" id="sup1">Copy diagnostic info and email support</button><button id="sup2">Copy support email address</button></div><small id="supnote"></small>`;
     $('sup1').onclick=async()=>{const r=await post('/api/diagnostics');let ok=false;try{await navigator.clipboard.writeText(r.text);ok=true}catch(e){}
       $('supnote').textContent=ok?'Diagnostic info copied. Paste it into the email (Cmd+V). Check it for private paths first.':'Could not copy automatically: use History > Copy diagnostic info.';
-      location.href='mailto:'+email+'?subject='+encodeURIComponent('Metadata Fixer support ('+g.version+')')+'&body='+encodeURIComponent('What I was trying to do:\n\nWhat happened:\n\nDiagnostic info (paste here):\n')};
+      location.href='mailto:'+email+'?subject='+encodeURIComponent('Backstory support ('+g.version+')')+'&body='+encodeURIComponent('What I was trying to do:\n\nWhat happened:\n\nDiagnostic info (paste here):\n')};
     $('sup2').onclick=async()=>{try{await navigator.clipboard.writeText(email);$('supnote').textContent='Copied '+email}catch(e){prompt('Support email:',email)}};return}
   if(v==='about'){
-    box.innerHTML=`<div class="md"><h2>About</h2><p><b>Metadata Fixer</b> version ${esc(g.version)}. Free, open source (MIT License). Everything runs on your computer; nothing is uploaded.</p><p>Not affiliated with Google or Apple. Support: <a href="mailto:${email}">${email}</a>. Project: <a href="https://github.com/daviddef/MetadataFixer" target="_blank" rel="noopener">github.com/daviddef/MetadataFixer</a></p>${md(g.notices||'')}<h2>License</h2><pre>${esc(g.license||'MIT License')}</pre></div>`;return}
+    box.innerHTML=`<div class="md"><h2>About</h2><p><b>Backstory</b> version ${esc(g.version)}. Free, open source (MIT License). Everything runs on your computer; nothing is uploaded.</p><p>Not affiliated with Google or Apple. Support: <a href="mailto:${email}">${email}</a>. Project: <a href="https://github.com/daviddef/MetadataFixer" target="_blank" rel="noopener">github.com/daviddef/MetadataFixer</a></p>${md(g.notices||'')}<h2>License</h2><pre>${esc(g.license||'MIT License')}</pre></div>`;return}
 }
 document.querySelectorAll('#hsubnav button').forEach(b=>b.onclick=()=>helpView(b.dataset.v));
 document.querySelectorAll('a[data-help]').forEach(a=>a.onclick=e=>{e.preventDefault();showTab('help');helpView(a.dataset.help)});

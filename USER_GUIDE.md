@@ -1,4 +1,4 @@
-# Metadata Fixer user guide
+# Backstory user guide
 
 Restores the real date, location, caption and people to photos and videos exported from Google Photos with Google Takeout, and helps you tidy the result. Free. Everything runs on your own computer; nothing is uploaded.
 
@@ -6,7 +6,7 @@ Questions or problems: **thestocksoup@gmail.com** (see [Support](#support)).
 
 ## Quick start
 
-1. **Back up first.** Keep your original Takeout zip files (or folders) somewhere safe. Metadata Fixer never changes your zips and, by default, only makes copies, but a backup is always the right first step.
+1. **Back up first.** Keep your original Takeout zip files (or folders) somewhere safe. Backstory never changes your zips and, by default, only makes copies, but a backup is always the right first step.
 2. Open the app and go to the **Guided** tab.
 3. In the bar at the top, press **Add zip files...** (or **Add folders...**) and choose your Takeout. Then choose a **Destination**: a new, empty folder on a drive with enough free space.
 4. Press **Check my files**. The app looks at your real files and recommends what to do and why.
@@ -125,7 +125,7 @@ Every run is recorded automatically:
 - A plain-text **log**: the settings used, what happened step by step, how long it took, the version and tools, and a list of any problems. Useful if something goes wrong.
 - A **History** tab listing every run with its headline result, and buttons to open the report, the log, or the folder.
 
-Reports and logs are saved in `Documents/Metadata Fixer Reports`, one folder per run. Nothing is uploaded. If you need help, press **Copy diagnostic info** in the History tab and paste it into your message (check it for private paths first).
+Reports and logs are saved in `Documents/Backstory Reports`, one folder per run. Nothing is uploaded. If you need help, press **Copy diagnostic info** in the History tab and paste it into your message (check it for private paths first).
 
 On the Guided tab, a short **checklist** shows whether your Takeout and Destination are set, whether the Destination has enough free space for your zip files, and whether ExifTool and ffmpeg are installed.
 
@@ -369,13 +369,13 @@ If you are stuck, open **History**, press **Copy diagnostic info**, and email it
 - It does not guarantee that your photo app (Apple Photos, Lightroom, etc.) will display or import the results the way you expect.
 
 ### Disclaimer
-Metadata Fixer is free software provided **"as is"**, without warranty of any kind, express or implied, including but not limited to merchantability, fitness for a particular purpose, accuracy, and non-infringement. **You use it entirely at your own risk.**
+Backstory is free software provided **"as is"**, without warranty of any kind, express or implied, including but not limited to merchantability, fitness for a particular purpose, accuracy, and non-infringement. **You use it entirely at your own risk.**
 
 It changes, copies, moves, renames and (when you choose the relevant options) deletes files. You are responsible for your own backups and for checking what each option does before you run it, including by using Preview. **To the maximum extent permitted by law, the author and contributors are not liable for any loss or damage of any kind arising from the use of, or inability to use, this software**, including but not limited to loss, corruption or alteration of photos, videos, metadata or other data, loss of albums or organisation, incorrect dates or locations, hardware or drive problems, lost time, or any indirect or consequential loss, whether or not caused by a bug, a mistake, or by you choosing the wrong option.
 
 Nothing in this disclaimer excludes or limits any right or liability that cannot lawfully be excluded or limited, such as rights you may have under consumer protection law where you live.
 
-Metadata Fixer is an independent project. It is **not affiliated with, endorsed by or sponsored by Google, Apple or any other company**. Google, Google Photos, Takeout, Apple, iPhone, Live Photos, macOS and other names are trademarks of their owners and are used only to describe compatibility.
+Backstory is an independent project. It is **not affiliated with, endorsed by or sponsored by Google, Apple or any other company**. Google, Google Photos, Takeout, Apple, iPhone, Live Photos, macOS and other names are trademarks of their owners and are used only to describe compatibility.
 
 The software is released under the MIT License (see `LICENSE`). Third-party components and their licenses are listed in `THIRD_PARTY_NOTICES.md`.
 

@@ -1,4 +1,4 @@
-# MetadataFixer
+# Backstory
 
 Puts Google Photos Takeout `.json` metadata back into your photos and videos.
 
