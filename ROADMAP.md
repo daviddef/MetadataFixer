@@ -6,11 +6,14 @@ Goal: the safest, simplest, free tool for taking control of a photo and video li
 
 | Area | Today |
 |---|---|
-| Fix metadata | Dates, GPS, captions, people, favourites from Google `.json`; matches across batches; date policy; Live Photo re-pairing; preview first |
-| Merge folders | Takeout mode, same-name folder merge, duplicates, name-clash choices, `.json` carried along |
-| Clean up | Extensionless/odd-extension files, `.json`, junk, name tidy, empty folders |
-| Convert videos | Old formats to MP4, verified before the original is touched, estimates, live progress, Stop |
-| Trust | Preview by default, copy by default, Stop, manifests, resume, warning signs, nothing uploaded |
+| Fix metadata | Dates, GPS, captions, people, favourites from Google `.json`; zips read directly; matches across batches; date policy; Live Photo re-pairing; edited copies; dates from file names |
+| Dates and places | Fill missing dates from folder names; optionally correct wrong-year and future dates; optional guessed locations from folder names (labelled); mismatched-location flags |
+| Merge and duplicates | Same-name folder merge, exact duplicates, near-identical pictures with matching rules and ordered keeper rules, bursts, metadata carry-over, Compare libraries |
+| Clean up and convert | Odd files, junk, name tidy, look-alike folders, empty folders; old videos to MP4, verified |
+| Health and diagnostics | Library health score, duplicate formats, date/location checks, full diagnostics, Photos and iCloud log monitor |
+| Apple Photos | Batched import, oldest first, upload verification, stall detection, adaptive batches |
+| Trust | Preview by default, copy by default, Stop, undo, run logs and reports, retrying/resuming copies for faulty drives, local-only server with a private token |
+| Ease | Guided mode, Check my files recommendations, five styles (Safest to I like risk), animated friendly UI, in-app guide |
 | Delivery | Python app now; signed Mac app pipeline written (not yet built or tested) |
 
 ## Our edge over the competition
@@ -37,7 +40,8 @@ Most Takeout tools are one-shot scripts: they fix dates and stop, with no previe
 - ~~**Album preservation:**~~ DONE (keywords + albums csv): Takeout turns albums into folders and duplicates photos into them. Keep one copy, and write albums out as a list or as keywords so they are not lost.
 - ~~**Google edits handling:**~~ DONE: pair `-edited` versions with originals; choose keep both, keep edited or keep original.
 - **Missing and broken sidecars report:** list photos with no `.json`, ~~and offer a date from the filename~~ DONE (dates from file names) (`IMG_20190704_...`, `PXL_...`, `Screenshot ...`) when there is nothing else.
-- **Time zone care:** use the photo's location to put the right local time, not just UTC.
+- **Time zone care:** use the photo's location to put the right local time, not just UTC. (Apple Photos reads a time with no zone as local time, so UTC times can be hours off.) *Highest priority.*
+- **Takeout pre-flight report:** before anything is touched, count orphaned `.json` files, unmatched photos and edited pairs, and estimate the dates and locations the restore will add.
 - ~~**Review screen for near-duplicates:**~~ DONE (Similar tab): same photo at different sizes or re-saved versions, shown side by side, with a keep-best suggestion. Never automatic deletion.
 - ~~**Undo:**~~ DONE (History tab): one-click "put everything back" from the manifest for copy and move runs.
 - **Faster:** parallel hashing, smarter resume, progress that survives sleep.
@@ -45,10 +49,13 @@ Most Takeout tools are one-shot scripts: they fix dates and stop, with no previe
 ### Later: beat the paid tools (3-6 months)
 - **Import-ready output:** presets for Apple Photos, Immich, PhotoPrism, Synology, Lightroom, Plex (folder layout, sidecars, naming).
 - **Other sources:** iCloud Photos export, Facebook/Instagram downloads, Amazon Photos, OneDrive, old phone backups, SD cards.
-- **Library health report:** one page of what is wrong with a library: missing dates, no GPS, duplicates, odd formats, corrupt files, biggest folders.
+- ~~**Library health report:**~~ DONE (Health tab). One page of what is wrong with a library: missing dates, no GPS, duplicates, odd formats, corrupt files, biggest folders.
 - **Corrupt file triage:** detect truncated or damaged photos and videos, and repair the simple cases (like the leading-bytes problem we saw).
 - **HEIC/RAW/format helpers:** optional convert for HEIC to JPG, and old RAW to DNG, with the same verify-before-replace rule.
-- **Location tools:** fill missing GPS from neighbouring photos taken minutes apart; place name lookup, offline.
+- **Location tools:** ~~guess from folder names~~ DONE; still to do: fill missing GPS from neighbouring photos taken minutes apart, GPX track import, place-name lookup offline.
+- **Receipt:** a shareable before/after report proving counts, dates, locations and albums arrived, including iCloud upload confirmation.
+- **Quality helpers:** blurry and screenshot detection feeding the keeper rules; side-by-side zoom compare.
+- **Motion Photos:** pair Google Motion Photo files as Live Photos.
 - **Face/people names** carried through as keywords for apps that read them.
 - **Scheduled "keep tidy"** for a watched folder.
 
@@ -74,9 +81,9 @@ Most Takeout tools are one-shot scripts: they fix dates and stop, with no previe
 ## Ideas under consideration
 - See `BACKLOG.md` for pricing/licensing notes and more ideas.
 - **Always-on library health:** a background agent that rechecks and notifies.
-- **Verify uploads to iCloud** before sending the next Photos batch, instead of waiting on free space (needs reading Photos' own database, which Apple does not document).
+- ~~**Verify uploads to iCloud**~~ DONE (Photos tab; reads a copy of Photos' own database, so treat it as a hint).
 - **Set up a Photos library on an external drive** with a guided checklist.
 - **Merge Photos libraries with albums and edits** (via an export step) rather than originals only.
-- **Storyboard preview:** before/after thumbnails with dates and locations for a few real photos.
+- ~~**Storyboard preview**~~ DONE.
 - **Date and structure options for merged libraries:** keep folders (default), or reorganise by year/month when merging very different libraries.
 - **Scheduled "keep tidy"** for a watched folder.

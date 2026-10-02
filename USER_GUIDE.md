@@ -9,9 +9,10 @@ Questions or problems: **thestocksoup@gmail.com** (see [Support](#support)).
 1. **Back up first.** Keep your original Takeout zip files (or folders) somewhere safe. Backstory never changes your zips and, by default, only makes copies, but a backup is always the right first step.
 2. Open the app and go to the **Guided** tab.
 3. In the bar at the top, press **Add zip files...** (or **Add folders...**) and choose your Takeout. Then choose a **Destination**: a new, empty folder on a drive with enough free space.
-4. Press **Check my files**. The app looks at your real files and recommends what to do and why.
-5. Press **Preview the recommended plan**. Nothing is changed in a preview. Read the summary.
-6. If you are happy, untick **Preview only** and press **Fix my Takeout**. Your finished library appears in the Destination. Your originals are untouched.
+4. Pick your **style** at the top of Guided (Safest, Balanced, Fastest, Thorough or I like risk). Balanced is the default.
+5. Press **Check my files**. The app looks at your real files and recommends what to do and why.
+6. Press **Preview the recommended plan**. Nothing is changed in a preview. Read the summary.
+7. If you are happy, untick **Preview only** and press **Fix my Takeout**. Your finished library appears in the Destination. Your originals are untouched.
 
 ## Before you start: important
 
@@ -479,6 +480,8 @@ Safety:
 - In a preview, files that would be deleted by earlier steps are treated as gone when counting empty folders, but folders emptied by a name merge are not counted until you run it.
 
 ## Command line
+
+The command line covers the core metadata fix on folders. Zip files, dates and places from folder names, duplicate and keeper rules, Compare, Health, Photos and the styles are in the app only.
 
 ```
 python3 takeout_fix_metadata.py "/path/to/Takeouts" --dry-run

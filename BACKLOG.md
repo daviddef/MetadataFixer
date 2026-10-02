@@ -25,3 +25,13 @@ Things to decide before charging
 - Verify iCloud upload completion before the next Photos batch.
 - Storyboard preview with before/after thumbnails.
 - Windows build.
+
+## From competitor research (PowerPhotos, Gemini, PhotoSweeper, immich-go, osxphotos, Google Takeout helpers)
+- Time-zone-correct dates (Takeout times are UTC); highest-value fix.
+- Takeout pre-flight report and a before/after "receipt" after a migration.
+- Albums and Live/Motion Photos preserved through the Apple Photos handoff; verify them afterwards.
+- Date reconstruction timeline combining EXIF, `.json`, file names, folder names and neighbouring photos, with confidence and a review queue.
+- GPX / neighbouring-photo location fill with a map review.
+- Blur, screenshot and low-quality scoring; pause/resume of long scans; side-by-side zoom compare.
+- RAW+JPEG stacking choices; copy photos between Photos libraries keeping edits (PowerPhotos does this; large effort).
+- Notes: never write to the Photos database; duplicate false positives are the biggest reputational risk, so default to review; a signed, notarized Mac build is expected by privacy-minded users.

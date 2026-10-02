@@ -1,21 +1,27 @@
 # Backstory
 
-Puts Google Photos Takeout `.json` metadata back into your photos and videos.
+Gives every photo its backstory back. A free, local, private app for taking control of a photo and video library, starting with Google Photos Takeout: it puts the real dates, locations, captions and people back, merges and de-duplicates libraries, tidies the mess, checks the library's health and sends the result to Apple Photos. Nothing is uploaded; everything runs on your own computer.
 
-Takeout exports repeat the same album folders across many `Takeout N` folders, and a photo's `.json` is not always next to the photo. This script indexes every sidecar in the whole tree, matches each file to its sidecar, and writes date taken, GPS, description, people and favourite rating with exiftool. RAW files get an `.xmp` sidecar instead of being edited. File modified times are set to the date taken.
+## What it does
+- **Fix metadata** from Google Takeout `.json` files (dates, locations, captions, people, favourites), across zip files and batches, with Live Photo re-pairing, edited-copy handling and dates from file names.
+- **Dates and places from folder names:** fill a missing date from a folder called `2017` or `2026-06`; optionally correct dates that disagree with the folder or lie in the future; optionally guess an approximate location from a folder like `Johannesburg` (labelled as a guess, never over an existing location); flag locations that look mismatched.
+- **Merge and de-duplicate** libraries: exact duplicates, near-identical pictures with matching rules and ordered keeper rules (favourite, edited, resolution, size, metadata, album...), bursts kept by default, missing metadata carried onto the kept copy. **Compare libraries** shows how alike two libraries are and which copy a merge would keep.
+- **Clean up, convert and check:** junk and odd files, look-alike folders, old video formats to MP4, the same file in several formats, and a library **Health** score with full **Diagnostics**.
+- **Apple Photos:** send a library in batches, oldest first, with upload verification and stall detection; a Monitor that reads Photos and iCloud logs and explains problems.
+- **Safe by design:** preview first, copy by default, Stop, undo, reports and logs, and copying that waits, retries and resumes when a drive misbehaves ("Continue where I left off").
+- **Styles:** Safest, Balanced, Fastest, Thorough or "I like risk" set every option in the app to suit your patience, risk appetite and goals.
 
 ## Requirements
-- Python 3.8+
-- [exiftool](https://exiftool.org) (macOS: `brew install exiftool`)
+- Python 3.8+ and [exiftool](https://exiftool.org) (macOS: `brew install exiftool`); [ffmpeg](https://ffmpeg.org) for video conversion and picture comparison (`brew install ffmpeg`). The packaged Mac app includes both.
 
 ## Easiest: the local app
 ```
 python3 takeout_gui.py
 ```
-Opens a page in your browser (served only on your own machine). Click **Choose folder** to pick the Takeout parent folder and, ideally, a separate output folder, leave **Preview only** ticked for a first pass, then press Start. Progress and the CSV report are shown in the page. Both .py files must sit in the same folder.
+Opens a page in your browser, served only on your own machine (it also checks a private per-launch token, so other websites cannot drive it). Both `.py` files must sit in the same folder. Start on the **Guided** tab: add your Takeout zips or folders, choose a Destination, press **Check my files**, then **Preview the recommended plan**.
 
 ## Command line
-The command line works on folders (the app also reads zip files directly). Extract your Takeout zips into one parent folder, then:
+The command line covers the core metadata fix on folders (the app also reads zip files directly and has all the newer features above). Extract your Takeout zips into one parent folder, then:
 
 ```
 python3 takeout_fix_metadata.py ~/Takeouts --dry-run       # preview, writes only the report
@@ -27,13 +33,14 @@ Existing EXIF values are kept and only missing tags are filled in; add `--overwr
 
 ## Notes
 - Handles `.supplemental-metadata.json` (including truncated), 46-character name truncation, `(1)` duplicates, `-edited` copies and live-photo videos.
-- Google stores times in UTC and they are written as-is.
+- Google stores times in UTC and they are written as-is (time-zone correction is on the roadmap).
 - Formats exiftool can't write (avi, mkv, wmv, mpg, mts, bmp) only get their modified time fixed.
+- Re-pairing Live Photos (`--pair-live` with `--out`, or the app's option) copies each still's Apple ContentIdentifier onto its video and saves it as `.MOV`. Stills that lost their Apple ID are reported as `no-id` / `no-still`.
 
-## Live Photos
-Tick **Re-pair Live Photos** in the app (or pass `--pair-live` with `--out`) to copy each still's Apple ContentIdentifier onto its video and save the video as `.MOV`, so Apple Photos can import them as one Live Photo. Works only where the still still has its Apple ID; others are reported as `no-id` / `no-still`.
+## Testing
+`python3 tests/run_e2e.py` runs the end-to-end suite on mock Takeouts, mock Photos libraries and a fake `osascript` (needs exiftool and ffmpeg). `node tests/ui_sweep.js PORT` and `node tests/ui_profiles.js PORT` drive a running copy of the app in a headless browser. See [tests/README.md](tests/README.md).
 
-Full instructions: [USER_GUIDE.md](USER_GUIDE.md) (also built into the app's **Help** tab)
+Full instructions: [USER_GUIDE.md](USER_GUIDE.md) (also built into the app's **Help** tab). Plans: [ROADMAP.md](ROADMAP.md), [BACKLOG.md](BACKLOG.md).
 
 ## Support
 Email **thestocksoup@gmail.com** (best-effort, free project) or open an issue on GitHub. In the app, **History > Copy diagnostic info** gives you text to include.
