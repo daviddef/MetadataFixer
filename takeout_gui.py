@@ -237,6 +237,8 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
             raise ValueError("Choose a Destination: Takeout zip files are never changed, so the fixed copies need somewhere to go.")
         if zips and move:
             raise ValueError("Move cannot be used with zip files (they are never changed). Untick Move.")
+        if move and any(fx.inside_photos_library(p) for p in resolved):
+            raise ValueError("Move cannot be used with a Photos library (it is only ever read). Untick Move.")
         if move and not out:
             out = str(resolved[0])  # Move with no destination: merge into the first source folder, like Sort
         if not dry_run and not shutil.which("exiftool"):
@@ -1395,6 +1397,8 @@ def check_clean_folders(folders):
         p = Path(f).expanduser()
         if not p.is_dir():
             raise ValueError(f"Not a folder: {p}")
+        if fx.inside_photos_library(p):
+            raise ValueError(f"{p.name} is inside a Photos library. Backstory only reads Photos libraries and never changes them.")
         if p.resolve() in (Path("/"), Path.home().resolve()) or len(p.resolve().parts) <= 2:
             raise ValueError(f"Too broad to clean safely: {p}. Choose the specific folder.")
         out.append(p)

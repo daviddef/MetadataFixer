@@ -1602,6 +1602,9 @@ MERGE_SKIP_DIRS = {CONFLICTS_DIR, DUPES_DIR}
 def check_merge_roots(roots, dest, move):
     """Refuse setups that could loop or lose data: nested sources, destination inside a source."""
     rs = [Path(r).resolve() for r in roots]
+    for r in rs:
+        if inside_photos_library(r):
+            raise ValueError(f"{r.name} is a Photos library. Merge folders does not work on those: use Guided or Fix to copy its photos out (it is only ever read).")
     for i, a in enumerate(rs):
         for j, b in enumerate(rs):
             if i != j and (a == b or b in a.parents):
@@ -1842,6 +1845,12 @@ ZIP_STAGE = ".metadatafixer_stage"
 ZIPS_LOG = ".metadatafixer_zips.jsonl"
 
 
+def inside_photos_library(p):
+    """True for a Photos library (.photoslibrary) or anything inside one. Backstory only ever reads those."""
+    q = Path(p)
+    return any(part.lower().endswith(".photoslibrary") for part in q.parts)
+
+
 def split_sources(entries):
     """Sort what the user added into zip files and ordinary folders.
     A folder that holds .zip files at its top level counts as those zips."""
@@ -1850,6 +1859,14 @@ def split_sources(entries):
         p = Path(r).expanduser()
         if p.is_file() and p.suffix.lower() == ".zip":
             found = [p]
+        elif p.is_dir() and p.suffix.lower() == ".photoslibrary":
+            orig = next((p / n for n in ("originals", "Masters") if (p / n).is_dir()), None)
+            if orig is None:
+                raise ValueError(f"{p.name} does not look like a Photos library (no originals folder)")
+            if orig.resolve() not in seen:
+                seen.add(orig.resolve())
+                folders.append(orig)
+            continue
         elif p.is_dir():
             found = sorted(q for q in p.iterdir() if q.is_file() and q.suffix.lower() == ".zip" and not q.name.startswith("._"))
             if not found:
@@ -1995,19 +2012,29 @@ def assess(entries, dest="", progress=None, should_stop=None, sample_n=120):
     from pathlib import PurePosixPath
     stop = should_stop or (lambda: None)
     say = progress or (lambda *a: None)
-    zips, folders = split_sources(entries)
+    zips, folders, zip_owner, folder_owner, labels = [], [], {}, {}, []
+    for ei, ent in enumerate(entries):
+        z_, f_ = split_sources([ent])
+        zips += [z for z in z_ if z not in zip_owner]
+        folders += [f for f in f_ if f not in folder_owner]
+        zip_owner.update({z: ei for z in z_})
+        folder_owner.update({f: ei for f in f_})
+        pe = Path(ent).expanduser()
+        labels.append(pe.name if pe.suffix.lower() != ".photoslibrary" else pe.name)
+    own, src_stat = {}, {}
     F = {"zips": len(zips), "folders": len(folders), "media": 0, "media_bytes": 0, "json": 0, "by_ext": {}, "wrapper": False,
          "junk": 0, "zero_media": 0, "zero_other": 0, "extless": 0, "legacy": {}, "legacy_n": 0, "legacy_bytes": 0,
          "live_pairs": 0, "dup_n": 0, "dup_bytes": 0, "dup_exact": bool(zips), "empty_dirs": 0, "tidy_dirs": 0,
          "matched": 0, "unmatched": 0, "name_date_candidates": 0, "bad_zips": [], "zip_gaps": [], "zip_bytes": 0, "biggest_zip": 0,
-         "sample": None, "free": None, "need": None, "no_ext_bogus": 0}
+         "sample": None, "free": None, "need": None, "no_ext_bogus": 0, "photos_libs": sum(1 for f in folders if inside_photos_library(f)),
+         "sources": [], "overlap": []}
     items = []                       # (virtual path, size, crc or None, source, member)
     jsons = []                       # (virtual path, source, member)
     plan = zip_plan(zips) if zips else []
     for z in plan:
         if z["error"]:
             F["bad_zips"].append((z["name"], z["error"]))
-    nums = sorted(int(m.group(1)) for z in zips for m in [re.search(r"-(\d{3})\\.zip$", z.name)] if m)
+    nums = sorted(int(m.group(1)) for z in zips for m in [re.search(r"-(\d{3})\.zip$", z.name)] if m)
     if nums:
         F["zip_gaps"] = [n for n in range(nums[0], nums[-1] + 1) if n not in nums]
     for z in zips:
@@ -2023,6 +2050,7 @@ def assess(entries, dest="", progress=None, should_stop=None, sample_n=120):
                     parts = _safe_member(i.filename)
                     if parts:
                         items.append((PurePosixPath(*parts), i.file_size, i.CRC, z, i.filename))
+                        own[(z, i.filename)] = zip_owner.get(z, 0)
         except (zipfile.BadZipFile, OSError):
             continue
     nfold = 0
@@ -2036,7 +2064,7 @@ def assess(entries, dest="", progress=None, should_stop=None, sample_n=120):
             if not fns and not dns:
                 F["empty_dirs"] += 1
             for d in dns:
-                if re.search(r" \\(\d+\\)$| copy( \d+)?$|  +", d):
+                if re.search(r" \(\d+\)$| copy( \d+)?$|  +", d):
                     F["tidy_dirs"] += 1
             for n in fns:
                 p = Path(dp) / n
@@ -2045,6 +2073,7 @@ def assess(entries, dest="", progress=None, should_stop=None, sample_n=120):
                 except OSError:
                     continue
                 items.append((PurePosixPath(*p.parts[1:]) if p.is_absolute() else PurePosixPath(*p.parts), sz, None, p, ""))
+                own[(p, "")] = folder_owner.get(fo, 0)
     media = []
     for vp, sz, crc, src, mem in items:
         n = vp.name
@@ -2073,6 +2102,10 @@ def assess(entries, dest="", progress=None, should_stop=None, sample_n=120):
             F["media"] += 1
             F["media_bytes"] += sz
             media.append((vp, sz, crc, src, mem))
+            oi = own.get((src, mem), 0)
+            st_ = src_stat.setdefault(oi, {"media": 0, "bytes": 0})
+            st_["media"] += 1
+            st_["bytes"] += sz
             if ext in LEGACY_EXT:
                 d = F["legacy"].setdefault(ext, [0, 0])
                 d[0] += 1
@@ -2152,6 +2185,41 @@ def assess(entries, dest="", progress=None, should_stop=None, sample_n=120):
                     F["dup_bytes"] += os.path.getsize(lst[0]) * (len(lst) - 1)
                 except OSError:
                     pass
+    # Overlap between the sources you added (the same photo present in more than one library)
+    if len(entries) > 1:
+        say("Comparing your libraries with each other", 0, 0)
+        stop()
+        sizes_by = {}
+        for vp, sz, crc, src, mem in media:
+            sizes_by.setdefault(sz, set()).add(own.get((src, mem), 0))
+        sigs = {}
+        computed = 0
+        for vp, sz, crc, src, mem in media:
+            if sz == 0 or len(sizes_by.get(sz, ())) < 2:
+                continue
+            oi = own.get((src, mem), 0)
+            if crc is None:
+                if computed >= 20000:
+                    continue
+                try:
+                    crc = file_sig(src)[1]
+                except OSError:
+                    continue
+                computed += 1
+                if computed % 500 == 0:
+                    stop()
+            sigs.setdefault(oi, {})[(sz, crc)] = sz
+        keys = sorted(sigs)
+        for a_i in range(len(keys)):
+            for b_i in range(a_i + 1, len(keys)):
+                a, b = keys[a_i], keys[b_i]
+                common = set(sigs[a]) & set(sigs[b])
+                if common:
+                    F["overlap"].append({"a": labels[a], "b": labels[b], "n": len(common), "bytes": sum(k[0] for k in common)})
+    for oi in sorted(src_stat):
+        ent = Path(entries[oi]).expanduser() if oi < len(entries) else Path("")
+        kind = "photos library" if ent.suffix.lower() == ".photoslibrary" else ("zip files" if any(zip_owner.get(z) == oi for z in zips) else "folder")
+        F["sources"].append({"label": labels[oi] if oi < len(labels) else "?", "kind": kind, "media": src_stat[oi]["media"], "bytes": src_stat[oi]["bytes"]})
     # A small sample of real files: how many already have a date and a location, and what Google's info would add
     cand = [m for m in media if m[0].suffix.lower() in MEDIA_EXT and m[0].suffix.lower() not in NO_WRITE_EXT and 0 < m[1] <= 60 * 1024 * 1024]
     random.seed(7)
