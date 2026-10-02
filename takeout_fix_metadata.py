@@ -2397,6 +2397,139 @@ def is_album_folder(name):
     return not re.fullmatch(r"Photos from \d{4}", name) and name.lower() not in ("takeout", "google photos")
 
 
+# ---- Similar photos: the same picture saved at different sizes or qualities ---------------------------------
+SIMILAR_EXT = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp", ".tif", ".tiff", ".bmp"}
+SIMILAR_SKIP_DIRS = {"_similar_set_aside", "_duplicates", ORIGINALS_DIR, "_merge_conflicts", "_unrecognised"}
+
+
+def dhash_image(path):
+    """A 64-bit fingerprint of how a picture looks (a 'difference hash'); similar pictures give fingerprints that differ
+    in only a few bits. Returns an int, or None if the picture cannot be read."""
+    def run(cmd, data=None):
+        try:
+            r = subprocess.run(cmd, input=data, capture_output=True, timeout=60)
+            return r.stdout if r.returncode == 0 else b""
+        except (OSError, subprocess.TimeoutExpired):
+            return b""
+    vf = "scale=9:8:flags=area,format=gray"
+    raw = run(["ffmpeg", "-nostdin", "-v", "error", "-i", str(path), "-frames:v", "1", "-vf", vf, "-f", "rawvideo", "-"])
+    if len(raw) != 72 and shutil.which("exiftool"):
+        thumb = run(["exiftool", "-b", "-ThumbnailImage", str(path)])
+        if not thumb:
+            thumb = run(["exiftool", "-b", "-PreviewImage", str(path)])
+        if thumb:
+            raw = run(["ffmpeg", "-nostdin", "-v", "error", "-i", "pipe:0", "-frames:v", "1", "-vf", vf, "-f", "rawvideo", "-"], thumb)
+    if len(raw) != 72:
+        return None
+    h = 0
+    for row in range(8):
+        for col in range(8):
+            h = (h << 1) | (1 if raw[row * 9 + col] > raw[row * 9 + col + 1] else 0)
+    return h
+
+
+def _popcount(x):
+    return bin(x).count("1")
+
+
+def find_similar_photos(roots, threshold=6, progress=None, should_stop=None, workers=6):
+    """Groups of pictures that look the same. Reads pictures only; changes nothing.
+    Returns (groups, scanned): each group is a list of {"path","size","w","h","date","gps"} with the suggested keeper first."""
+    from concurrent.futures import ThreadPoolExecutor
+    stop = should_stop or (lambda: None)
+    files = []
+    for root in roots:
+        for dp, dns, fns in os.walk(root, followlinks=False):
+            dns[:] = [d for d in dns if not (os.path.islink(os.path.join(dp, d)) or is_bundle(d) or d in SIMILAR_SKIP_DIRS or d.startswith("."))]
+            for n in fns:
+                if Path(n).suffix.lower() in SIMILAR_EXT and not n.startswith("."):
+                    p = os.path.join(dp, n)
+                    try:
+                        sz = os.path.getsize(p)
+                    except OSError:
+                        continue
+                    if sz > 0:
+                        files.append((p, sz))
+        stop()
+    total, done = len(files), 0
+    hashes = {}
+    lock = threading.Lock()
+
+    def work(item):
+        nonlocal done
+        stop()
+        h = dhash_image(item[0])
+        with lock:
+            done += 1
+            if h is not None:
+                hashes[item[0]] = h
+            if progress and (done % 25 == 0 or done == total):
+                progress("Fingerprinting your pictures", done, total)
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        list(ex.map(work, files))
+    sizes = dict(files)
+    # buckets: split the 64 bits into threshold+1 pieces; two pictures within `threshold` bits share at least one piece exactly
+    n_chunks = max(2, min(16, threshold + 1))
+    bounds = [round(i * 64 / n_chunks) for i in range(n_chunks + 1)]
+    items = [(p, h) for p, h in hashes.items() if h not in (0, (1 << 64) - 1)]
+    buckets = {}
+    for idx, (p, h) in enumerate(items):
+        for c in range(n_chunks):
+            lo, hi = bounds[c], bounds[c + 1]
+            buckets.setdefault((c, (h >> lo) & ((1 << (hi - lo)) - 1)), []).append(idx)
+    parent = list(range(len(items)))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+    for ids in buckets.values():
+        if len(ids) < 2 or len(ids) > 400:
+            continue
+        stop()
+        for a in range(len(ids)):
+            ha = items[ids[a]][1]
+            for b in range(a + 1, len(ids)):
+                if _popcount(ha ^ items[ids[b]][1]) <= threshold:
+                    ra, rb = find(ids[a]), find(ids[b])
+                    if ra != rb:
+                        parent[ra] = rb
+    groups_idx = {}
+    for i in range(len(items)):
+        groups_idx.setdefault(find(i), []).append(i)
+    raw = [[items[i][0] for i in g] for g in groups_idx.values() if 2 <= len(g) <= 40]
+    # details for the groups only: size in pixels, date, location
+    need = sorted({p for g in raw for p in g})
+    info = {}
+    if need and shutil.which("exiftool"):
+        for k in range(0, len(need), 300):
+            stop()
+            fd, arg = tempfile.mkstemp(suffix=".args")
+            os.close(fd)
+            try:
+                Path(arg).write_text("\n".join(need[k:k + 300]), encoding="utf-8")
+                r = subprocess.run(["exiftool", "-charset", "filename=utf8", "-j", "-n", "-ImageWidth", "-ImageHeight", "-DateTimeOriginal", "-GPSLatitude", "-@", arg],
+                                   capture_output=True, text=True)
+                for it in json.loads(r.stdout or "[]"):
+                    info[it["SourceFile"]] = it
+            except (ValueError, OSError):
+                pass
+            finally:
+                Path(arg).unlink(missing_ok=True)
+    groups = []
+    for g in raw:
+        mem = []
+        for p in g:
+            it = info.get(p, {})
+            mem.append({"path": p, "size": sizes.get(p, 0), "w": it.get("ImageWidth") or 0, "h": it.get("ImageHeight") or 0,
+                        "date": str(it.get("DateTimeOriginal") or "")[:19], "gps": it.get("GPSLatitude") is not None, "hash": hashes[p]})
+        mem.sort(key=lambda m: (-(m["w"] * m["h"]), -m["size"], not m["gps"], not m["date"], m["path"]))
+        groups.append(mem)
+    groups.sort(key=lambda g: (-len(g), g[0]["path"]))
+    return groups, total
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("root", type=Path, help="folder containing all extracted 'Takeout N' folders")

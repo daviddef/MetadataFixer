@@ -34,12 +34,12 @@ Most Takeout tools are one-shot scripts: they fix dates and stop, with no previe
 
 ### Next: close the gaps people hit (2-3 months)
 - ~~**Takeout zip support:**~~ DONE (v2026.10.01-z4): read `.zip` files directly and extract as it goes, so users never unzip 50 GB first. Biggest ease-of-use win.
-- **Album preservation:** Takeout turns albums into folders and duplicates photos into them. Keep one copy, and write albums out as a list or as keywords so they are not lost.
-- **Google edits handling:** pair `-edited` versions with originals; choose keep both, keep edited or keep original.
+- ~~**Album preservation:**~~ DONE (keywords + albums csv): Takeout turns albums into folders and duplicates photos into them. Keep one copy, and write albums out as a list or as keywords so they are not lost.
+- ~~**Google edits handling:**~~ DONE: pair `-edited` versions with originals; choose keep both, keep edited or keep original.
 - **Missing and broken sidecars report:** list photos with no `.json`, ~~and offer a date from the filename~~ DONE (dates from file names) (`IMG_20190704_...`, `PXL_...`, `Screenshot ...`) when there is nothing else.
 - **Time zone care:** use the photo's location to put the right local time, not just UTC.
-- **Review screen for near-duplicates:** same photo at different sizes or re-saved versions, shown side by side, with a keep-best suggestion. Never automatic deletion.
-- **Undo:** one-click "put everything back" from the manifest for copy and move runs.
+- ~~**Review screen for near-duplicates:**~~ DONE (Similar tab): same photo at different sizes or re-saved versions, shown side by side, with a keep-best suggestion. Never automatic deletion.
+- ~~**Undo:**~~ DONE (History tab): one-click "put everything back" from the manifest for copy and move runs.
 - **Faster:** parallel hashing, smarter resume, progress that survives sleep.
 
 ### Later: beat the paid tools (3-6 months)

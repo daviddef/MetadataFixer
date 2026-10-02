@@ -29,7 +29,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.02-h"
+VERSION = "2026.10.02-i"
 class Cancelled(Exception):
     pass
 
@@ -1857,15 +1857,18 @@ def run_undo(rid):
             if k % 25 == 0 or k == total:
                 with LOCK:
                     STATE.update(done=k, message="Undoing: %s of %s files" % (f"{k:,}", f"{total:,}"))
-        # tidy: folders left empty by the undo (never the destination itself)
+        # tidy: folders left empty by the undo (only the ones the undone files were in, never the destination itself)
         pruned = 0
-        for dp_, dns, fns in os.walk(dest, topdown=False):
-            if Path(dp_) != dest and not dns and not fns:
+        parents = sorted({str(Path(p["dest"]).parent) for p in pairs}, key=lambda x: -len(x))
+        for d_ in parents:
+            q = Path(d_)
+            while q != dest and dest in q.parents:
                 try:
-                    os.rmdir(dp_)
+                    q.rmdir()
                     pruned += 1
                 except OSError:
-                    pass
+                    break
+                q = q.parent
         # forget the zips this run finished, so running again processes them
         zl = dest / fx.ZIPS_LOG
         if zl.exists():
@@ -1889,12 +1892,144 @@ def run_undo(rid):
             STATE.update(state="error", message=str(ex))
 
 
+SIMILAR = {"roots": [], "groups": [], "allowed": set()}
+
+
+def make_thumb(path):
+    """A small JPEG of a picture for the review screen (cached on disk)."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return b""
+    key = hashlib.sha1(("%s|%s|%s" % (path, st.st_size, int(st.st_mtime))).encode()).hexdigest()
+    THUMB_DIR = APP_HOME / "thumbs"
+    cache = THUMB_DIR / (key + ".jpg")
+    try:
+        if cache.exists():
+            return cache.read_bytes()
+    except OSError:
+        pass
+
+    def run(cmd, data=None):
+        try:
+            r = subprocess.run(cmd, input=data, capture_output=True, timeout=60)
+            return r.stdout if r.returncode == 0 else b""
+        except (OSError, subprocess.TimeoutExpired):
+            return b""
+    vf = "scale='min(260,iw)':-2"
+    out = run(["ffmpeg", "-nostdin", "-v", "error", "-i", path, "-frames:v", "1", "-vf", vf, "-q:v", "5", "-f", "mjpeg", "-"])
+    if not out and shutil.which("exiftool"):
+        th = run(["exiftool", "-b", "-ThumbnailImage", path]) or run(["exiftool", "-b", "-PreviewImage", path])
+        if th:
+            out = run(["ffmpeg", "-nostdin", "-v", "error", "-i", "pipe:0", "-frames:v", "1", "-vf", vf, "-q:v", "5", "-f", "mjpeg", "-"], th) or th
+    if out:
+        try:
+            THUMB_DIR.mkdir(parents=True, exist_ok=True)
+            cache.write_bytes(out)
+        except OSError:
+            pass
+    return out
+
+
+def run_similar_scan(roots, threshold):
+    with LOCK:
+        STATE.update(state="scanning", cancel=False, total=0, done=0, counts={}, message="Looking for similar photos...", report="",
+                     summary=None, scan=None, extra={}, recent=[], phase=None, kind="similar", cv=None, guided=None)
+    try:
+        folders = check_clean_folders(roots)
+        if not shutil.which("ffmpeg"):
+            raise ValueError("ffmpeg is needed to compare pictures. In Terminal run: brew install ffmpeg (the Mac app includes it).")
+
+        def prog(msg, done, total):
+            check_cancel()
+            with LOCK:
+                STATE.update(state="running", total=total, done=done, message="%s (%s of %s)" % (msg, f"{done:,}", f"{total:,}"))
+        groups, scanned = fx.find_similar_photos([str(f) for f in folders], threshold, prog, check_cancel)
+        view, allowed = [], set()
+        for gi, g in enumerate(groups[:300]):
+            mem = []
+            for k, m in enumerate(g):
+                allowed.add(m["path"])
+                rel = m["path"]
+                for f in folders:
+                    try:
+                        rel = str(Path(m["path"]).relative_to(f.resolve() if False else f))
+                        break
+                    except ValueError:
+                        continue
+                mem.append({"path": m["path"], "name": os.path.basename(m["path"]), "where": os.path.dirname(rel) or ".", "size": m["size"],
+                            "w": m["w"], "h": m["h"], "date": m["date"], "gps": m["gps"], "best": k == 0})
+            view.append(mem)
+        reclaim = sum(m["size"] for g in groups for m in g[1:])
+        with LOCK:
+            SIMILAR.update(roots=[str(f) for f in folders], groups=view, allowed=allowed)
+        sm = {"kind": "similar", "dry_run": True, "scanned": scanned, "groups": view, "total_groups": len(groups),
+              "extra": sum(len(g) - 1 for g in groups), "reclaim": fmt_bytes(reclaim), "threshold": threshold, "tips": []}
+        with LOCK:
+            STATE.update(state="done", message="Finished", summary=sm, phase=None)
+    except Cancelled:
+        stopped_state("Nothing was changed.")
+    except Exception as e:
+        with LOCK:
+            STATE.update(state="error", message=str(e))
+
+
+def run_similar_apply(items):
+    with LOCK:
+        STATE.update(state="scanning", cancel=False, total=len(items), done=0, counts={}, message="Setting photos aside...", report="",
+                     summary=None, scan=None, extra={}, recent=[], phase=None, kind="similar_apply", cv=None, guided=None)
+    try:
+        with LOCK:
+            roots, allowed = [Path(r) for r in SIMILAR["roots"]], set(SIMILAR["allowed"])
+        pairs, res, fails = [], {"moved": 0, "failed": 0, "skipped": 0}, []
+        bases = set()
+        for k, p in enumerate(items, 1):
+            check_cancel()
+            if p not in allowed or not os.path.exists(p):
+                res["skipped"] += 1
+                continue
+            root = next((r for r in roots if r in Path(p).parents), None)
+            if root is None:
+                res["skipped"] += 1
+                continue
+            base = root / "_similar_set_aside"
+            target = base / Path(p).relative_to(root)
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                t = target if not target.exists() else Path(fx._free_name(str(target)))
+                shutil.move(p, str(t))
+                for sfx in (".json", ".supplemental-metadata.json"):
+                    jp = Path(p + sfx)
+                    if jp.exists():
+                        shutil.move(str(jp), str(t) + sfx)
+                pairs.append({"src": p, "dest": str(t), "json": 0})
+                bases.add(str(base))
+                res["moved"] += 1
+            except OSError as ex:
+                res["failed"] += 1
+                fails.append("%s: %s" % (os.path.basename(p), ex))
+            with LOCK:
+                STATE.update(done=k, message="Setting photos aside: %s of %s" % (k, len(items)))
+        if pairs:
+            with LOCK:
+                STATE["undo_pairs"] = {"mode": "move", "pairs": pairs, "zips_before": 0, "dest": os.path.commonpath(list(bases)) if len(bases) > 1 else next(iter(bases))}
+        sm = {"kind": "similar_apply", "dry_run": False, **res, "fails": fails[:30], "folders": sorted(bases),
+              "tips": ["Nothing was deleted. The photos were moved into a _similar_set_aside folder, keeping their folder structure. Review that folder, then delete it yourself when you are sure, or use Undo in History to put everything back."]}
+        with LOCK:
+            STATE.update(state="done", message="Finished", summary=sm, phase=None)
+    except Cancelled:
+        stopped_state("Photos already set aside stay there; use Undo in History to put them back.")
+    except Exception as ex:
+        with LOCK:
+            STATE.update(state="error", message=str(ex))
+
+
 # ---- Reports, run logs and history -------------------------------------------------------------------------
 APP_HOME = Path(os.environ.get("METADATAFIXER_HOME") or (
     Path.home() / "Library" / "Application Support" / "MetadataFixer" if sys.platform == "darwin" else Path.home() / ".metadatafixer"))
 HIST_DIR = APP_HOME / "history"
 REPORTS_DIR = Path(os.environ.get("METADATAFIXER_REPORTS") or (Path.home() / "Documents" / "Backstory Reports"))
-KIND_TITLE = {"undo": "Undo a run", "assess": "Check my files", "consolidate": "Merge similar folders", "fix": "Fix metadata", "merge": "Merge folders", "cleanup": "Clean up", "convert": "Convert videos", "guided": "Guided: Fix my Takeout"}
+KIND_TITLE = {"similar": "Find similar photos", "similar_apply": "Set similar photos aside", "undo": "Undo a run", "assess": "Check my files", "consolidate": "Merge similar folders", "fix": "Fix metadata", "merge": "Merge folders", "cleanup": "Clean up", "convert": "Convert videos", "guided": "Guided: Fix my Takeout"}
 
 
 def _headline(sm):
@@ -1903,6 +2038,10 @@ def _headline(sm):
         return ""
     k = sm.get("kind")
     try:
+        if k == "similar":
+            return "%s pictures checked, %s similar groups" % (f"{sm.get('scanned', 0):,}", f"{sm.get('total_groups', 0):,}")
+        if k == "similar_apply":
+            return "%s photos set aside" % f"{sm.get('moved', 0):,}"
         if k == "undo":
             return "%s files %s" % (f"{sm.get('removed', 0) + sm.get('restored', 0):,}", "moved back" if sm.get("mode") == "move" else "removed")
         if k == "consolidate":
@@ -2086,6 +2225,10 @@ def tracked(kind, meta, fn, *args):
         try:
             if undo_dest:
                 run["undo"] = _collect_undo(undo_dest, before, meta)
+            with LOCK:
+                up = STATE.pop("undo_pairs", None)
+            if up:
+                run["undo"] = up
             write_run_record(run, timeline)
         except Exception:
             pass
@@ -2202,6 +2345,22 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/status":
             with LOCK:
                 self._send(200, json.dumps(STATE))
+        elif self.path.startswith("/thumb?"):
+            if self.headers.get("Host", "").split(":")[0] not in ("127.0.0.1", "localhost"):
+                return self._send(403, "{}")
+            from urllib.parse import parse_qs, urlparse
+            p = (parse_qs(urlparse(self.path).query).get("p") or [""])[0]
+            with LOCK:
+                ok = p in SIMILAR["allowed"]
+            data = make_thumb(p) if ok else b""
+            if not data:
+                return self._send(404, "{}")
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "max-age=3600")
+            self.end_headers()
+            self.wfile.write(data)
         else:
             self._send(404, "{}")
 
@@ -2224,6 +2383,21 @@ class Handler(BaseHTTPRequestHandler):
                 bool(body.get("dry_run")), bool(body.get("overwrite")), bool(body.get("pair_live")),
                 bool(body.get("dedupe")), bool(body.get("move")), body.get("date_policy", "earlier"), bool(body.get("name_dates")), bool(body.get("albums")),
                 body.get("edited") if body.get("edited") in ("both", "edited", "original") else "both"))
+            self._send(200, "{}")
+        elif self.path == "/api/similar_scan":
+            with LOCK:
+                busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
+            if busy:
+                return self._send(409, json.dumps({"error": "A job is already running"}))
+            thr = body.get("threshold") if body.get("threshold") in (3, 6, 10) else 6
+            start_tracked("similar", dict(body, dry_run=True, opts={"sensitivity": thr}), run_similar_scan, (body.get("roots", []), thr))
+            self._send(200, "{}")
+        elif self.path == "/api/similar_apply":
+            with LOCK:
+                busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
+            if busy:
+                return self._send(409, json.dumps({"error": "A job is already running"}))
+            start_tracked("similar_apply", {"roots": [], "dry_run": False, "opts": {"photos": len(body.get("items", []))}}, run_similar_apply, ([str(x) for x in body.get("items", [])],))
             self._send(200, "{}")
         elif self.path == "/api/undo_info":
             self._send(200, json.dumps(undo_info(body.get("id", ""))))
@@ -2525,6 +2699,12 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
 .rec{display:flex;gap:12px;align-items:flex-start;padding:12px 14px;margin:8px 0;border:1px solid var(--line);border-radius:12px;background:var(--card)}
 .rec input{margin-top:4px}.rec .why{color:var(--mute);font-size:13.5px;margin-top:3px;line-height:1.45}
 .badge.warnb{background:color-mix(in srgb,var(--warn) 22%,var(--card));color:var(--warn)}
+
+.simgrp{padding:14px}.simrow{display:flex;gap:12px;flex-wrap:wrap}
+.simitem{display:flex;flex-direction:column;gap:6px;width:170px;cursor:pointer}
+.simitem img{width:170px;height:130px;object-fit:cover;border-radius:10px;background:var(--line);display:block}
+.simcap{display:flex;flex-direction:column;font-size:12px;color:var(--mute);line-height:1.35;overflow:hidden}.simcap b{color:var(--ink);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.simsel{font-size:13px;display:flex;align-items:center;gap:6px}
 </style></head><body><div id="ack" style="display:none"><div class="ackbox" role="dialog" aria-modal="true" aria-labelledby="acktitle">
 <h2 id="acktitle">Before you start</h2>
 <p>Backstory changes, copies, moves and (if you choose) deletes files. Please read this once:</p>
@@ -2585,6 +2765,7 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
     <button class="tab" data-tab="merge" role="tab"><b>&#128450;&#65039;</b> Merge</button>
     <button class="tab" data-tab="clean" role="tab"><b>&#129529;</b> Clean up</button>
     <button class="tab" data-tab="convert" role="tab"><b>&#127902;&#65039;</b> Convert</button>
+    <button class="tab" data-tab="similar" role="tab"><b>&#128269;</b> Similar</button>
     <button class="tab" data-tab="history" role="tab"><b>&#128196;</b> History</button>
     <button class="tab" data-tab="help" role="tab"><b>&#10067;</b> Help</button>
   </nav>
@@ -2732,6 +2913,15 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
 <div class="hsubnav" id="hsubnav"><button data-v="guide" class="on">User guide</button><button data-v="safety">Safety &amp; disclaimer</button><button data-v="support">Support</button><button data-v="about">About</button></div>
 <div class="card" id="hview"></div>
 </section>
+<section class="pane" id="pane-similar">
+<h2 class="ph">Similar photos</h2>
+<div class="card"><small style="margin-top:0">Finds pictures that look the same but are not identical files: the same photo saved at a smaller size, re-saved, or lightly edited. You review each group and choose what to set aside. Nothing is deleted: the photos you pick are moved into a <i>_similar_set_aside</i> folder, and you can undo it from History.</small>
+<div class="usef" style="margin-top:10px"><b>Folders to check:</b> <span class="fnote"></span></div>
+<div class="opt"><div style="flex:1"><label for="simsens" style="font-weight:600">How alike must they be?</label>
+<select id="simsens" class="sel"><option value="3">Very alike (fewest matches, safest)</option><option value="6" selected>Alike (recommended)</option><option value="10">Loosely alike (more matches, check carefully)</option></select></div></div>
+<button class="p" id="simscan" style="margin-top:6px">Find similar photos</button></div>
+</section>
+
 <footer class="foot">Free software provided &ldquo;as is&rdquo;, without warranty. Back up your photos first. &middot; <a href="#" data-help="safety">Safety &amp; disclaimer</a> &middot; Support: <a href="mailto:thestocksoup@gmail.com">thestocksoup@gmail.com</a></footer>
 
 
@@ -2751,7 +2941,7 @@ function makeIcon(html){const b=document.createElement('button');b.type='button'
   b.onfocus=()=>{if(b.matches(':focus-visible'))showTip(b)};b.onblur=hideTip;
   b.onclick=e=>{e.preventDefault();e.stopPropagation();if(b._pt==='mouse'){showTip(b);return}tipEl._owner===b?hideTip():showTip(b)};return b}
 document.addEventListener('click',hideTip);window.addEventListener('scroll',hideTip,{passive:true});
-const PANE_SUB={help:'The user guide, safety notice and how to get support.',history:'Every run, with its full report and log.',guided:'The easy way: zips or folders in, a clean library out. Originals never change.',fix:'Put the real date, location and caption back into your photos.',merge:'Bring two or more folders together into one.',clean:'Tidy up leftovers once you are done.',convert:'Turn older video formats into MP4.'};
+const PANE_SUB={similar:'Find the same picture saved twice, and choose what to set aside.',help:'The user guide, safety notice and how to get support.',history:'Every run, with its full report and log.',guided:'The easy way: zips or folders in, a clean library out. Originals never change.',fix:'Put the real date, location and caption back into your photos.',merge:'Bring two or more folders together into one.',clean:'Tidy up leftovers once you are done.',convert:'Turn older video formats into MP4.'};
 function decorate(){
   document.querySelectorAll('.opt').forEach(o=>{
     const box=o.querySelector(':scope > div');if(!box)return;
@@ -2828,6 +3018,8 @@ function showSummary(s){
   if(s.kind==='assess'){showAssess(s);return}
   if(s.kind==='consolidate'){showConsolidate(s);return}
   if(s.kind==='undo'){showUndo(s);return}
+  if(s.kind==='similar'){showSimilar(s);return}
+  if(s.kind==='similar_apply'){showSimilarApply(s);return}
   let h=`<div class="tiles">${tile(s.total,'media files')}${tile(s.duplicates,'exact duplicates skipped')}${tile(s.matched,'unique files matched ('+s.pct_matched+'%)','ok')}${tile(s.no_json,'no JSON found',s.no_json?'bad':'ok')}${tile(s.orphans,'JSON with no photo')}${s.name_dates?tile(s.name_dates,'dates from file names','ok'):''}</div>`;
   h+=s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
   h+=`<div class="tiles">${tile(s.replaced_files,'files with a value replaced')}${tile((s.live||{}).paired||0,'Live Photos paired')}</div>`;
@@ -2883,7 +3075,7 @@ function setBar(barId,fillId,pctId,pct,indet){
     for(let i=0;i<30;i++){await new Promise(x=>setTimeout(x,1000));const s=await st();if(s&&s.boot!==boot){location.reload();return}}
     $('updmsg').textContent='Updated. If the page does not reload, restart the app in Terminal.'}
 })();
-const TABS=['guided','fix','merge','clean','convert','history','help'];const tabOf=k=>({undo:'history',consolidate:'clean',cleanup:'clean',sort:'merge',assess:'guided'}[k]||k);let curGuided=false;const paneKind=()=>curGuided?'guided':tabOf(jobKind);let jobKind='fix';
+const TABS=['guided','fix','merge','clean','convert','similar','history','help'];const tabOf=k=>({similar_apply:'similar',undo:'history',consolidate:'clean',cleanup:'clean',sort:'merge',assess:'guided'}[k]||k);let curGuided=false;const paneKind=()=>curGuided?'guided':tabOf(jobKind);let jobKind='fix';
 function showTab(t){if(!TABS.includes(t))t='fix';
   TABS.forEach(x=>{$('pane-'+x).style.display=x===t?'block':'none';document.querySelector('.tab[data-tab="'+x+'"]').classList.toggle('on',x===t)});
   try{localStorage.setItem('tab',t)}catch(e){}
@@ -3106,6 +3298,29 @@ function showConsolidate(s){
   h+=s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
   h+=tbl(['Merged into','In','From','Files','Identical','Result'],s.rows.map(r=>[esc(r.target),esc(r.parent),esc((r.members||[]).join(', ')),r.moved.toLocaleString(),r.dupes.toLocaleString(),esc(r.action+(r.detail?': '+r.detail:''))]));
   $('sumbody').innerHTML=h;$('sum').style.display='block'}
+
+function showSimilar(s){
+  let h=`<div class="tiles">${tile(s.scanned,'pictures checked')}${tile(s.total_groups,'similar groups','')}${tile(s.extra,'extra copies','')}</div>`;
+  if(!s.groups.length){h+='<div class="tip">No similar photos found at this setting.</div>';$('sumbody').innerHTML=h;$('sum').style.display='block';return}
+  h+=`<small>Potential space: <b>${esc(s.reclaim)}</b>. The best copy of each group (largest picture) is kept; the others are ticked to be set aside. Untick any you want to keep. ${s.total_groups>s.groups.length?'Showing the first '+s.groups.length+' groups.':''}</small>`;
+  h+=s.groups.map((g,i)=>`<div class="card simgrp"><div class="simrow">${g.map((m,k)=>`<label class="simitem"><img loading="lazy" src="/thumb?p=${encodeURIComponent(m.path)}" alt=""><div class="simcap"><b title="${esc(m.name)}">${esc(m.name)}</b><span>${esc(m.where)}</span><span>${m.w&&m.h?m.w+' &times; '+m.h+' &middot; ':''}${fmtB(m.size)}${m.date?' &middot; '+esc(m.date.slice(0,10)):''}${m.gps?' &middot; has location':''}</span></div>${m.best?'<span class="badge okb">Best: kept</span>':`<span class="simsel"><input type="checkbox" class="simaside" data-p="${esc(m.path)}" checked> Set aside</span>`}</label>`).join('')}</div></div>`).join('');
+  h+='<div class="hbtns" style="margin-top:14px"><button class="p" id="simapply">Set aside the ticked photos</button><button id="simnone">Untick all</button><button id="simall">Tick all</button></div><small>They are moved, not deleted, and stay in their folder structure inside <i>_similar_set_aside</i>. You can undo this from History.</small>';
+  $('sumbody').innerHTML=h;$('sum').style.display='block';
+  const setAll=v=>document.querySelectorAll('.simaside').forEach(c=>c.checked=v);
+  $('simnone').onclick=()=>setAll(false);$('simall').onclick=()=>setAll(true);
+  $('simapply').onclick=async()=>{const items=[...document.querySelectorAll('.simaside')].filter(c=>c.checked).map(c=>c.dataset.p);
+    if(!items.length){alert('Nothing is ticked');return}
+    if(!confirm('Move '+items.length.toLocaleString()+' photos into a _similar_set_aside folder? Nothing is deleted, and you can undo this from History.'))return;
+    const r=await post('/api/similar_apply',{items});if(r.error)alert(r.error);else{placeResults('similar_apply');$('prog').style.display='block';poll()}}}
+function showSimilarApply(s){
+  let h=`<div class="tiles">${tile(s.moved,'photos set aside','ok')}${s.failed||s.skipped?tile(s.failed+s.skipped,'not moved','bad'):''}</div>`+s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
+  if((s.folders||[]).length)h+='<small>Set-aside folder: '+s.folders.map(esc).join(', ')+'</small>';
+  $('sumbody').innerHTML=h;$('sum').style.display='block'}
+$('simscan').onclick=async()=>{
+  if(!roots().length){alert('Add your folders in the bar at the top first');return}
+  $('sum').style.display='none';curGuided=false;
+  const r=await post('/api/similar_scan',{roots:roots(),threshold:+$('simsens').value});
+  if(r.error)alert(r.error);else{placeResults('similar');$('prog').style.display='block';poll()}};
 function showMerge(s){
   const w=s.dry_run?'would be ':'';
   let h=`<div class="tiles">${tile(s.total,'files found')}${tile(s.brought,'files '+w+(s.move?'moved':'copied')+' in','ok')}${tile(s.in_place_files,'already in place')}${tile(s.identical,'identical copies (kept once)')}${tile(s.clashes,'name clashes resolved')}${tile(s.merged_dirs,'folders '+w+'merged from 2+ sources')}${s.json_along?tile(s.json_along,'.json files brought along'):''}${tile(s.failed,'problems',s.failed?'bad':'')}</div>`;
@@ -3181,7 +3396,7 @@ function showConvert(s){
 
 function liveTiles(s,c,done,nj){
   if(!s.total)return '';const x=s.extra||{};const err=(x.errors?tile(x.errors,'files with errors','bad'):'');
-  if(jobKind==='assess'||jobKind==='consolidate'||jobKind==='undo')return '';
+  if(['assess','consolidate','undo','similar','similar_apply'].includes(jobKind))return '';
   if(jobKind==='merge')return tile(s.total,'files found')+tile(x.placed||0,'brought in','ok')+tile(x.identical||0,'identical (kept once)')+tile(x.clashes||0,'name clashes')+(x.json_along?tile(x.json_along,'.json brought along'):'')+(x.errors?tile(x.errors,'problems','bad'):'');
   if(jobKind==='cleanup')return tile(x.json||0,'.json files')+tile(x.junk||0,'junk files')+tile(x.renamed||0,'renamed')+tile(x.merged||0,'folders merged')+tile(x.empty||0,'empty folders')+(x.errors?tile(x.errors,'errors','bad'):'');
   if(jobKind==='convert')return tile(s.total,'videos found')+tile(done,'checked so far')+tile(x.converted||0,'converted','ok')+(x.bytes_before?tile(fmtBytes(Math.max(0,x.bytes_before-x.bytes_after))+' ('+Math.round(100*(1-x.bytes_after/x.bytes_before))+'%)','space saved so far','ok'):'')+tile(x.skipped_live||0,'Live Photo videos skipped')+(x.errors?tile(x.errors,'could not convert','bad'):'');
@@ -3239,7 +3454,7 @@ $('hfolder').onclick=()=>post('/api/open_reports');
 $('hdiag').onclick=async()=>{const r=await post('/api/diagnostics');try{await navigator.clipboard.writeText(r.text);$('hdiag').textContent='Copied'}catch(e){const t=document.createElement('textarea');t.value=r.text;document.body.appendChild(t);t.select();try{document.execCommand('copy');$('hdiag').textContent='Copied'}catch(_){prompt('Copy this:',r.text)}t.remove()}setTimeout(()=>{$('hdiag').textContent='Copy diagnostic info'},2000)};
 let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   const s=await (await fetch('/api/status')).json();$('prog').style.display='block';
-  const run=s.state==='scanning'||s.state==='running';$('go').disabled=run;$('gst').disabled=run;$('gchk').disabled=run;
+  const run=s.state==='scanning'||s.state==='running';$('go').disabled=run;$('gst').disabled=run;$('gchk').disabled=run;$('simscan').disabled=run;
   jobKind=s.kind||'fix';const gd=s.guided||null;curGuided=!!gd;placeResults(jobKind);
   let pct=0,indet=false;
   if(s.state==='done'){pct=100}
@@ -3248,7 +3463,7 @@ let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   else if(s.phase&&s.phase.total){pct=100*s.phase.done/s.phase.total}
   else if(s.state==='scanning'||s.state==='running'){indet=true}
   setBar('bar','fill','pct',pct,indet);
-  const LBL=(gd&&!gd.final&&gd.steps.length)?('Guided &middot; step '+gd.i+' of '+gd.steps.length+': '+esc(gd.steps[gd.i-1]||'')):gd&&jobKind==='guided'?'Guided':{undo:'Undo',consolidate:'Merge similar folders',assess:'Check my files',fix:'Part 1 Fix',convert:'Part 4 Convert',cleanup:'Part 3 Clean up',merge:'Part 2 Merge'}[jobKind]||'';
+  const LBL=(gd&&!gd.final&&gd.steps.length)?('Guided &middot; step '+gd.i+' of '+gd.steps.length+': '+esc(gd.steps[gd.i-1]||'')):gd&&jobKind==='guided'?'Guided':{similar:'Find similar photos',similar_apply:'Set aside',undo:'Undo',consolidate:'Merge similar folders',assess:'Check my files',fix:'Part 1 Fix',convert:'Part 4 Convert',cleanup:'Part 3 Clean up',merge:'Part 2 Merge'}[jobKind]||'';
   $('msg').innerHTML=(LBL?'<b>'+LBL+'</b> &middot; ':'')+(s.state==='error'?'<span class="err">'+esc(s.message)+'</span>':s.state==='done'?'<span class="ok">Finished.</span>':esc(s.message)+(s.done?` (${s.done.toLocaleString()} / ${s.total.toLocaleString()})`:''));
   const c=s.counts||{},done=s.done||0,nj=c['no-json']||0;
   $('tiles').innerHTML=liveTiles(s,c,done,nj);

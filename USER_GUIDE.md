@@ -57,7 +57,7 @@ A page opens at `http://127.0.0.1:8765`. It is served only on your own computer.
 
 The longer explanations sit behind small **i** buttons: hover over one (or tap it on a phone) to read it. Each tab has a one-line description under its title. Warnings that matter, such as "(empties the source folders)", stay visible.
 
-The app has seven tabs: **Guided** (the easy way), **Fix** (metadata), **Merge** (folders), **Clean up** (`.json` files, junk, names, empty folders), **Convert** (videos), **History** (past runs and reports) and **Help** (this guide, support and the disclaimer).
+The app has eight tabs: **Guided** (the easy way), **Fix** (metadata), **Merge** (folders), **Clean up** (`.json` files, junk, names, empty folders, similar folders), **Convert** (videos), **Similar** (the same photo saved twice), **History** (past runs, reports and undo) and **Help** (this guide, support and the disclaimer).
 
 ## The warning sign
 
@@ -129,6 +129,26 @@ Reports and logs are saved in `Documents/Backstory Reports`, one folder per run.
 
 On the Guided tab, a short **checklist** shows whether your Takeout and Destination are set, whether the Destination has enough free space for your zip files, and whether ExifTool and ffmpeg are installed.
 
+
+## Albums and Google-edited copies
+
+**Albums.** Google saves a photo once in its year folder and again in each album it belongs to. When duplicates are removed, the album copies are skipped, so Backstory saves the album names as **keywords** on the kept photo (Apple Photos and Lightroom show keywords) and writes a list of albums with the reports (`takeout_report_albums.csv`). It is ticked by default in Guided and Fix.
+
+**Edited copies.** When you edit a photo in Google Photos, Takeout contains both `IMG_1.jpg` and `IMG_1-edited.jpg` (in other languages the word differs; the common ones are recognised). Choose **Keep both** (default), **Keep only the edited version** or **Keep only the original**. The copies left out are not copied into the new library; they stay in your Takeout.
+
+## Similar photos (Similar tab)
+
+Finds pictures that look the same but are not identical files: the same photo saved smaller, re-saved, or lightly edited. It compares how pictures look (not their names), shows each group with thumbnails, and suggests keeping the largest. Photos you tick are **moved** into a `_similar_set_aside` folder inside your folder, keeping their structure. Nothing is deleted, and you can undo it from History. Choose how alike the pictures must be: *Very alike* is safest; *Loosely alike* finds more but needs a careful look. Needs ffmpeg (included in the Mac app). On large libraries the scan takes a while.
+
+## Smart folder consolidation (Clean up tab)
+
+Folders such as `Japan 2025`, `delete-Japan 2025`, `Japan 2025-old` and `Japan2025 (1)` are usually the same trip. **Find similar folders** looks at folders that sit side by side and groups the ones whose names differ only by words like *delete, old, copy, backup, final, new, temp*, by `(1)` markers, spaces, punctuation or capital letters. Optionally it also lists likely spelling differences (`Italy 2024` and `Itly 2024`), marked **Check this** and not ticked for you.
+
+For each group you see the folders and how many files each holds, and the name they will be merged into (you can edit it). Tick the groups you want, keep **Preview only** on for a first look, and press **Merge the ticked groups**. Identical files are kept once; different files with the same name are kept as `name_1`. Merging moves files and cannot be undone from the app, so preview first and keep a backup.
+
+## Undo (History tab)
+
+Runs that copied or moved files into a Destination (Guided, Fix, Merge, and setting similar photos aside) get an **Undo this run...** button in History. Undoing a copy run removes the files that run created (your originals and zip files are not touched). Undoing a move run moves the files back. Not everything can be undone: deleting `.json` files, junk, duplicates and original videos, renaming files in your source folders, merging similar folders, and in-place edits cannot be undone from the app.
 
 ## Dates from file names
 
@@ -360,7 +380,7 @@ If you are stuck, open **History**, press **Copy diagnostic info**, and email it
 - It works from a Google Takeout export. It cannot read Google Photos directly, upload anything, or recover photos that are not in your export.
 - It writes metadata only to formats ExifTool can write. Some video formats (AVI, MKV, WMV, MPG, MTS and similar) only get their file modified time fixed.
 - Matching a photo to its `.json` uses name rules and is not perfect. Rare cases may match the wrong file or not match at all; the report shows how each file was matched.
-- Duplicate removal compares file contents. Album membership is not preserved when a duplicate is skipped.
+- Duplicate removal compares file contents. Album names of skipped copies are saved as keywords, but the album folders themselves are not recreated.
 - Live Photo pairing needs the still to still have its Apple ID, and (in zip mode) both parts in the same zip.
 - Times from Google are UTC; the tool cannot know your local time zone for a photo.
 - Video conversion that re-encodes is lossy by nature. Quick re-wraps are not. Estimates of sizes and times are rough.
