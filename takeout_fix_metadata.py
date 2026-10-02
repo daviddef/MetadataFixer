@@ -1475,8 +1475,29 @@ def process(m, idx, args, out_root):
     if ex_now.get("rating") and "-XMP:Rating=5" in exif_args:
         exif_args.remove("-XMP:Rating=5")          # a rating you gave yourself is not replaced
     sanity = False
+    carry = (getattr(args, "carry", None) or {}).get(str(m))
+    if carry and ext not in NO_WRITE_EXT and not read_failed:
+        if not ex_now:
+            ex_now = read_existing(m, ext in VIDEO_EXT)
+        if not ex_now.get("_failed"):
+            if "lat" in carry and ex_now.get("lat") is None:
+                exif_args += gps_args(carry["lat"], carry["lon"], ext in VIDEO_EXT, False)
+                row["gps"], row["gps_google"], row["gps_guess"] = "added", "%.5f, %.5f" % (float(carry["lat"]), float(carry["lon"])), "copied from a near-identical duplicate that was left out"
+                sanity = True
+            if "desc" in carry and not ex_now.get("desc") and ext not in VIDEO_EXT:
+                exif_args += [f"-XMP-dc:Description={carry['desc']}", f"-ImageDescription={carry['desc']}"]
+                sanity = True
+            if carry.get("keywords") and ext not in VIDEO_EXT:
+                for k in carry["keywords"]:
+                    exif_args += [f"-XMP-dc:Subject-={k}", f"-XMP-dc:Subject+={k}"]
+                sanity = True
+            if sanity:
+                row["detail"] = (row.get("detail") or "") + " kept the best copy and carried over what the left-out copy had"
+                if not d:
+                    d = {"_sanity": True}
     if ext not in NO_WRITE_EXT and not read_failed and (ex_now or getattr(args, "folder_dates", "") or getattr(args, "guess_gps", False)):
-        exif_args, taken, final_taken, sanity, ex_now = apply_sanity(m, args, ext, d, ex_now, final_taken, row, exif_args, taken)
+        exif_args, taken, final_taken, san2, ex_now = apply_sanity(m, args, ext, d, ex_now, final_taken, row, exif_args, taken)
+        sanity = sanity or san2
         if sanity and not d:
             d = {"_sanity": True}
     if final_taken:
@@ -3374,8 +3395,142 @@ def dhash_image_raw(path):
 def _popcount(x):
     return bin(x).count("1")
 
+# ---- Duplicate matching strictness and "which copy do we keep" rules --------------------------------------------------
+KEEPER_RULES = {
+    "favorite": "A favourite (rated 5 stars) beats one that is not",
+    "edited": "An edited version beats an untouched one",
+    "resolution": "More pixels (higher resolution) wins",
+    "filesize": "A bigger file wins (less compressed)",
+    "metadata": "More complete information inside (date, location, caption, title, keywords) wins",
+    "album": "A photo you already sorted into an album wins",
+    "keywords": "More keywords wins",
+    "format": "A modern format (HEIC) beats JPEG, which beats the rest",
+    "yearfolder": "A copy in a 'Photos from YYYY' folder wins",
+    "oldest": "The older file wins",
+    "newest": "The newer file wins",
+}
+DEFAULT_KEEPER = ["favorite", "edited", "resolution", "filesize", "metadata", "album", "yearfolder"]
+MATCH_CRITERIA = {
+    "name": "The file name must match",
+    "datetime": "The date and time taken must match",
+    "dimensions": "The width and height must match",
+    "format": "The file format must match",
+    "size": "The file size must match",
+}
+_EDITOR_RE = re.compile(r"photoshop|lightroom|snapseed|pixelmator|affinity|gimp|capture one|darktable|luminar|picsart|vsco|facetune|canva", re.I)
+EXIF_FACT_TAGS = ["-ImageWidth", "-ImageHeight", "-DateTimeOriginal", "-GPSLatitude", "-GPSLongitude", "-Rating", "-Software",
+                  "-Title", "-ImageDescription", "-Description", "-Subject", "-Keywords"]
 
-def find_similar_photos(roots, threshold=6, progress=None, should_stop=None, workers=6):
+
+def _as_list(v):
+    if v is None or v == "":
+        return []
+    return list(v) if isinstance(v, (list, tuple)) else [v]
+
+
+def member_facts(path, size, it):
+    """What we know about one copy, for choosing a keeper: it = the exiftool record (may be empty)."""
+    p = Path(path)
+    kws = {str(x) for x in _as_list(it.get("Subject")) + _as_list(it.get("Keywords")) if str(x)}
+    name = p.name.lower()
+    has_desc = bool((it.get("ImageDescription") or it.get("Description") or "").__str__().strip())
+    f = {"path": str(path), "size": size, "w": it.get("ImageWidth") or 0, "h": it.get("ImageHeight") or 0,
+         "date": str(it.get("DateTimeOriginal") or "")[:19], "gps": it.get("GPSLatitude") is not None,
+         "lat": it.get("GPSLatitude"), "lon": it.get("GPSLongitude"), "desc": str(it.get("ImageDescription") or it.get("Description") or "").strip(),
+         "fav": (it.get("Rating") or 0) >= 5 if isinstance(it.get("Rating"), (int, float)) else False,
+         "edited": ("-edited" in name or "(edited)" in name or bool(_EDITOR_RE.search(str(it.get("Software") or "")))),
+         "album": is_album_folder(p.parent.name) or bool(kws), "keywords": len(kws), "kw": sorted(kws)[:20],
+         "title": bool(str(it.get("Title") or "").strip()), "ext": p.suffix.lower(), "year_folder": p.parent.name.startswith("Photos from")}
+    f["meta"] = int(bool(f["date"])) + int(f["gps"]) + int(has_desc) + int(f["title"]) + int(bool(kws))
+    try:
+        f["mtime"] = os.stat(path).st_mtime
+    except OSError:
+        f["mtime"] = 0
+    return f
+
+
+def keeper_key(f, rules=None):
+    """Sort key: the best copy sorts first. Rules are applied in order; the first one that tells two copies apart decides."""
+    k = []
+    for r in (rules if rules is not None else DEFAULT_KEEPER):
+        if r == "favorite":
+            k.append(not f["fav"])
+        elif r == "edited":
+            k.append(not f["edited"])
+        elif r == "resolution":
+            k.append(-(f["w"] * f["h"]))
+        elif r == "filesize":
+            k.append(-f["size"])
+        elif r == "metadata":
+            k.append(-f["meta"])
+        elif r == "album":
+            k.append(not f["album"])
+        elif r == "keywords":
+            k.append(-f["keywords"])
+        elif r == "format":
+            k.append({".heic": 0, ".heif": 0, ".jpg": 1, ".jpeg": 1}.get(f["ext"], 2))
+        elif r == "yearfolder":
+            k.append(not f["year_folder"])
+        elif r == "oldest":
+            k.append(f["mtime"])
+        elif r == "newest":
+            k.append(-f["mtime"])
+    k.append(f["path"])
+    return tuple(k)
+
+
+def split_by_criteria(members, must):
+    """Keep only copies that also agree on every ticked criterion. Returns the sub-groups that still have two or more copies."""
+    must = [m for m in (must or []) if m in MATCH_CRITERIA]
+    if not must:
+        return [members]
+    def key(f):
+        out = []
+        for c in must:
+            if c == "name":
+                out.append(DUP_RE.sub("", re.sub(r"[-_ ]?(edited|copy)$", "", Path(f["path"]).stem.lower())).strip())
+            elif c == "datetime":
+                out.append(f["date"] or ("?" + f["path"]))              # no date: cannot be confirmed, so never matches
+            elif c == "dimensions":
+                out.append((f["w"], f["h"]) if f["w"] else ("?" + f["path"]))
+            elif c == "format":
+                out.append({".jpeg": ".jpg", ".heif": ".heic"}.get(f["ext"], f["ext"]))
+            elif c == "size":
+                out.append(f["size"])
+        return tuple(out)
+    by = {}
+    for f in members:
+        by.setdefault(key(f), []).append(f)
+    return [g for g in by.values() if len(g) > 1]
+
+
+def carry_over(keeper, dropped):
+    """What the kept copy is missing that a dropped copy had: a location, a caption, album names. Never replaces anything."""
+    c = {}
+    if keeper.get("lat") is None:
+        d = next((x for x in dropped if x.get("lat") is not None and x.get("lon") is not None), None)
+        if d:
+            c["lat"], c["lon"] = d["lat"], d["lon"]
+    if not keeper.get("desc"):
+        d = next((x for x in dropped if x.get("desc")), None)
+        if d:
+            c["desc"] = d["desc"]
+    kws = set(keeper.get("kw") or [])
+    add = []
+    for x in dropped:
+        for k in x.get("kw") or []:
+            if k not in kws and k not in add:
+                add.append(k)
+        nm = Path(x["path"]).parent.name
+        if is_album_folder(nm) and nm not in kws and nm not in add:
+            add.append(nm)
+    if add:
+        c["keywords"] = add[:30]
+    return c
+
+
+
+def find_similar_photos(roots, threshold=6, progress=None, should_stop=None, workers=6, rules=None, must=None):
     """Groups of pictures that look the same. Reads pictures only; changes nothing.
     Returns (groups, scanned): each group is a list of {"path","size","w","h","date","gps"} with the suggested keeper first."""
     from concurrent.futures import ThreadPoolExecutor
@@ -3452,7 +3607,7 @@ def find_similar_photos(roots, threshold=6, progress=None, should_stop=None, wor
             os.close(fd)
             try:
                 Path(arg).write_text("\n".join(need[k:k + 300]), encoding="utf-8", errors="surrogateescape")
-                r = subprocess.run(["exiftool", "-charset", "filename=utf8", "-j", "-n", "-ImageWidth", "-ImageHeight", "-DateTimeOriginal", "-GPSLatitude", "-@", arg],
+                r = subprocess.run(["exiftool", "-charset", "filename=utf8", "-j", "-n", "-@", arg] + EXIF_FACT_TAGS,
                                    capture_output=True, text=True)
                 for it in json.loads(r.stdout or "[]"):
                     info[it["SourceFile"]] = it
@@ -3464,11 +3619,12 @@ def find_similar_photos(roots, threshold=6, progress=None, should_stop=None, wor
     for g in raw:
         mem = []
         for p in g:
-            it = info.get(p, {})
-            mem.append({"path": p, "size": sizes.get(p, 0), "w": it.get("ImageWidth") or 0, "h": it.get("ImageHeight") or 0,
-                        "date": str(it.get("DateTimeOriginal") or "")[:19], "gps": it.get("GPSLatitude") is not None, "hash": hashes[p]})
-        mem.sort(key=lambda m: (-(m["w"] * m["h"]), -m["size"], not m["gps"], not m["date"], m["path"]))
-        groups.append(mem)
+            f = member_facts(p, sizes.get(p, 0), info.get(p, {}))
+            f["hash"] = hashes[p]
+            mem.append(f)
+        for sub in split_by_criteria(mem, must):
+            sub.sort(key=lambda f: keeper_key(f, rules))
+            groups.append(sub)
     groups.sort(key=lambda g: (-len(g), g[0]["path"]))
     return groups, total
 

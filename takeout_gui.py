@@ -30,7 +30,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.03-c"
+VERSION = "2026.10.03-d"
 class Cancelled(Exception):
     pass
 
@@ -245,7 +245,7 @@ def write_text_summary(path, sm):
     Path(path).write_text("\n".join(L) + "\n", encoding="utf-8")
 
 
-def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=False, date_policy="earlier", name_dates=False, albums=False, edited="both", near=False, folder_dates="", guess_gps=False):
+def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=False, date_policy="earlier", name_dates=False, albums=False, edited="both", near=False, folder_dates="", guess_gps=False, dupe=None):
     with LOCK:
         STATE.update(state="scanning", cancel=False, total=0, done=0, counts={}, message="Scanning folders...",
                      report="", summary=None, scan=None, extra={}, recent=[], phase=None, kind="fix", **({} if IN_GUIDED[0] else {"guided": None}))
@@ -303,16 +303,25 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
             fx.prepare(args, media, hashing)
             args.claimed |= claimed_all
             if near and not zips:
+                dp_ = clean_dupe(dupe)
                 try:
-                    ngroups, _n = fx.find_similar_photos([str(p) for p in resolved], 3, lambda m_, a_, b_: check_cancel(), check_cancel)
+                    ngroups, _n = fx.find_similar_photos([str(p) for p in resolved], 3, lambda m_, a_, b_: check_cancel(), check_cancel, rules=dp_["rules"], must=dp_["must"])
                 except OSError:
                     ngroups = []
                 mset_ = {str(m_) for m_ in media}
+                args.carry = {}
                 for g_ in ngroups:
+                    dropped_ = []
                     for mem_ in g_[1:]:
                         if mem_["path"] in mset_ and mem_["path"] not in args.skip and mem_["path"] not in args.dupes:
-                            args.skip[mem_["path"]] = "left out: a near-identical copy; the larger version is kept"
+                            args.skip[mem_["path"]] = "left out: a near-identical copy; the better version is kept (%s)" % (", ".join(fx.KEEPER_RULES[r].split(" beats")[0].split(" wins")[0].lower() for r in dp_["rules"][:2]) or "largest")
                             extra["near_skipped"] += 1
+                            dropped_.append(mem_)
+                    if dropped_ and g_[0]["path"] in mset_:
+                        c_ = fx.carry_over(g_[0], dropped_)
+                        if c_:
+                            args.carry[g_[0]["path"]] = c_
+                            extra["near_carried"] += 1
             if edited in ("edited", "original"):
                 pairs = fx.find_edited_pairs(media)
                 for ed, og in pairs.items():
@@ -560,7 +569,8 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
                 extra["edited_pairs"], "" if extra["edited_pairs"] == 1 else "s", "Only the edited versions were kept." if edited == "edited" else "Only the originals were kept."))
         sm["story"] = story_cards[:8]
         if extra.get("near_skipped"):
-            sm["tips"].append("%d near-identical pictures (the same picture at a smaller size) were left out; the larger version of each was kept." % extra["near_skipped"])
+            sm["tips"].append("%d near-identical pictures (the same picture at a smaller size or re-saved) were left out; the best version of each was kept using your keeper rules (favourite, edited, resolution, file size...)%s." % (
+                extra["near_skipped"], (", and %d of those kept copies received a location, caption or album name from the copy that was left out" % extra["near_carried"]) if extra.get("near_carried") else ""))
         sm["problems"] = [{"file": Path(r["file"]).name, "status": r["status"], "detail": r.get("detail", "")} for r in rows
                           if r["status"] in ("copy-error", "error", "exiftool-error")][:100]
         sm["dupe_bytes"] = dupe_bytes
@@ -625,7 +635,7 @@ def _run_guided(roots, out, dry_run, opts):
                                                      "junk": None, "names": None, "empty": None})))
         steps.append(("Put dates, locations and captions back, and merge into one library", lambda: run_job(
             roots, out, dry_run, bool(opts.get("replace", True)), bool(opts.get("live", True)), bool(opts.get("dedupe", True)), False, "earlier", bool(opts.get("name_dates", True)), bool(opts.get("albums", True)), opts.get("edited", "both"), bool(opts.get("near", False)),
-            "fix" if opts.get("fix_dates") else ("missing" if opts.get("folder_dates", False) else ""), bool(opts.get("guess_gps", False)))))
+            "fix" if opts.get("fix_dates") else ("missing" if opts.get("folder_dates", False) else ""), bool(opts.get("guess_gps", False)), opts.get("dupe"))))
         if opts.get("convert") and not dry_run:
             steps.append(("Convert old videos to MP4", lambda: run_convert([out], False, list(fx.DEFAULT_EXT), False, "high", "move", False)))
         titles = [t for t, _ in steps]
@@ -2113,7 +2123,15 @@ def make_thumb(path):
     return out
 
 
-def run_similar_scan(roots, threshold):
+def clean_dupe(d):
+    """Duplicate preferences from the page: which criteria must match, and the order of the keeper rules. Unknown names are dropped."""
+    d = d if isinstance(d, dict) else {}
+    rules = [r for r in (d.get("rules") if isinstance(d.get("rules"), list) else fx.DEFAULT_KEEPER) if r in fx.KEEPER_RULES]
+    must = [m for m in (d.get("must") if isinstance(d.get("must"), list) else []) if m in fx.MATCH_CRITERIA]
+    return {"rules": list(dict.fromkeys(rules)), "must": list(dict.fromkeys(must))}
+
+
+def run_similar_scan(roots, threshold, dupe=None):
     with LOCK:
         STATE.update(state="scanning", cancel=False, total=0, done=0, counts={}, message="Looking for similar photos...", report="",
                      summary=None, scan=None, extra={}, recent=[], phase=None, kind="similar", cv=None, guided=None)
@@ -2126,7 +2144,8 @@ def run_similar_scan(roots, threshold):
             check_cancel()
             with LOCK:
                 STATE.update(state="running", total=total, done=done, message="%s (%s of %s)" % (msg, f"{done:,}", f"{total:,}"))
-        groups, scanned = fx.find_similar_photos([str(f) for f in folders], threshold, prog, check_cancel)
+        dp = clean_dupe(dupe)
+        groups, scanned = fx.find_similar_photos([str(f) for f in folders], threshold, prog, check_cancel, rules=dp["rules"], must=dp["must"])
         view, allowed = [], set()
         for gi, g in enumerate(groups[:300]):
             mem = []
@@ -2140,13 +2159,14 @@ def run_similar_scan(roots, threshold):
                     except ValueError:
                         continue
                 mem.append({"path": m["path"], "name": os.path.basename(m["path"]), "where": os.path.dirname(rel) or ".", "size": m["size"],
-                            "w": m["w"], "h": m["h"], "date": m["date"], "gps": m["gps"], "best": k == 0})
+                            "w": m["w"], "h": m["h"], "date": m["date"], "gps": m["gps"], "best": k == 0,
+                            "fav": m.get("fav", False), "edited": m.get("edited", False), "album": m.get("album", False), "kw": m.get("keywords", 0), "meta": m.get("meta", 0)})
             view.append(mem)
         reclaim = sum(m["size"] for g in groups for m in g[1:])
         with LOCK:
             SIMILAR.update(roots=[str(f) for f in folders], groups=view, allowed=allowed)
         sm = {"kind": "similar", "dry_run": True, "scanned": scanned, "groups": view, "total_groups": len(groups),
-              "extra": sum(len(g) - 1 for g in groups), "reclaim": fmt_bytes(reclaim), "threshold": threshold, "tips": []}
+              "extra": sum(len(g) - 1 for g in groups), "reclaim": fmt_bytes(reclaim), "threshold": threshold, "dupe": dp, "tips": []}
         with LOCK:
             STATE.update(state="done", message="Finished", summary=sm, phase=None)
     except Cancelled:
@@ -3199,7 +3219,7 @@ class Handler(BaseHTTPRequestHandler):
                 bool(body.get("dry_run")), bool(body.get("overwrite")), bool(body.get("pair_live")),
                 bool(body.get("dedupe")), bool(body.get("move")), body.get("date_policy", "earlier"), bool(body.get("name_dates")), bool(body.get("albums")),
                 body.get("edited") if body.get("edited") in ("both", "edited", "original") else "both", bool(body.get("near")),
-                body.get("folder_dates") if body.get("folder_dates") in ("missing", "fix") else "", bool(body.get("guess_gps"))))
+                body.get("folder_dates") if body.get("folder_dates") in ("missing", "fix") else "", bool(body.get("guess_gps")), body.get("dupe")))
             self._send(200, "{}")
         elif path == "/api/health_start":
             with LOCK:
@@ -3280,7 +3300,8 @@ class Handler(BaseHTTPRequestHandler):
             if busy:
                 return self._send(409, json.dumps({"error": "A job is already running"}))
             thr = body.get("threshold") if body.get("threshold") in (3, 6, 10) else 6
-            start_tracked("similar", dict(body, dry_run=True, opts={"sensitivity": thr}), run_similar_scan, (body.get("roots", []), thr))
+            dp = clean_dupe(body.get("dupe"))
+            start_tracked("similar", dict(body, dry_run=True, opts={"sensitivity": thr, "match": ",".join(dp["must"]) or "visual only", "keep": ",".join(dp["rules"])}), run_similar_scan, (body.get("roots", []), thr, dp))
             self._send(200, "{}")
         elif path == "/api/similar_apply":
             with LOCK:
@@ -3686,6 +3707,13 @@ input[type=checkbox]:checked{animation:tick .3s cubic-bezier(.2,1.8,.4,1)}
 .foot a{text-decoration:none;border-bottom:1px dotted var(--mute)}
 ::selection{background:color-mix(in srgb,var(--acc2) 40%,transparent)}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+
+.dpbox details{margin:10px 0;border:1px solid var(--line);border-radius:12px;background:var(--soft);padding:2px 14px}
+.dpbox summary{cursor:pointer;font-weight:600;padding:10px 0}
+.dprow{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:8px;background:var(--card);border:1px solid var(--line);margin:4px 0;font-size:13.5px}
+.dprow.off{opacity:.55}.dprow .n{width:20px;color:var(--mute);font-variant-numeric:tabular-nums}.dprow label{flex:1}.dprow button{padding:1px 8px;font-size:12px}
+.dpmust{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:2px 14px;margin:6px 0}
+.tagpill{display:inline-block;padding:0 7px;border-radius:999px;font-size:11px;background:color-mix(in srgb,var(--acc) 18%,var(--card));margin:1px 3px 0 0}
 </style></head><body><div id="ack" style="display:none"><div class="ackbox" role="dialog" aria-modal="true" aria-labelledby="acktitle">
 <h2 id="acktitle">Before you start</h2>
 <p>Backstory changes, copies, moves and (if you choose) deletes files. Please read this once:</p>
@@ -3771,6 +3799,7 @@ input[type=checkbox]:checked{animation:tick .3s cubic-bezier(.2,1.8,.4,1)}
 <div class="opt"><input type="checkbox" id="gfx"><div>&#9888;&#65039; Correct dates that disagree with the folder name, and dates in the future<small>A photo in the <i>2017</i> folder that says 2025, or says 2028, almost certainly lost its metadata. This sets it from the folder name. Only tick it if you trust your folder names.</small></div></div>
 <div class="opt"><input type="checkbox" id="ggps"><div>&#9888;&#65039; Guess a location from the folder name (Johannesburg, Japan...)<small>Where a photo has <b>no</b> location and its folder names a city or country, an approximate location is added and labelled as a guess. A location that already exists is never touched.</small></div></div>
 <div class="opt"><input type="checkbox" id="gnear"><div>&#9888;&#65039; Also skip near-identical pictures<small>When your libraries overlap, leave out the smaller version of the same picture and keep the larger one. Off by default: use Compare libraries on the Merge tab to see what it would skip. Folders only.</small></div></div>
+<div class="dpbox"></div>
 <div class="opt"><input type="checkbox" id="galb" checked><div>Keep album names as keywords<small>When a photo that lived in an album is skipped as a duplicate, the album name is saved as a keyword on the kept copy so you do not lose your albums. A list of albums is saved with the reports.</small></div></div>
 <div class="opt"><div style="flex:1"><label for="gedit" style="font-weight:600">Google-edited copies (IMG_1-edited.jpg)</label><select id="gedit" class="sel"><option value="both" selected>Keep both</option><option value="edited">Keep only the edited version</option><option value="original">Keep only the original</option></select></div></div>
 <div class="opt"><input type="checkbox" id="gow" checked><div>&#9888;&#65039; Replace location and caption already stored in the photo<small>Google&#39;s values win for location and caption. Dates keep the earlier of the two. Change this in the Fix tab if you want other rules.</small></div></div>
@@ -3798,6 +3827,7 @@ input[type=checkbox]:checked{animation:tick .3s cubic-bezier(.2,1.8,.4,1)}
 <div class="opt"><input type="checkbox" id="fdfix"><div>&#9888;&#65039; Correct dates that disagree with the folder name, and dates in the future<small>Sets the date from the folder name when the photo says a different year (a sign it lost its metadata) or a date that has not happened yet. Preview first.</small></div></div>
 <div class="opt"><input type="checkbox" id="fgps"><div>&#9888;&#65039; Guess a location from the folder name<small>Only for photos with no location, in a folder that names a city or country. The location is the middle of that place, and each photo is labelled with a keyword so you can find them. Preview first.</small></div></div>
 <div class="opt"><input type="checkbox" id="near"><div>&#9888;&#65039; Also skip near-identical pictures<small>The same picture saved at a smaller size or re-saved is not an exact copy, so it is normally kept. Tick this to leave out the smaller version when libraries overlap (folders only, not zip files). Check the Compare results first.</small></div></div>
+<div class="dpbox"></div>
 <div class="opt"><input type="checkbox" id="albums" checked><div>Keep album names when duplicates are removed<small>Google saves a photo once in its year folder and again in every album. When the album copies are skipped as duplicates, the album names are saved as keywords on the kept photo (Apple Photos and Lightroom show keywords), and a list of albums is saved with the reports.</small></div></div>
 <div class="opt"><div style="flex:1"><label for="edited" style="font-weight:600">When Google saved an edited copy (IMG_1-edited.jpg) next to the original</label><select id="edited" class="sel"><option value="both" selected>Keep both</option><option value="edited">Keep only the edited version</option><option value="original">Keep only the original</option></select><small>The ones left out stay in your Takeout; they are just not copied into the new library.</small></div></div>
 
@@ -3920,6 +3950,7 @@ input[type=checkbox]:checked{animation:tick .3s cubic-bezier(.2,1.8,.4,1)}
 <div class="usef" style="margin-top:10px"><b>Folders to check:</b> <span class="fnote"></span></div>
 <div class="opt"><div style="flex:1"><label for="simsens" style="font-weight:600">How alike must they be?</label>
 <select id="simsens" class="sel"><option value="3">Very alike (fewest matches, safest)</option><option value="6" selected>Alike (recommended)</option><option value="10">Loosely alike (more matches, check carefully)</option></select></div></div>
+<div class="dpbox"></div>
 <button class="p" id="simscan" style="margin-top:6px">Find similar photos</button></div>
 </section>
 <section class="pane" id="pane-photos">
@@ -4047,7 +4078,7 @@ $('go').onclick=async()=>{
   if(!$('dry').checked&&!dest()&&!confirm('No output folder: files will be edited IN PLACE. Continue?'))return;
   if($('move').checked&&!$('dry').checked&&!confirm('MOVE will take files out of your Takeout folders. Make sure you have another backup. Continue?'))return;
   $('sum').style.display='none';
-  const r=await post('/api/start',{roots:roots(),out:dest(),dry_run:$('dry').checked,overwrite:$('ow').checked,pair_live:$('live').checked,dedupe:$('dedupe').checked,move:$('move').checked,date_policy:$('datepol').value,name_dates:$('ndates').checked,albums:$('albums').checked,edited:$('edited').value,near:$('near').checked,folder_dates:$('fdfix').checked?'fix':($('fdates').checked?'missing':''),guess_gps:$('fgps').checked});
+  const r=await post('/api/start',{roots:roots(),out:dest(),dry_run:$('dry').checked,overwrite:$('ow').checked,pair_live:$('live').checked,dedupe:$('dedupe').checked,move:$('move').checked,date_policy:$('datepol').value,name_dates:$('ndates').checked,albums:$('albums').checked,edited:$('edited').value,near:$('near').checked,folder_dates:$('fdfix').checked?'fix':($('fdates').checked?'missing':''),guess_gps:$('fgps').checked,dupe:getDupe()});
   if(r.error)alert(r.error);else poll();
 };
 $('rev').onclick=()=>post('/api/reveal');
@@ -4215,7 +4246,7 @@ $('gst').onclick=async()=>{
   const real=!$('gdry').checked;
   if(real&&$('gcv').checked&&!confirm('After the library is built, old videos in the Destination will be converted to MP4 and the originals moved into an _original_videos folder. Continue?'))return;
   $('sum').style.display='none';curGuided=true;
-  const r=await post('/api/guided_start',{roots:roots(),out:dest(),dry_run:$('gdry').checked,opts:{fix_ext:$('gext').checked,convert:$('gcv').checked,replace:$('gow').checked,live:$('glive').checked,dedupe:$('gdedupe').checked,name_dates:$('gnd').checked,albums:$('galb').checked,edited:$('gedit').value,near:$('gnear').checked,folder_dates:$('gfd').checked,fix_dates:$('gfx').checked,guess_gps:$('ggps').checked}});
+  const r=await post('/api/guided_start',{roots:roots(),out:dest(),dry_run:$('gdry').checked,opts:{fix_ext:$('gext').checked,convert:$('gcv').checked,replace:$('gow').checked,live:$('glive').checked,dedupe:$('gdedupe').checked,name_dates:$('gnd').checked,albums:$('galb').checked,edited:$('gedit').value,near:$('gnear').checked,folder_dates:$('gfd').checked,fix_dates:$('gfx').checked,guess_gps:$('ggps').checked,dupe:getDupe()}});
   if(r.error){alert(r.error);curGuided=false}else{placeResults('guided');$('prog').style.display='block';poll()}};
 
 // ---- Help: user guide (rendered from USER_GUIDE.md), safety notice, support, about
@@ -4364,7 +4395,7 @@ function showSimilar(s){
   let h=`<div class="tiles">${tile(s.scanned,'pictures checked')}${tile(s.total_groups,'similar groups','')}${tile(s.extra,'extra copies','')}</div>`;
   if(!s.groups.length){h+='<div class="tip">No similar photos found at this setting.</div>';$('sumbody').innerHTML=h;$('sum').style.display='block';return}
   h+=`<small>Potential space: <b>${esc(s.reclaim)}</b>. The best copy of each group (largest picture) is kept; the others are ticked to be set aside. Untick any you want to keep. ${s.total_groups>s.groups.length?'Showing the first '+s.groups.length+' groups.':''}</small>`;
-  h+=s.groups.map((g,i)=>`<div class="card simgrp"><div class="simrow">${g.map((m,k)=>`<label class="simitem"><img loading="lazy" src="/thumb?p=${encodeURIComponent(m.path)}" alt=""><div class="simcap"><b title="${esc(m.name)}">${esc(m.name)}</b><span>${esc(m.where)}</span><span>${m.w&&m.h?m.w+' &times; '+m.h+' &middot; ':''}${fmtB(m.size)}${m.date?' &middot; '+esc(m.date.slice(0,10)):''}${m.gps?' &middot; has location':''}</span></div>${m.best?'<span class="badge okb">Best: kept</span>':`<span class="simsel"><input type="checkbox" class="simaside" data-p="${esc(m.path)}" checked> Set aside</span>`}</label>`).join('')}</div></div>`).join('');
+  h+=s.groups.map((g,i)=>`<div class="card simgrp"><div class="simrow">${g.map((m,k)=>`<label class="simitem"><img loading="lazy" src="/thumb?p=${encodeURIComponent(m.path)}" alt=""><div class="simcap"><b title="${esc(m.name)}">${esc(m.name)}</b><span>${esc(m.where)}</span><span>${m.w&&m.h?m.w+' &times; '+m.h+' &middot; ':''}${fmtB(m.size)}${m.date?' &middot; '+esc(m.date.slice(0,10)):''}${m.gps?' &middot; has location':''}</span><span>${m.fav?'<span class="tagpill">&#11088; favourite</span>':''}${m.edited?'<span class="tagpill">edited</span>':''}${m.album?'<span class="tagpill">in an album</span>':''}${m.kw?'<span class="tagpill">'+m.kw+' keywords</span>':''}</span></div>${m.best?'<span class="badge okb">Best: kept</span>':`<span class="simsel"><input type="checkbox" class="simaside" data-p="${esc(m.path)}" checked> Set aside</span>`}</label>`).join('')}</div></div>`).join('');
   h+='<div class="hbtns" style="margin-top:14px"><button class="p" id="simapply">Set aside the ticked photos</button><button id="simnone">Untick all</button><button id="simall">Tick all</button></div><small>They are moved, not deleted, and stay in their folder structure inside <i>_similar_set_aside</i>. You can undo this from History.</small>';
   $('sumbody').innerHTML=h;$('sum').style.display='block';
   const setAll=v=>document.querySelectorAll('.simaside').forEach(c=>c.checked=v);
@@ -4380,7 +4411,7 @@ function showSimilarApply(s){
 $('simscan').onclick=async()=>{
   if(!roots().length){alert('Add your folders in the bar at the top first');return}
   $('sum').style.display='none';curGuided=false;
-  const r=await post('/api/similar_scan',{roots:roots(),threshold:+$('simsens').value});
+  const r=await post('/api/similar_scan',{roots:roots(),threshold:+$('simsens').value,dupe:getDupe()});
   if(r.error)alert(r.error);else{placeResults('similar');$('prog').style.display='block';poll()}};
 
 function photosOpts(limit){return {batch_gb:+$('pbatch').value,keep_free_gb:+$('pfree').value,pace:$('ppace').value,albums:$('palb').checked,order:'oldest',limit:limit||null,adaptive:$('padapt').checked,library:($('uplib')||{}).value||''}}
@@ -4744,6 +4775,26 @@ let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   window.showSummary=function(s){_ss(s);try{countUp($('sumbody'));if(s&&!s.dry_run&&['assess','health','monitor','diagnostics','compare'].indexOf(s.kind)<0)confetti();else sparkle($('sumbody'))}catch(e){}};
   document.addEventListener('click',e=>{const b=e.target.closest&&e.target.closest('button.p');if(b&&!b.disabled)sparkle(b)},true);
 })();
+
+// ---- duplicate matching and keeper rules (shared by Similar, Guided and Fix) ----
+const DP_RULES={favorite:'A favourite (5 stars) beats one that is not',edited:'An edited version beats an untouched one',resolution:'More pixels (higher resolution) wins',filesize:'A bigger file wins (less compressed)',metadata:'More complete information inside (date, location, caption, title, keywords) wins',album:'A photo already sorted into an album wins',keywords:'More keywords wins',format:'Modern format (HEIC) beats JPEG beats the rest',yearfolder:"A copy in a 'Photos from YYYY' folder wins",oldest:'The older file wins',newest:'The newer file wins'};
+const DP_DEFAULT=['favorite','edited','resolution','filesize','metadata','album','yearfolder'];
+const DP_MUST={name:'The file name must match',datetime:'The date and time taken must match',dimensions:'The width and height must match',format:'The file format must match',size:'The file size must match'};
+let DP=(function(){try{const j=JSON.parse(localStorage.getItem('dupeprefs')||'null');if(j&&Array.isArray(j.order))return j}catch(e){}return {order:DP_DEFAULT.concat(Object.keys(DP_RULES).filter(k=>DP_DEFAULT.indexOf(k)<0)),on:DP_DEFAULT.slice(),must:[]}})();
+function getDupe(){return {rules:DP.order.filter(k=>DP.on.indexOf(k)>=0&&DP_RULES[k]),must:DP.must.filter(k=>DP_MUST[k])}}
+function saveDP(){try{localStorage.setItem('dupeprefs',JSON.stringify(DP))}catch(e){}renderDP()}
+function renderDP(){document.querySelectorAll('.dpbox').forEach(box=>{const open=box.querySelector('details')&&box.querySelector('details').open;
+  box.innerHTML=`<details ${open?'open':''}><summary>&#9881;&#65039; How duplicates are matched, and which copy is kept</summary>
+  <small style="margin-top:0">Pictures are first matched by how they <b>look</b>. Tick any of these to be stricter (leave them all unticked to match by looks only):</small>
+  <div class="dpmust">${Object.entries(DP_MUST).map(([k,l])=>`<label class="sub"><input type="checkbox" data-must="${k}" ${DP.must.indexOf(k)>=0?'checked':''}> ${l}</label>`).join('')}</div>
+  <small>When a group of duplicates is found, <b>one copy is kept</b>. Backstory goes down this list: the first rule that tells two copies apart decides. Untick a rule to ignore it; use the arrows to change the order. Whatever the kept copy is missing (a location, a caption, album names) is copied onto it from the others, never replacing anything.</small>
+  ${DP.order.map((k,i)=>`<div class="dprow ${DP.on.indexOf(k)>=0?'':'off'}"><span class="n">${i+1}</span><input type="checkbox" data-rule="${k}" ${DP.on.indexOf(k)>=0?'checked':''}><label>${DP_RULES[k]}</label><button class="sm" data-up="${k}" ${i?'':'disabled'} aria-label="Move up">&#9650;</button><button class="sm" data-down="${k}" ${i<DP.order.length-1?'':'disabled'} aria-label="Move down">&#9660;</button></div>`).join('')}
+  <div class="hbtns"><button class="sm" data-dpreset="1">Reset to the recommended order</button></div></details>`;
+  box.querySelectorAll('[data-must]').forEach(c=>c.onchange=()=>{DP.must=c.checked?DP.must.concat(c.dataset.must):DP.must.filter(x=>x!==c.dataset.must);saveDP()});
+  box.querySelectorAll('[data-rule]').forEach(c=>c.onchange=()=>{DP.on=c.checked?DP.on.concat(c.dataset.rule):DP.on.filter(x=>x!==c.dataset.rule);saveDP()});
+  box.querySelectorAll('[data-up],[data-down]').forEach(b=>b.onclick=()=>{const k=b.dataset.up||b.dataset.down,i=DP.order.indexOf(k),j=b.dataset.up?i-1:i+1;if(j<0||j>=DP.order.length)return;[DP.order[i],DP.order[j]]=[DP.order[j],DP.order[i]];saveDP()});
+  box.querySelectorAll('[data-dpreset]').forEach(b=>b.onclick=()=>{DP={order:DP_DEFAULT.concat(Object.keys(DP_RULES).filter(k=>DP_DEFAULT.indexOf(k)<0)),on:DP_DEFAULT.slice(),must:[]};saveDP()})})}
+renderDP();
 </script></main></body></html>"""
 
 

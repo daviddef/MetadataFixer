@@ -233,6 +233,29 @@ External drives hiccup. Every copy and move in Backstory is now built to cope:
 
 A banner under the progress bar shows when Backstory is pausing for the drive. If it keeps happening, the drive or its cable may be failing: back up what you can.
 
+## Duplicate matching and which copy to keep
+
+Wherever Backstory finds the same picture twice (the **Similar** tab, **Guided**, and **Fix** with *skip near-identical pictures*), a panel called **How duplicates are matched, and which copy is kept** lets you set the rules. Your choices are remembered.
+
+**Matching.** Pictures are always compared by how they *look*. Tick any of these to be stricter: the file name must match, the date and time taken must match, the width and height must match, the file format must match, the file size must match. Leave them all unticked to match by looks only.
+
+**Keeping one copy.** From each group of duplicates one copy is kept. Backstory goes down your list: the first rule that tells two copies apart decides. The recommended order is:
+1. a **favourite** (5 stars) beats one that is not;
+2. an **edited** version beats an untouched one, so your crops and colour fixes are not lost;
+3. **more pixels** (higher resolution) wins;
+4. a **bigger file** wins (less compressed);
+5. **more complete information** inside (date, location, caption, title, keywords) wins;
+6. a photo already sorted into an **album** wins;
+7. a copy in a *Photos from YYYY* folder wins.
+
+You can untick any rule, change the order with the arrows, or add *more keywords*, *modern format (HEIC)*, *older file* and *newer file*. **Reset** brings back the recommended order.
+
+**Nothing is lost from the kept copy.** If the copy that is kept has no location, no caption or no album names but a copy that was left out did, those are copied onto it. Existing values are never replaced.
+
+On the Similar tab you still review every group yourself: the best copy is marked, the others are ticked to be set aside (moved, never deleted), and each picture shows tags such as favourite, edited, in an album. During a merge, the copies that are left out stay in your source, untouched.
+
+Not covered yet: photo **bursts** (they are treated like any other similar pictures, so check burst groups before setting anything aside).
+
 ## Storyboard: before and after
 
 Before you commit, Backstory shows what will happen to a few of **your real photos**. In **Check my files** and in the Guided and Fix summaries (preview and real runs) you see cards with a thumbnail, the folder it goes to, and for each of **Date**, **Place** and **Caption** what it is now and what it becomes. Changed values are highlighted; unchanged ones are marked. Notes explain special cases: a date read from the file name, a Live Photo re-paired, an identical copy kept once (and the album name saved as a keyword), or a copy left out. A four-step strip above it summarises the run: found, restored, merged, result. The thumbnails are saved inside the report, so the report still shows them later.

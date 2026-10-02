@@ -776,12 +776,47 @@ def t_rerun_over_http():
         srv.shutdown()
 
 
+def t_keeper_rules_and_matching():
+    d = WORK / "keep"; d.mkdir()
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "mandelbrot=size=640x480", "-frames:v", "1", "-q:v", "3", str(d / "big.jpg")], check=True)
+    ffmpeg("-i", str(d / "big.jpg"), "-vf", "scale=320:240", "-q:v", "6", str(d / "small_fav.jpg"))
+    subprocess.run(["exiftool", "-q", "-overwrite_original", "-Rating=5", "-GPSLatitude=48.85", "-GPSLongitude=2.35", "-GPSLatitudeRef=N", "-GPSLongitudeRef=E", "-ImageDescription=Paris trip", str(d / "small_fav.jpg")], check=True)
+    jpeg(d / "other.jpg", seed=9)
+    def names(groups):
+        return [[os.path.basename(m["path"]) for m in g] for g in groups]
+    gr, _ = fx.find_similar_photos([str(d)], 6)
+    assert names(gr) == [["small_fav.jpg", "big.jpg"]], names(gr)            # default: a favourite beats resolution
+    gr, _ = fx.find_similar_photos([str(d)], 6, rules=["resolution"])
+    assert names(gr) == [["big.jpg", "small_fav.jpg"]], names(gr)
+    gr, _ = fx.find_similar_photos([str(d)], 6, must=["name"])
+    assert gr == [], "different names must not match when the name has to match"
+    gr, _ = fx.find_similar_photos([str(d)], 6, must=["dimensions"])
+    assert gr == [], "different sizes must not match when dimensions have to match"
+    gr, _ = fx.find_similar_photos([str(d)], 6, must=["format"])
+    assert len(gr) == 1
+    c = fx.carry_over(gr[0][1] if gr[0][0]["path"].endswith("small_fav.jpg") else gr[0][0], [m for m in gr[0] if m["path"].endswith("small_fav.jpg")])
+    assert c.get("lat") and c.get("desc") == "Paris trip", c
+    # a merge with near-skip keeps the favourite by default...
+    g.run_job([str(d)], str(WORK / "keep_out"), False, False, near=True)
+    state_ok()
+    left = sorted(p.name for p in (WORK / "keep_out").rglob("*.jpg"))
+    assert "small_fav.jpg" in left and "big.jpg" not in left, left
+    # ...or the biggest picture, which then receives the location and caption from the one left out
+    g.run_job([str(d)], str(WORK / "keep_out2"), False, False, near=True, dupe={"rules": ["resolution"], "must": []})
+    sm = state_ok()
+    out = next((WORK / "keep_out2").rglob("big.jpg"))
+    assert not list((WORK / "keep_out2").rglob("small_fav.jpg")), "the smaller copy was kept too"
+    lat, desc = exif(out, "GPSLatitude", "ImageDescription")
+    assert lat and abs(float(lat) - 48.85) < 0.01 and desc == "Paris trip", (lat, desc)
+    assert g.clean_dupe({"rules": ["bogus", "filesize", "filesize"], "must": ["name", "x"]}) == {"rules": ["filesize"], "must": ["name"]}
+
+
 ORDER = ["t_fix_copy", "t_fix_namedate", "t_fix_inplace", "t_fix_move", "t_fix_dryrun_changes_nothing", "t_fix_zip", "t_zip_resume", "t_zip_needs_dest", "t_zip_corrupt",
          "t_edited_policies", "t_cancel_mid_run", "t_unreadable_and_zero", "t_dest_not_writable", "t_exiftool_missing", "t_low_disk_zip", "t_assess_and_recommend",
          "t_assess_multi_and_photoslib", "t_guided_end_to_end", "t_guided_no_dest", "t_merge_variants", "t_merge_refuses_unsafe", "t_merge_move_in_place", "t_cleanup_all",
          "t_cleanup_refuses_broad", "t_consolidate", "t_convert", "t_convert_stop", "t_similar_apply_undo", "t_health_and_formats", "t_undo_copy_run", "t_photos_plan_and_run",
          "t_photos_applescript_injection_safe", "t_photos_errors", "t_monitor_rules", "t_monitor_job_paste", "t_compare_and_near", "t_diagnostics", "t_history_report",
-         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs", "t_audit_regressions", "t_dates_and_places", "t_resilient_copy", "t_rerun_over_http"]
+         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs", "t_audit_regressions", "t_dates_and_places", "t_resilient_copy", "t_rerun_over_http", "t_keeper_rules_and_matching"]
 if __name__ == "__main__":
     only = sys.argv[1:]
     for n in ORDER:
