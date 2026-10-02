@@ -212,6 +212,27 @@ Nothing is changed by diagnostics.
 - A zip with a damaged or password-protected file inside no longer stops the run: that file is listed in the report, the rest carry on, and that zip is not marked as finished so you can run it again.
 - The app only answers requests from its own window.
 
+## Dates and places from folder names (Guided and Fix)
+
+Folder names carry clues. A folder called **2017**, **2026-06**, **June 2015** or **Photos from 2019** tells us when its pictures were probably taken; a folder called **Johannesburg**, **South Africa** or **Japan 2025** tells us where. Backstory can use these clues, **only to fill gaps or to flag things that look wrong**. Each option below is also recommended (with your own numbers) by **Check my files**, and each is in Guided and on the Fix tab. Preview first.
+
+- **Fill missing dates from the folder name** (on by default, safe). A photo with *no* date inside, in a dated folder, gets the date from the folder (the middle of the year or month when only that is known). A date that already exists is never changed by this.
+- **Correct dates that disagree with the folder name, and dates in the future** (⚠️, off by default). If a photo in the *2017* folder says 2025, it probably lost its metadata somewhere (a "metadata strip"), and a date in the future (say 2028) cannot be right. This sets the date from the folder name. Only turn it on if you trust your folder names. Dates that are only a few months off from a month-named folder are flagged in the report, not changed.
+- **Guess a location from the folder name** (⚠️, off by default). Only for photos with **no** location, in a folder that names a city or country (Backstory has a built-in offline list of about 300 well-known places). The location is the middle of that place, so it is approximate. Each guessed photo carries the keyword *Backstory: location guessed from folder name* so you can find or remove them, and the report says which folder it came from. A location a photo already has is **never** touched.
+
+The **Health** tab also reports *Dates in the future*, *Dates that do not fit the folder*, *No date inside, but the folder name has one* and *No location, but the folder names a place*, with examples, and **Open Guided** takes you to the fix.
+
+## Slow or faulty drives (copying and moving)
+
+External drives hiccup. Every copy and move in Backstory is now built to cope:
+- a file is written under a temporary name and only given its real name when it is complete and the right size;
+- if the drive reports an error, Backstory **waits, slows down and tries again** (up to six times with growing pauses), resuming a partly copied file instead of starting again;
+- if the drive disappears (cable pulled, drive asleep), Backstory waits up to ten minutes for it to come back;
+- when you **move** between drives, the original is only removed after the copy is complete and checked;
+- if the drive stops answering altogether, Backstory pauses instead of failing every file, and tells you. Reconnect the drive and press **Continue where I left off** (in the results, or on the run in **History**): everything that finished is remembered, so it carries on from where it stopped.
+
+A banner under the progress bar shows when Backstory is pausing for the drive. If it keeps happening, the drive or its cable may be failing: back up what you can.
+
 ## Storyboard: before and after
 
 Before you commit, Backstory shows what will happen to a few of **your real photos**. In **Check my files** and in the Guided and Fix summaries (preview and real runs) you see cards with a thumbnail, the folder it goes to, and for each of **Date**, **Place** and **Caption** what it is now and what it becomes. Changed values are highlighted; unchanged ones are marked. Notes explain special cases: a date read from the file name, a Live Photo re-paired, an identical copy kept once (and the album name saved as a keyword), or a copy left out. A four-step strip above it summarises the run: found, restored, merged, result. The thumbnails are saved inside the report, so the report still shows them later.

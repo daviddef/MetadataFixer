@@ -1403,6 +1403,7 @@ def apply_sanity(m, args, ext, d, ex_now, final_taken, row, exif_args, taken):
         row["date"] = "added" if prob == "missing" else "replaced"
         row["date_before"] = (str(before) or "")[:19] if prob != "missing" else ""
         row["date_fix"] = "filled" if prob == "missing" else "corrected"
+        row["date_google"] = time.strftime("%Y:%m:%d %H:%M:%S", time.gmtime(hint["epoch"])) + " (from the folder name)"
         row["date_flag"] = prob if prob != "missing" else ""
         row["date_note"] = "date set from the folder name '%s'%s" % (hint["folder"], "" if prob == "missing" else " (the photo said %s)" % (str(before)[:10] or "a wrong date"))
         used = True
@@ -4255,6 +4256,10 @@ def story_from_row(row, out_root=None, thumb=True):
         notes.append("Date read from the file name")
     if row.get("live") == "paired":
         notes.append("Live Photo re-paired with its video")
+    if row.get("date_fix"):
+        notes.append("Date " + ("filled in" if row["date_fix"] == "filled" else "corrected") + " from the folder name")
+    if row.get("gps_guess"):
+        notes.append("Location is a guess: " + row["gps_guess"])
     if row.get("status") == "duplicate":
         notes.append("Identical copy: the photo is kept once")
     if row.get("status") == "left-out":

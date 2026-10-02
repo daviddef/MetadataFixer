@@ -30,7 +30,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.03-b"
+VERSION = "2026.10.03-c"
 class Cancelled(Exception):
     pass
 
@@ -3629,6 +3629,63 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
 .cmpsides{display:grid;grid-template-columns:1fr 1fr;gap:12px}.cmpside{display:flex;gap:10px;align-items:flex-start;min-width:0}
 .cmpside img,.cmpside .stnoimg{width:110px;height:84px;object-fit:cover;border-radius:8px;flex:none}.cmppair{padding:12px}
 @media(max-width:620px){.cmpsides{grid-template-columns:1fr}}
+
+/* ---- v3 playful ---- */
+:root{--acc:#6d5cff;--acc2:#ff5fa2;--sun:#ffb340;--mint:#19c3a6;--soft:color-mix(in srgb,var(--acc) 9%,var(--card));--bg:#f7f5ff}
+@media (prefers-color-scheme:dark){:root{--acc:#9b8cff;--acc2:#ff7ab6;--bg:#15131f;--card:#201d2e;--line:#38334d;--soft:color-mix(in srgb,var(--acc) 14%,var(--card))}}
+body{background:radial-gradient(1000px 500px at 100% -10%,color-mix(in srgb,var(--acc2) 14%,transparent),transparent 60%),radial-gradient(900px 500px at -10% 0%,color-mix(in srgb,var(--acc) 16%,transparent),transparent 60%),var(--bg);background-attachment:fixed}
+.hero{position:relative;overflow:hidden;background:linear-gradient(120deg,color-mix(in srgb,var(--acc) 22%,var(--card)),color-mix(in srgb,var(--acc2) 18%,var(--card)),color-mix(in srgb,var(--sun) 20%,var(--card)));background-size:240% 240%;animation:heroShift 14s ease-in-out infinite}
+@keyframes heroShift{0%,100%{background-position:0% 50%}50%{background-position:100% 50%}}
+.hero>*{position:relative;z-index:1}
+.floaties{position:absolute!important;inset:0;z-index:0!important;pointer-events:none;overflow:hidden}
+.floaties span{position:absolute;font-size:26px;opacity:.55;animation:floaty 7s ease-in-out infinite}
+.floaties span:nth-child(1){right:6%;top:14%;animation-delay:0s}.floaties span:nth-child(2){right:18%;top:58%;animation-delay:-2s;font-size:20px}
+.floaties span:nth-child(3){right:30%;top:10%;animation-delay:-4s;font-size:18px}.floaties span:nth-child(4){right:3%;top:62%;animation-delay:-1s}
+.floaties span:nth-child(5){right:42%;top:66%;animation-delay:-3s;font-size:16px}
+@keyframes floaty{0%,100%{transform:translateY(0) rotate(-6deg)}50%{transform:translateY(-14px) rotate(8deg)}}
+.logo{animation:logoIn .9s cubic-bezier(.2,1.4,.4,1) both;transition:transform .3s}.logo:hover{transform:rotate(-8deg) scale(1.1)}
+@keyframes logoIn{0%{transform:scale(.3) rotate(-30deg);opacity:0}100%{transform:none;opacity:1}}
+.hero h1{background:linear-gradient(90deg,var(--acc),var(--acc2));-webkit-background-clip:text;background-clip:text;color:transparent}
+.tab.on{background:linear-gradient(135deg,var(--acc),var(--acc2));animation:tabPop .35s cubic-bezier(.2,1.6,.4,1)}
+@keyframes tabPop{0%{transform:scale(.9)}100%{transform:scale(1)}}
+.tab b{display:inline-block;transition:transform .25s}.tab:hover b{animation:wiggle .5s}.tab.on b{transform:scale(1.15)}
+@keyframes wiggle{0%,100%{transform:rotate(0)}25%{transform:rotate(-14deg) scale(1.2)}75%{transform:rotate(14deg) scale(1.2)}}
+.pane{animation:paneIn .35s ease both}
+@keyframes paneIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+.pane>.card,.pane>h2{animation:cardIn .45s cubic-bezier(.2,.9,.3,1.2) both}.pane>.card:nth-of-type(2){animation-delay:.06s}.pane>.card:nth-of-type(3){animation-delay:.12s}.pane>.card:nth-of-type(4){animation-delay:.18s}
+@keyframes cardIn{from{opacity:0;transform:translateY(14px) scale(.985)}to{opacity:1;transform:none}}
+.card{transition:transform .2s,box-shadow .2s}.card:hover{transform:translateY(-2px);box-shadow:0 2px 4px rgba(15,23,42,.05),0 16px 34px -14px color-mix(in srgb,var(--acc) 40%,transparent)}
+button.p{background:linear-gradient(120deg,var(--acc),var(--acc2),var(--acc));background-size:200% 100%;transition:background-position .5s,transform .15s,box-shadow .2s}
+button.p:hover:not(:disabled){background-position:100% 0;transform:translateY(-2px) scale(1.02);box-shadow:0 10px 22px -8px color-mix(in srgb,var(--acc2) 70%,transparent)}
+button.p:active:not(:disabled){transform:scale(.97)}
+#gst,#go{animation:glow 2.6s ease-in-out infinite}
+@keyframes glow{0%,100%{box-shadow:0 6px 16px -6px color-mix(in srgb,var(--acc) 70%,transparent)}50%{box-shadow:0 6px 26px -2px color-mix(in srgb,var(--acc2) 75%,transparent)}}
+button:disabled{animation:none!important}
+input[type=checkbox]:checked{animation:tick .3s cubic-bezier(.2,1.8,.4,1)}
+@keyframes tick{0%{transform:scale(.6)}100%{transform:scale(1)}}
+.opt{transition:background .15s,transform .15s}.opt:hover{transform:translateX(3px)}
+.tile{animation:tilePop .5s cubic-bezier(.2,1.5,.4,1) both;transition:transform .2s}.tile:hover{transform:translateY(-3px) rotate(-.6deg)}
+.tile:nth-child(2){animation-delay:.05s}.tile:nth-child(3){animation-delay:.1s}.tile:nth-child(4){animation-delay:.15s}.tile:nth-child(5){animation-delay:.2s}
+@keyframes tilePop{from{opacity:0;transform:scale(.7) translateY(10px)}to{opacity:1;transform:none}}
+.rec,.flowstep,.hrun,.simgrp{transition:transform .18s,box-shadow .18s,border-color .18s}.rec:hover,.flowstep:hover{transform:translateY(-2px);border-color:var(--acc);box-shadow:var(--shadow)}
+.flowstep .fn{display:inline-grid;place-items:center;border-radius:50%;background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;transition:transform .3s}.flowstep:hover .fn{transform:rotate(360deg)}
+.status .bar{overflow:visible;height:20px}
+.bar>i{position:relative;background-image:repeating-linear-gradient(-45deg,rgba(255,255,255,.18) 0 10px,transparent 10px 20px),linear-gradient(90deg,var(--acc),var(--acc2));background-size:28px 28px,100% 100%;animation:stripes 1s linear infinite}
+@keyframes stripes{to{background-position:28px 0,0 0}}
+.status .bar:not(.running):not(.finished)>i::after{display:none}
+.status .bar>i::after{content:"\1F4F8";position:absolute;right:-10px;top:-9px;font-size:22px;animation:bob .5s ease-in-out infinite alternate;filter:drop-shadow(0 2px 3px rgba(0,0,0,.25))}
+@keyframes bob{from{transform:translateY(0) rotate(-8deg)}to{transform:translateY(-4px) rotate(8deg)}}
+.bar.finished>i{animation:none;background-image:none;background:linear-gradient(90deg,var(--mint),#7be07b)}.status .bar.finished>i::after{content:"\1F389";animation:bob .35s ease-in-out infinite alternate}
+.retrybar{margin:8px 0 0;padding:8px 12px;border-radius:10px;background:color-mix(in srgb,var(--sun) 22%,var(--card));border:1px solid color-mix(in srgb,var(--sun) 55%,var(--line));font-size:13.5px;animation:cardIn .3s both}
+.tip{animation:cardIn .4s both}
+.confetti{position:fixed;inset:0;pointer-events:none;z-index:300;overflow:hidden}
+.confetti i{position:absolute;top:-20px;font-style:normal;font-size:22px;animation:fall 2.6s cubic-bezier(.3,.6,.4,1) forwards}
+@keyframes fall{to{transform:translate(var(--dx),105vh) rotate(var(--rot));opacity:.9}}
+.sparkle{position:fixed;z-index:300;pointer-events:none;font-size:22px;animation:spark .9s ease-out forwards}
+@keyframes spark{from{transform:translate(-50%,-50%) scale(.4);opacity:1}to{transform:translate(-50%,-150%) scale(1.5);opacity:0}}
+.foot a{text-decoration:none;border-bottom:1px dotted var(--mute)}
+::selection{background:color-mix(in srgb,var(--acc2) 40%,transparent)}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
 </style></head><body><div id="ack" style="display:none"><div class="ackbox" role="dialog" aria-modal="true" aria-labelledby="acktitle">
 <h2 id="acktitle">Before you start</h2>
 <p>Backstory changes, copies, moves and (if you choose) deletes files. Please read this once:</p>
@@ -3646,6 +3703,7 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
 <div id="upd" style="display:none" class="card"><b>A newer version is available.</b> <span id="updmsg"></span>
 <div style="margin-top:8px"><button class="p" id="updgo">Update now</button> <button id="updno">Not now</button></div></div>
 <header class="hero">
+  <div class="floaties" aria-hidden="true"><span>&#128247;</span><span>&#127757;</span><span>&#128197;</span><span>&#10024;</span><span>&#128444;&#65039;</span></div>
   <div class="brand">
     <svg class="logo" viewBox="0 0 1024 1024" role="img" aria-label="Backstory logo"><defs>
 <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5b5bf0"/><stop offset=".55" stop-color="#7a4df0"/><stop offset="1" stop-color="#14b8c4"/></linearGradient>
@@ -3696,7 +3754,7 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
     <button class="tab" data-tab="history" role="tab"><b>&#128196;</b> History</button>
     <button class="tab" data-tab="help" role="tab"><b>&#10067;</b> Help</button>
   </nav>
-  <div class="status"><div class="srow"><span id="msg">Ready. Choose a tab, set it up and press Start.</span><a href="#" id="goto" style="display:none">View results &rarr;</a><button id="contbtn" class="sm p" style="display:none;margin-left:10px">Continue</button><button id="stopall" class="sm" style="display:none;margin-left:10px">Stop</button></div>
+  <div class="status"><div class="srow"><span id="msg">Ready when you are! Pick a tab, set it up and press Start.</span><a href="#" id="goto" style="display:none">View results &rarr;</a><button id="contbtn" class="sm p" style="display:none;margin-left:10px">Continue</button><button id="stopall" class="sm" style="display:none;margin-left:10px">Stop</button></div>
   <div id="retrybar" class="retrybar" style="display:none"></div>
   <div class="bar" id="bar"><i id="fill"></i><span id="pct">0%</span></div></div>
 </div>
@@ -4656,7 +4714,7 @@ let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   else if(s.done>0&&s.total){pct=100*s.done/s.total}
   else if(s.phase&&s.phase.total){pct=100*s.phase.done/s.phase.total}
   else if(s.state==='scanning'||s.state==='running'){indet=true}
-  setBar('bar','fill','pct',pct,indet);
+  setBar('bar','fill','pct',pct,indet);$('bar').classList.toggle('finished',s.state==='done');$('bar').classList.toggle('running',run);
   const LBL=(gd&&!gd.final&&gd.steps.length)?('Guided &middot; step '+gd.i+' of '+gd.steps.length+': '+esc(gd.steps[gd.i-1]||'')):gd&&jobKind==='guided'?'Guided':{diagnostics:'Full diagnostics',compare:'Compare libraries',monitor:'Log check',health:'Library health',formats_apply:'Set aside',photos:'Apple Photos',similar:'Find similar photos',similar_apply:'Set aside',undo:'Undo',consolidate:'Merge similar folders',assess:'Check my files',fix:'Part 1 Fix',convert:'Part 4 Convert',cleanup:'Part 3 Clean up',merge:'Part 2 Merge'}[jobKind]||'';
   $('msg').innerHTML=(LBL?'<b>'+LBL+'</b> &middot; ':'')+(s.state==='error'?'<span class="err">'+esc(s.message)+'</span>':s.state==='done'?'<span class="ok">Finished.</span>':esc(s.message)+(s.done?` (${s.done.toLocaleString()} / ${s.total.toLocaleString()})`:''));
   const c=s.counts||{},done=s.done||0,nj=c['no-json']||0;
@@ -4671,6 +4729,21 @@ let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   if(['done','error','idle'].includes(s.state)&&!gmid)clearInterval(timer);
 },500)}
 (async function(){try{const s=await (await fetch('/api/status')).json();if(s.state&&s.state!=='idle'){jobKind=s.kind||'fix';placeResults(jobKind);$('prog').style.display='block';poll()}}catch(e){}})();
+
+// ---- playful touches: count-up numbers, confetti, sparkles ----
+(function(){
+  const reduce=window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches;
+  window.countUp=function(root){if(reduce||!root)return;root.querySelectorAll('.tile b').forEach(b=>{const t=b.textContent.trim();if(!/^[\d,]+$/.test(t))return;const n=parseInt(t.replace(/,/g,''),10);if(!n||n<3||b.dataset.cu)return;b.dataset.cu=1;const t0=performance.now(),d=Math.min(1100,400+n*0.4);
+    (function f(now){const k=Math.min(1,(now-t0)/d),e=1-Math.pow(1-k,3);b.textContent=Math.round(n*e).toLocaleString();if(k<1)requestAnimationFrame(f)})(t0)})};
+  let lastBang=0;
+  window.confetti=function(){if(reduce||Date.now()-lastBang<4000)return;lastBang=Date.now();const w=document.createElement('div');w.className='confetti';const E=['\u{1F389}','✨','\u{1F4F8}','\u{1F31F}','\u{1F388}','\u{1F496}','\u{1F308}'];
+    for(let i=0;i<46;i++){const p=document.createElement('i');p.textContent=E[i%E.length];p.style.left=Math.random()*100+'vw';p.style.setProperty('--dx',(Math.random()*160-80)+'px');p.style.setProperty('--rot',(Math.random()*720-360)+'deg');p.style.animationDelay=(Math.random()*0.5)+'s';p.style.animationDuration=(2+Math.random()*1.4)+'s';p.style.fontSize=(16+Math.random()*16)+'px';w.appendChild(p)}
+    document.body.appendChild(w);setTimeout(()=>w.remove(),4200)};
+  window.sparkle=function(el){if(reduce||!el)return;const r=el.getBoundingClientRect();for(let i=0;i<5;i++){const s=document.createElement('span');s.className='sparkle';s.textContent=['✨','\u{1F4AB}','⭐'][i%3];s.style.left=(r.left+r.width*Math.random())+'px';s.style.top=(r.top+r.height/2)+'px';s.style.animationDelay=(i*60)+'ms';document.body.appendChild(s);setTimeout(()=>s.remove(),1200)}};
+  const _ss=window.showSummary;
+  window.showSummary=function(s){_ss(s);try{countUp($('sumbody'));if(s&&!s.dry_run&&['assess','health','monitor','diagnostics','compare'].indexOf(s.kind)<0)confetti();else sparkle($('sumbody'))}catch(e){}};
+  document.addEventListener('click',e=>{const b=e.target.closest&&e.target.closest('button.p');if(b&&!b.disabled)sparkle(b)},true);
+})();
 </script></main></body></html>"""
 
 
