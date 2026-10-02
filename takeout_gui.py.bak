@@ -29,7 +29,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.02-q"
+VERSION = "2026.10.02-p"
 class Cancelled(Exception):
     pass
 
@@ -2469,106 +2469,6 @@ def run_monitor(hours, pasted):
               "lines": len(lines), "tips": []}
         if not issues and not other:
             sm["tips"].append("No problems found in the logs that were read." + (" (%s)" % note if note else ""))
-        with LOCK:
-            STATE.update(state="done", message="Finished", summary=sm, phase=None)
-    except Cancelled:
-        stopped_state("Nothing was changed.")
-    except Exception as e:
-        with LOCK:
-            STATE.update(state="error", message=str(e))
-
-
-def run_similar_apply(items):
-    _setaside(items, SIMILAR, "_similar_set_aside", "similar_apply", "photos")
-
-
-FORMATS = {"roots": [], "allowed": set()}
-
-
-def run_formats_apply(items):
-    _setaside(items, FORMATS, "_older_formats", "formats_apply", "files")
-
-
-def _health_key(roots):
-    return "|".join(sorted(str(Path(r).expanduser()) for r in roots))
-
-
-def health_history(roots, limit=60):
-    out = []
-    d = APP_HOME / "health"
-    try:
-        for p in sorted(d.glob("*.json"))[-400:]:
-            try:
-                e = json.loads(p.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            if e.get("key") == _health_key(roots):
-                out.append({"when": e["when"], "score": e["score"], "waste": e.get("waste", 0), "files": e.get("files", 0)})
-    except OSError:
-        pass
-    return out[-limit:]
-
-
-def run_health(roots, deep):
-    with LOCK:
-        STATE.update(state="scanning", cancel=False, total=0, done=0, counts={}, message="Checking your library's health...", report="",
-                     summary=None, scan=None, extra={}, recent=[], phase=None, kind="health", cv=None, guided=None)
-    try:
-        zips, folders = fx.split_sources(roots) if roots else ([], [])
-        if not folders and not zips:
-            raise ValueError("Add your library folders in the bar at the top first")
-        if not folders:
-            raise ValueError("Health checks look inside folders. Zip files are skipped: build your library first, then check it.")
-
-        def prog(msg, done, total):
-            check_cancel()
-            with LOCK:
-                STATE.update(state="running", total=total, done=done, message=msg + (" (%s of %s)" % (f"{done:,}", f"{total:,}") if total else ""))
-                STATE["phase"] = {"stage": "pct", "done": done, "total": total} if total else None
-        R = fx.health_scan([str(f) for f in folders], deep, prog, check_cancel)
-        # experimental hints from any Photos library among the sources
-        db = []
-        for r in roots:
-            p = Path(r).expanduser()
-            if p.suffix.lower() == ".photoslibrary" and p.is_dir():
-                h = fx.photos_db_health(p)
-                h["name"] = p.name
-                db.append(h)
-                if h.get("ok") and h.get("not_in_cloud"):
-                    R["findings"].insert(0, {"id": "pdb_cloud", "cat": "cloud", "sev": "warn", "title": "Photos items not yet in iCloud (experimental)", "count": h["not_in_cloud"], "bytes": 0, "tab": "", "label": "",
-                                             "detail": "Photos' own database lists %s of %s items in %s as not uploaded to iCloud. Apple does not document this, so treat it as a hint: open Photos and look at the iCloud upload status." % (f"{h['not_in_cloud']:,}", f"{h['total']:,}", p.name)})
-        formats = []
-        allowed = set()
-        inside = any(fx.inside_photos_library(f) for f in folders)
-        if not inside:
-            for g in R["formats"][:150]:
-                mem = []
-                for k, m in enumerate(g["members"]):
-                    allowed.add(m["path"])
-                    mem.append({"path": m["path"], "name": m["name"], "ext": m["ext"], "size": m["size"], "duration": round(m["duration"], 1), "w": m["w"], "h": m["h"], "best": k == 0})
-                formats.append({"kind": g["kind"], "where": os.path.basename(g["dir"]), "stem": g["stem"], "members": mem})
-        with LOCK:
-            FORMATS.update(roots=[str(f) for f in folders], allowed=allowed)
-        st = R["stats"]
-        hist = health_history(roots)
-        entry = {"when": time.time(), "key": _health_key(roots), "score": R["score"], "waste": st["waste_bytes"], "files": st["files"], "parts": R["parts"]}
-        try:
-            (APP_HOME / "health").mkdir(parents=True, exist_ok=True)
-            (APP_HOME / "health" / (time.strftime("%Y%m%d-%H%M%S") + ".json")).write_text(json.dumps(entry), encoding="utf-8")
-        except OSError:
-            pass
-        tips = []
-        if hist and hist[-1]["score"] - R["score"] >= 5:
-            tips.append("Your health score dropped from %d to %d since the last check." % (hist[-1]["score"], R["score"]))
-        elif hist and R["score"] - hist[-1]["score"] >= 5:
-            tips.append("Your health score improved from %d to %d since the last check." % (hist[-1]["score"], R["score"]))
-        if zips:
-            tips.append("%d zip file%s skipped: health checks look inside folders." % (len(zips), "" if len(zips) == 1 else "s"))
-        if not R["deep"]:
-            tips.append("This was a quick check: metadata was read from a sample of about 400 files. Tick the deep check to read up to 40,000.")
-        sm = {"kind": "health", "dry_run": True, "score": R["score"], "parts": R["parts"], "findings": R["findings"], "stats": {k: v for k, v in st.items()},
-              "formats": formats, "formats_total": len(R["formats"]), "db": db, "trend": hist + [{"when": entry["when"], "score": R["score"], "waste": entry["waste"], "files": st["files"]}],
-              "deep": R["deep"], "tips": tips}
         with LOCK:
             STATE.update(state="done", message="Finished", summary=sm, phase=None)
     except Cancelled:
