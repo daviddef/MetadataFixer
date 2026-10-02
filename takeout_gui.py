@@ -30,7 +30,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.03-f"
+VERSION = "2026.10.03-g"
 class Cancelled(Exception):
     pass
 
@@ -3720,6 +3720,14 @@ input[type=checkbox]:checked{animation:tick .3s cubic-bezier(.2,1.8,.4,1)}
 .dprow.off{opacity:.55}.dprow .n{width:20px;color:var(--mute);font-variant-numeric:tabular-nums}.dprow label{flex:1}.dprow button{padding:1px 8px;font-size:12px}
 .dpmust{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:2px 14px;margin:6px 0}
 .tagpill{display:inline-block;padding:0 7px;border-radius:999px;font-size:11px;background:color-mix(in srgb,var(--acc) 18%,var(--card));margin:1px 3px 0 0}
+
+.profpills{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 8px}
+.profpill{display:flex;flex-direction:column;align-items:flex-start;gap:1px;padding:9px 14px;border-radius:14px;border:1.5px solid var(--line);background:var(--card);text-align:left;min-width:128px;transition:transform .15s,border-color .15s,box-shadow .15s}
+.profpill b{font-size:15px}.profpill span{font-size:12px;color:var(--mute);white-space:normal}
+.profpill.on{border-color:var(--acc);background:linear-gradient(135deg,color-mix(in srgb,var(--acc) 14%,var(--card)),color-mix(in srgb,var(--acc2) 12%,var(--card)));box-shadow:0 6px 18px -8px color-mix(in srgb,var(--acc) 60%,transparent);transform:translateY(-2px)}
+.profinfo{display:flex;flex-wrap:wrap;gap:6px 18px;align-items:center;font-size:13.5px;padding:8px 12px;border-radius:10px;background:var(--soft)}
+.dots{letter-spacing:2px;color:var(--acc)}.dots.risk{color:var(--warn)}.dots.rew{color:var(--ok)}
+.profline{font-size:13px;color:var(--mute);margin:-4px 0 10px}.profline b{color:var(--ink)}
 </style></head><body><div id="ack" style="display:none"><div class="ackbox" role="dialog" aria-modal="true" aria-labelledby="acktitle">
 <h2 id="acktitle">Before you start</h2>
 <p>Backstory changes, copies, moves and (if you choose) deletes files. Please read this once:</p>
@@ -3794,6 +3802,8 @@ input[type=checkbox]:checked{animation:tick .3s cubic-bezier(.2,1.8,.4,1)}
 </div>
 <section class="pane" id="pane-guided">
 <h2 class="ph">Fix my Takeout</h2>
+<div class="card profcard"><b>How do you like to play it?</b><div class="mutes" style="margin-top:2px">One tap sets every option in the app (Guided, Fix, Similar, Photos) to match how much time, risk and reward you want. You can still change any single option. <b>Preview stays on</b> in every style, so you always see what would happen first.</div>
+<div class="profpills" id="profpills"></div><div class="profinfo" id="profinfo"></div></div>
 <div class="card"><small style="margin-top:0">The easy way. Add your Google Takeout <b>zip files</b> (or the folders you unzipped) in the bar at the top, choose where the finished library should go, and press the button. Your originals are <b>never changed</b>: a clean, merged copy is made in the Destination, with the real dates, locations and captions put back, duplicates removed and your folder structure kept.</small>
 <div class="gcheck" id="gcheck"></div>
 <div class="chkbox"><div><b>Not sure what to tick?</b><br><span class="mutes">Let the app look at your real files and recommend a plan, with the reasons. It changes nothing.</span></div><button id="gchk" class="p">Check my files</button></div>
@@ -3815,6 +3825,7 @@ input[type=checkbox]:checked{animation:tick .3s cubic-bezier(.2,1.8,.4,1)}
 </section>
 <section class="pane" id="pane-fix">
 <h2 class="ph" data-tip="Reads the .json file Google added to each photo and writes the real date taken, location, caption and tagged people back into the photo. The picture itself is never changed.">Fix dates, locations and captions</h2>
+<div class="profline"></div>
 <div class="card usefcard"><b>1. Takeout folders</b><div class="usef" style="margin:8px 0 0"><span class="fnote"></span>. Add every Takeout batch: a photo in one batch finds its JSON in another.</div></div>
 
 <div class="card usefcard"><b>2. Where the fixed copies go</b><div class="usef" style="margin:8px 0 0"><b>Destination:</b> <span class="dnote" data-empty="none chosen, so files are fixed in place (the originals are changed)"></span><br><small style="display:inline">Recommended: a new folder, so originals stay untouched. Reports are saved there too (or on your Desktop if none).</small></div></div>
@@ -4326,7 +4337,7 @@ document.querySelectorAll('a[data-help]').forEach(a=>a.onclick=e=>{e.preventDefa
 const RECMAP={albums:'galb',dedupe:'gdedupe',live:'glive',name_dates:'gnd',fix_ext:'gext',replace:'gow',folder_dates:'gfd',fix_dates:'gfx',guess_gps:'ggps'};
 function applyRecs(s){
   Object.entries(RECMAP).forEach(([k,id])=>{const present=(s.recs||[]).find(r=>r.id===k);const cb=document.getElementById('rc_'+k);$(id).checked=!!present&&(!cb||cb.checked)});if(!(s.recs||[]).find(r=>r.id==='folder_dates'))$('gfd').checked=false;
-  $('gcv').checked=false}
+  $('gcv').checked=false;PROF_CUSTOM=true;renderProfile()}
 function showAssess(s){
   const f=s.facts||{};
   let h='<div class="tiles">'+s.tiles.map(t=>tile(t[0],t[1],t[2])).join('')+'</div><small>Total size of photos and videos: <b>'+esc(s.size)+'</b>'+(f.zips?' &middot; '+f.zips+' zip file'+(f.zips===1?'':'s'):'')+(f.folders?' &middot; '+f.folders+' folder'+(f.folders===1?'':'s'):'')+'</small>';
@@ -4806,6 +4817,44 @@ function renderDP(){document.querySelectorAll('.dpbox').forEach(box=>{const rn='
   box.querySelectorAll('[data-dpreset]').forEach(b=>b.onclick=()=>{DP={order:DP_DEFAULT.concat(Object.keys(DP_RULES).filter(k=>DP_DEFAULT.indexOf(k)<0)),on:DP_DEFAULT.slice(),must:[],bursts:'keep'};saveDP()})
   box.querySelectorAll('[data-burst]').forEach(r=>r.onchange=()=>{DP.bursts=r.dataset.burst;saveDP()})})}
 renderDP();
+
+// ---- styles: one tap sets the options everywhere ----
+const PROFILES={
+ safest:{icon:'\u{1F6DF}',name:'Safest',blurb:'Only fills gaps. Changes nothing it does not have to.',time:3,risk:1,reward:2,
+  g:{gdedupe:1,glive:1,gnd:1,gfd:1,gfx:0,ggps:0,gnear:0,galb:1,gow:0,gext:0,gcv:0,gedit:'both'},
+  f:{dedupe:1,live:1,ndates:1,fdates:1,fdfix:0,fgps:0,near:0,albums:1,ow:0,move:0,datepol:'earlier',edited:'both'},
+  o:{simsens:'3',pbatch:'5',ppace:'verify',padapt:0,palb:1},dp:{bursts:'keep',must:['name','dimensions']}},
+ balanced:{icon:'⚖️',name:'Balanced',blurb:'The recommended mix. Good results, sensible care.',time:3,risk:2,reward:3,
+  g:{gdedupe:1,glive:1,gnd:1,gfd:1,gfx:0,ggps:0,gnear:0,galb:1,gow:1,gext:1,gcv:0,gedit:'both'},
+  f:{dedupe:1,live:1,ndates:1,fdates:1,fdfix:0,fgps:0,near:0,albums:1,ow:1,move:0,datepol:'earlier',edited:'both'},
+  o:{simsens:'6',pbatch:'10',ppace:'verify',padapt:1,palb:1},dp:{bursts:'keep',must:[]}},
+ fastest:{icon:'⚡',name:'Fastest',blurb:'Fewest passes over your files. Skips the slow extras.',time:1,risk:2,reward:1,
+  g:{gdedupe:0,glive:0,gnd:1,gfd:0,gfx:0,ggps:0,gnear:0,galb:0,gow:1,gext:0,gcv:0,gedit:'both'},
+  f:{dedupe:0,live:0,ndates:1,fdates:0,fdfix:0,fgps:0,near:0,albums:0,ow:1,move:0,datepol:'earlier',edited:'both'},
+  o:{simsens:'3',pbatch:'25',ppace:'space',padapt:0,palb:0},dp:{bursts:'keep',must:[]}},
+ thorough:{icon:'\u{1F3AF}',name:'Thorough',blurb:'Does everything safe, as well as it can. Takes longer.',time:5,risk:2,reward:4,
+  g:{gdedupe:1,glive:1,gnd:1,gfd:1,gfx:0,ggps:0,gnear:0,galb:1,gow:1,gext:1,gcv:0,gedit:'both'},
+  f:{dedupe:1,live:1,ndates:1,fdates:1,fdfix:0,fgps:0,near:0,albums:1,ow:1,move:0,datepol:'earlier',edited:'both'},
+  o:{simsens:'6',pbatch:'5',ppace:'verify',padapt:1,palb:1},dp:{bursts:'keep',must:[]}},
+ risky:{icon:'\u{1F3B2}',name:'I like risk',blurb:'Maximum clean-up and guessing. Review the preview carefully.',time:3,risk:5,reward:5,
+  g:{gdedupe:1,glive:1,gnd:1,gfd:1,gfx:1,ggps:1,gnear:1,galb:1,gow:1,gext:1,gcv:1,gedit:'edited'},
+  f:{dedupe:1,live:1,ndates:1,fdates:1,fdfix:1,fgps:1,near:1,albums:1,ow:1,move:0,datepol:'earlier',edited:'edited'},
+  o:{simsens:'10',pbatch:'25',ppace:'space',padapt:1,palb:1},dp:{bursts:'best',must:[]}}
+};
+let PROF=(function(){try{const p=localStorage.getItem('profile');if(p&&PROFILES[p])return p}catch(e){}return 'balanced'})(),PROF_CUSTOM=false;
+const dots=(n,c)=>'<span class="dots '+c+'">'+'●'.repeat(n)+'<span style="opacity:.25">'+'●'.repeat(5-n)+'</span></span>';
+function setOpt(id,v){const el=document.getElementById(id);if(!el)return;if(el.type==='checkbox')el.checked=!!v;else el.value=String(v)}
+function applyProfile(k,fromUser){const P=PROFILES[k];if(!P)return;PROF=k;PROF_CUSTOM=false;try{localStorage.setItem('profile',k)}catch(e){}
+  Object.entries(P.g).forEach(([i,v])=>setOpt(i,v));Object.entries(P.f).forEach(([i,v])=>setOpt(i,v));Object.entries(P.o).forEach(([i,v])=>setOpt(i,v));
+  $('gdry').checked=true;$('dry').checked=true;
+  DP.bursts=P.dp.bursts;DP.must=P.dp.must.slice();saveDP();renderProfile()}
+function renderProfile(){const P=PROFILES[PROF];
+  $('profpills').innerHTML=Object.entries(PROFILES).map(([k,v])=>`<button class="profpill ${k===PROF&&!PROF_CUSTOM?'on':''}" data-prof="${k}"><b>${v.icon} ${v.name}</b><span>${v.blurb}</span></button>`).join('');
+  $('profinfo').innerHTML=`<span>Time ${dots(P.time,'')}</span><span>Risk ${dots(P.risk,'risk')}</span><span>Reward ${dots(P.reward,'rew')}</span>${PROF_CUSTOM?'<span class="badge warnb">Customised: you changed some options</span>':''}`;
+  document.querySelectorAll('#profpills button').forEach(b=>b.onclick=()=>applyProfile(b.dataset.prof,true));
+  document.querySelectorAll('.profline').forEach(e=>e.innerHTML='Style: <b>'+P.icon+' '+P.name+(PROF_CUSTOM?' (customised)':'')+'</b> &middot; change it at the top of the Guided tab.')}
+document.addEventListener('change',e=>{if(e.isTrusted&&e.target&&e.target.closest&&e.target.closest('.pane')&&!e.target.closest('#profpills')&&!PROF_CUSTOM){PROF_CUSTOM=true;renderProfile()}});
+renderProfile();if(PROF!=='balanced')applyProfile(PROF);
 </script></main></body></html>"""
 
 

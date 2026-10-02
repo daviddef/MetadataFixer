@@ -120,6 +120,20 @@ When you then merge, tick **Also skip near-identical pictures** to keep only the
 
 To merge two **folders** without any metadata work, the **Merge** tab does that, with control over name clashes.
 
+## Choosing your style (Guided tab)
+
+At the top of **Guided** you pick how you like to play it. One tap sets the options across the whole app (Guided, Fix, Similar and Photos). Each style shows three dot meters: **Time**, **Risk** and **Reward**.
+
+| Style | What it does | Time | Risk | Reward |
+|---|---|---|---|---|
+| 🛟 **Safest** | Only fills gaps. Never replaces a location or caption, no guessing, no near-duplicate skipping, strict duplicate matching. | ●●● | ● | ●● |
+| ⚖️ **Balanced** | The recommended mix. | ●●● | ●● | ●●● |
+| ⚡ **Fastest** | Fewest passes: skips the duplicate pass, Live Photo pairing, folder dates and albums; bigger Photos batches. | ● | ●● | ● |
+| 🎯 **Thorough** | Everything safe, done as well as possible, with small Photos batches that wait for iCloud. | ●●●●● | ●● | ●●●● |
+| 🎲 **I like risk** | Corrects dates from folder names, guesses locations, skips near-identical pictures, keeps only the best burst frame, converts old videos, prefers edited versions. | ●●● | ●●●●● | ●●●●● |
+
+**Preview stays on in every style**, so you always see what would happen before it does. After a style is chosen you can still change any single option; the card then says *Customised*. **Check my files** tunes the options to your own data on top of the style you chose.
+
 ## Guided: Fix my Takeout (the easy way)
 
 The **Guided** tab does the whole job in one go, in the safe order, for people who just want a clean library.
