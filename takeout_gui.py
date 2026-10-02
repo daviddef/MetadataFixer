@@ -132,7 +132,12 @@ def summarise(rows, sidecars, roots, dry_run):
                "dates_replaced": fields["date"].get("replaced", 0),
                "gps": changed("gps"), "gps_added": fields["gps"].get("added", 0),
                "gps_replaced": fields["gps"].get("replaced", 0),
-               "desc": changed("desc"), "people": people_tagged, "favourites": favourites}
+               "desc": changed("desc"), "people": people_tagged, "favourites": favourites,
+               "dates_filled": sum(1 for r in rows if r.get("date_fix") == "filled"), "dates_corrected": sum(1 for r in rows if r.get("date_fix") == "corrected"),
+               "gps_guessed": sum(1 for r in rows if r.get("gps_guess")),
+               "flag_future": sum(1 for r in rows if r.get("date_flag") == "future" and r.get("date_fix") != "corrected"),
+               "flag_year": sum(1 for r in rows if r.get("date_flag") == "year" and r.get("date_fix") != "corrected"),
+               "flag_month": sum(1 for r in rows if r.get("date_flag") == "month")}
     replaced_files = sum(1 for r in rows if r["status"] in ("updated", "would-update")
                          and "replaced" in (r.get("date"), r.get("gps"), r.get("desc")))
     live = defaultdict(int)
@@ -165,6 +170,17 @@ def summarise(rows, sidecars, roots, dry_run):
     if upload_like:
         tips.append("%d dates written from Google look like its upload time rather than when the photo was taken "
                     "(see the 'date_note' column in the report). Check a few of them." % upload_like)
+    cc = changes
+    if cc["dates_filled"]:
+        tips.append("%d photos had no date inside; the year in their folder name was used (shown as 'date set from the folder name' in the report)." % cc["dates_filled"])
+    if cc["dates_corrected"]:
+        tips.append("%d photos had a date that did not fit their folder (or was in the future); it was corrected from the folder name." % cc["dates_corrected"])
+    if cc["gps_guessed"]:
+        tips.append("%d photos with no location got an approximate one guessed from their folder name. They carry the keyword '%s' so you can find or remove them. Locations that already existed were not touched." % (cc["gps_guessed"], fx.GUESS_TAG))
+    if cc["flag_future"]:
+        tips.append("%d photos have a date in the future, which cannot be right. Turn on 'Correct dates that disagree with the folder name' to fix those that sit in a dated folder." % cc["flag_future"])
+    if cc["flag_year"]:
+        tips.append("%d photos have a date that does not fit the year in their folder name (the picture may have lost its metadata). Turn on 'Correct dates that disagree with the folder name' to set them from the folder." % cc["flag_year"])
     kept = sum(fields[k].get("kept", 0) for k in fields)
     if kept:
         tips.append("%d existing date/location/description values differ from Google's but were left alone. "
@@ -214,6 +230,8 @@ def write_text_summary(path, sm):
         L += ["", f"Dates {verb}: {c['dates']} ({c['dates_added']} added, {c['dates_replaced']} replaced)",
               f"Locations {verb}: {c['gps']} ({c['gps_added']} added, {c['gps_replaced']} replaced)",
               f"Descriptions {verb}: {c['desc']}", f"People tagged on: {c['people']} files",
+              f"Dates filled from folder names: {c.get('dates_filled', 0)}; corrected: {c.get('dates_corrected', 0)}; locations guessed: {c.get('gps_guessed', 0)}",
+              f"Dates in the future: {c.get('flag_future', 0)}; not matching their folder: {c.get('flag_year', 0)}",
               f"Favourites marked: {c['favourites']}"]
     L += ["", f"Files with at least one value replaced: {sm['replaced_files']}", "EXIF fields (added / replaced / kept / same / none):"]
     for k, label in (("date", "Date taken"), ("gps", "Location"), ("desc", "Description")):
@@ -227,7 +245,7 @@ def write_text_summary(path, sm):
     Path(path).write_text("\n".join(L) + "\n", encoding="utf-8")
 
 
-def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=False, date_policy="earlier", name_dates=False, albums=False, edited="both", near=False):
+def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=False, date_policy="earlier", name_dates=False, albums=False, edited="both", near=False, folder_dates="", guess_gps=False):
     with LOCK:
         STATE.update(state="scanning", cancel=False, total=0, done=0, counts={}, message="Scanning folders...",
                      report="", summary=None, scan=None, extra={}, recent=[], phase=None, kind="fix", **({} if IN_GUIDED[0] else {"guided": None}))
@@ -266,7 +284,8 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
             idx = fx.build_index(sidecars)
             args = argparse.Namespace(dry_run=dry_run, overwrite=overwrite, pair_live=pair_live,
                                       dedupe=dedupe, move=move, out_root=out or None, roots=pass_roots,
-                                      date_policy=date_policy, manifest_ns=ns, name_dates=name_dates)
+                                      date_policy=date_policy, manifest_ns=ns, name_dates=name_dates,
+                                      folder_dates=folder_dates if folder_dates in ("missing", "fix") else "", guess_gps=bool(guess_gps))
             args.skip = {}
             pass_start = len(rows)
 
@@ -605,7 +624,8 @@ def _run_guided(roots, out, dry_run, opts):
                 [str(p) for p in folders], dry_run, {"ext": {"json": True, "aside": False}, "json": False, "json_other": False,
                                                      "junk": None, "names": None, "empty": None})))
         steps.append(("Put dates, locations and captions back, and merge into one library", lambda: run_job(
-            roots, out, dry_run, bool(opts.get("replace", True)), bool(opts.get("live", True)), bool(opts.get("dedupe", True)), False, "earlier", bool(opts.get("name_dates", True)), bool(opts.get("albums", True)), opts.get("edited", "both"), bool(opts.get("near", False)))))
+            roots, out, dry_run, bool(opts.get("replace", True)), bool(opts.get("live", True)), bool(opts.get("dedupe", True)), False, "earlier", bool(opts.get("name_dates", True)), bool(opts.get("albums", True)), opts.get("edited", "both"), bool(opts.get("near", False)),
+            "fix" if opts.get("fix_dates") else ("missing" if opts.get("folder_dates", False) else ""), bool(opts.get("guess_gps", False)))))
         if opts.get("convert") and not dry_run:
             steps.append(("Convert old videos to MP4", lambda: run_convert([out], False, list(fx.DEFAULT_EXT), False, "high", "move", False)))
         titles = [t for t, _ in steps]
@@ -1718,6 +1738,29 @@ def build_recommendations(F, dest):
         if S.get("n") and S.get("diff_date"):
             recs.append({"id": "datepol", "title": "Dates: the earlier date wins", "risk": "safe", "on": True, "fixed": True,
                          "why": "In your sample, %d of %d files with an info file already have a date that differs from Google's. Backstory keeps the earlier of the two, because Google often records the upload day. You can change this rule on the Fix tab." % (S["diff_date"], max(1, S["with_json"]))})
+    n_s = S.get("n") or 0
+    if media and (S.get("future") or S.get("date_odd") or S.get("no_date_hint") or F.get("hint_files")):
+        parts = []
+        if S.get("no_date_hint"):
+            parts.append("%d of %d sampled files have no date inside but sit in a folder that names a year" % (S["no_date_hint"], n_s))
+        if S.get("date_odd"):
+            parts.append("%d of %d sampled files have a date that does not fit their folder's year (likely stripped metadata)" % (S["date_odd"], n_s))
+        if S.get("future"):
+            parts.append("%d of %d sampled files are dated in the future" % (S["future"], n_s))
+        if parts:
+            plan["folder_dates"] = True
+            recs.append({"id": "folder_dates", "title": "Fill missing dates from the folder name", "risk": "safe", "on": True,
+                         "why": "; ".join(parts).capitalize() + ". Backstory uses the year (or month) in the folder name only where the photo has no date. A date that already exists is never changed by this option."})
+        if S.get("date_odd") or S.get("future"):
+            plan["fix_dates"] = False
+            recs.append({"id": "fix_dates", "title": "Correct dates that disagree with the folder name", "risk": "caution", "on": False,
+                         "why": "Photos in a folder like '2017' whose date says 2025, and dates in the future, are almost always wrong. This sets them from the folder name. Turn it on only if you trust your folder names: it changes a date that exists."})
+    if media and (S.get("gps_guess") or F.get("place_files")):
+        g_ = S.get("gps_guess")
+        recs.append({"id": "guess_gps", "title": "Guess locations from folder names", "risk": "caution", "on": False,
+                     "why": ("%d of %d sampled files have no location but sit in a folder that names a place (like Johannesburg or Japan). " % (g_, n_s) if g_ else
+                             "%s photos sit in folders that name a place. " % n(F["place_files"])) +
+                            "Backstory can add an approximate location (the middle of that city or country) and label each as a guess with a keyword. A location a photo already has is never touched. Preview first."})
     if F["name_date_candidates"]:
         plan["name_dates"] = True
         recs.append({"id": "name_dates", "title": "Use the date in the file name where there is no info file", "risk": "safe", "on": True,
@@ -1975,7 +2018,7 @@ def run_undo(rid):
                         fails.append("%s: the original place is occupied" % sp.name)
                     else:
                         sp.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.move(str(dp), str(sp))
+                        fx.safe_move(str(dp), str(sp))
                         res["restored"] += 1
                 else:
                     dp.unlink()
@@ -2136,11 +2179,11 @@ def _setaside(items, store, folder, kind, nice):
             try:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 t = target if not target.exists() else Path(fx._free_name(str(target)))
-                shutil.move(p, str(t))
+                fx.safe_move(p, str(t))
                 for sfx in (".json", ".supplemental-metadata.json"):
                     jp = Path(p + sfx)
                     if jp.exists():
-                        shutil.move(str(jp), str(t) + sfx)
+                        fx.safe_move(str(jp), str(t) + sfx)
                 pairs.append({"src": p, "dest": str(t), "json": 0})
                 bases.add(str(base))
                 res["moved"] += 1
@@ -2867,7 +2910,7 @@ def write_run_record(run, timeline):
     entry = {"id": run["id"], "kind": run["kind"], "title": title, "state": state, "message": msg if state != "finished" else "",
              "started": run["started"], "ended": ended, "duration": round(ended - run["started"], 1), "version": VERSION,
              "dry_run": bool(meta.get("dry_run")), "source": meta.get("source", []), "dest": meta.get("dest", ""),
-             "options": meta.get("options", {}), "headline": _headline(sm) if state == "finished" else msg,
+             "options": meta.get("options", {}), "endpoint": meta.get("endpoint", ""), "again": meta.get("again"), "headline": _headline(sm) if state == "finished" else msg,
              "folder": "", "html": "", "log": ""}
     L = ["Backstory run log", "=" * 60,
          "Run:        %s%s" % (title, " (preview, nothing changed)" if entry["dry_run"] else ""),
@@ -2937,6 +2980,12 @@ def tracked(kind, meta, fn, *args):
                 timeline.append((time.time(), st, msg))
                 last, lastt = key, time.time()
     threading.Thread(target=sampler, daemon=True).start()
+    def say_retry(text):
+        with LOCK:
+            STATE["retry"] = {"text": text, "t": time.time()}
+    fx.reset_resilience(check_cancel, say_retry)
+    with LOCK:
+        STATE["retry"] = None
     try:
         fn(*args)
     except Exception as e:                      # the job functions handle their own errors; this is a safety net
@@ -2944,6 +2993,14 @@ def tracked(kind, meta, fn, *args):
             STATE.update(state="error", message=str(e))
     finally:
         stop.set()
+        with LOCK:
+            STATE["retry"] = None
+            sm_ = STATE.get("summary")
+            if isinstance(sm_, dict) and (fx.RESIL["retries"] or fx.RESIL["abort"]):
+                sm_["drive"] = {"retries": fx.RESIL["retries"], "stopped": fx.RESIL["abort"], "events": fx.RESIL["events"][:20]}
+                sm_.setdefault("tips", []).append(
+                    ("The drive stopped answering, so Backstory paused instead of failing every file. Reconnect the drive, then press Continue where I left off: finished files are remembered." if fx.RESIL["abort"]
+                     else "The drive hiccuped %d time(s). Backstory slowed down, waited and retried, and everything was copied. If this keeps happening, the drive or its cable may be failing: back it up soon." % fx.RESIL["retries"]))
         try:
             if undo_dest:
                 run["undo"] = _collect_undo(undo_dest, before, meta)
@@ -2959,6 +3016,7 @@ def tracked(kind, meta, fn, *args):
 def start_tracked(kind, body, fn, args):
     opts = body.get("opts") or {k: v for k, v in body.items() if k not in ("roots", "out", "dest", "dry_run", "opts")}
     meta = {"dry_run": bool(body.get("dry_run")), "source": [str(x) for x in body.get("roots", [])],
+            "endpoint": REQ.get("path", ""), "again": (REQ.get("body") if len(json.dumps(REQ.get("body") or {}, default=str)) < 200000 else None),
             "dest": body.get("out") or body.get("dest") or "", "options": {k: (v if isinstance(v, (bool, int, float, str)) else str(v)) for k, v in opts.items()}}
     threading.Thread(target=tracked, daemon=True, args=(kind, meta, fn) + tuple(args)).start()
 
@@ -3049,6 +3107,10 @@ def diagnostics_text():
     return "\n".join(L)
 
 
+RERUNNABLE = {"/api/start", "/api/guided_start", "/api/merge_start", "/api/convert_start", "/api/cleanup_start", "/api/photos_start", "/api/consolidate_start"}
+REQ = {"path": "", "body": {}}      # the request being handled, so a run can be repeated later
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -3105,10 +3167,29 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError
         except (ValueError, TypeError):
             return self._send(400, json.dumps({"error": "Bad request"}))
-        if self.path == "/api/choose":
+        self._dispatch(self.path, body)
+
+    def _dispatch(self, path, body):
+        REQ.update(path=path, body=body)
+        if path == "/api/choose":
             pick = choose_zips if body.get("kind") == "zip" else choose_folders
             self._send(200, json.dumps({"paths": pick(body.get("prompt", "Choose folders"))}))
-        elif self.path == "/api/start":
+        elif path == "/api/rerun":
+            # run an earlier job again with the same settings: finished files are remembered, so this carries on where it stopped
+            try:
+                e = _load_entry(str(body.get("id", "")))
+            except Exception:
+                e = None
+            meta = e or {}
+            ep = meta.get("endpoint", "")
+            if not e or ep not in RERUNNABLE or not isinstance(meta.get("again"), dict):
+                return self._send(404, json.dumps({"error": "This run cannot be repeated automatically. Start it again from its tab."}))
+            with LOCK:
+                busy = STATE["state"] in ("scanning", "running")
+            if busy:
+                return self._send(409, json.dumps({"error": "A job is already running"}))
+            self._dispatch(ep, dict(meta["again"], dry_run=False) if body.get("live") else meta["again"])
+        elif path == "/api/start":
             with LOCK:
                 busy = STATE["state"] in ("scanning", "running")
             if busy:
@@ -3117,25 +3198,26 @@ class Handler(BaseHTTPRequestHandler):
                 body.get("roots", []), body.get("out", ""),
                 bool(body.get("dry_run")), bool(body.get("overwrite")), bool(body.get("pair_live")),
                 bool(body.get("dedupe")), bool(body.get("move")), body.get("date_policy", "earlier"), bool(body.get("name_dates")), bool(body.get("albums")),
-                body.get("edited") if body.get("edited") in ("both", "edited", "original") else "both", bool(body.get("near"))))
+                body.get("edited") if body.get("edited") in ("both", "edited", "original") else "both", bool(body.get("near")),
+                body.get("folder_dates") if body.get("folder_dates") in ("missing", "fix") else "", bool(body.get("guess_gps"))))
             self._send(200, "{}")
-        elif self.path == "/api/health_start":
+        elif path == "/api/health_start":
             with LOCK:
                 busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
             if busy:
                 return self._send(409, json.dumps({"error": "A job is already running"}))
             start_tracked("health", dict(body, dry_run=True, opts={"deep": bool(body.get("deep"))}), run_health, (body.get("roots", []), bool(body.get("deep"))))
             self._send(200, "{}")
-        elif self.path == "/api/health_history":
+        elif path == "/api/health_history":
             self._send(200, json.dumps({"runs": health_history(body.get("roots", []))}))
-        elif self.path == "/api/formats_apply":
+        elif path == "/api/formats_apply":
             with LOCK:
                 busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
             if busy:
                 return self._send(409, json.dumps({"error": "A job is already running"}))
             start_tracked("formats_apply", {"roots": [], "dry_run": False, "opts": {"files": len(body.get("items", []))}}, run_formats_apply, ([str(x) for x in body.get("items", [])],))
             self._send(200, "{}")
-        elif self.path == "/api/compare_start":
+        elif path == "/api/compare_start":
             with LOCK:
                 busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
             if busy:
@@ -3145,7 +3227,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, json.dumps({"error": "Add at least two libraries in the Source list to compare them"}))
             start_tracked("compare", {"roots": roots, "dry_run": True, "opts": {}}, run_compare, (roots,))
             self._send(200, "{}")
-        elif self.path == "/api/diagnostics_start":
+        elif path == "/api/diagnostics_start":
             with LOCK:
                 busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
             if busy:
@@ -3154,7 +3236,7 @@ class Handler(BaseHTTPRequestHandler):
             start_tracked("diagnostics", {"roots": [str(x) for x in body.get("roots", [])], "dry_run": True, "opts": {"hours": hrs}}, run_diagnostics,
                           ([str(x) for x in body.get("roots", [])], body.get("library") or "", hrs))
             self._send(200, "{}")
-        elif self.path == "/api/monitor_start":
+        elif path == "/api/monitor_start":
             with LOCK:
                 busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
             if busy:
@@ -3163,9 +3245,9 @@ class Handler(BaseHTTPRequestHandler):
             pasted = str(body.get("pasted") or "")[:2_000_000]
             start_tracked("monitor", {"roots": [], "dry_run": True, "opts": {"hours": hrs, "pasted": bool(pasted)}}, run_monitor, (hrs, pasted))
             self._send(200, "{}")
-        elif self.path == "/api/photos_libs":
+        elif path == "/api/photos_libs":
             self._send(200, json.dumps({"libs": fx.find_photos_libraries()}))
-        elif self.path == "/api/upload_status":
+        elif path == "/api/upload_status":
             lib = body.get("library") or (fx.find_photos_libraries() or [""])[0]
             if not lib:
                 return self._send(200, json.dumps({"ok": False, "why": "no Photos library found"}))
@@ -3175,13 +3257,13 @@ class Handler(BaseHTTPRequestHandler):
                 st["eta"] = upload_eta(lib)
             st["library"] = lib
             self._send(200, json.dumps(st))
-        elif self.path == "/api/photos_preflight":
+        elif path == "/api/photos_preflight":
             self._send(200, json.dumps(photos_preflight()))
-        elif self.path == "/api/photos_continue":
+        elif path == "/api/photos_continue":
             with LOCK:
                 STATE["photos_continue"] = True
             self._send(200, "{}")
-        elif self.path == "/api/photos_start":
+        elif path == "/api/photos_start":
             with LOCK:
                 busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
             if busy:
@@ -3192,7 +3274,7 @@ class Handler(BaseHTTPRequestHandler):
                     "library": o.get("library") or "", "adaptive": bool(o.get("adaptive", True)), "verify_pct": o.get("verify_pct", 99)}
             start_tracked("photos", dict(body, opts=opts), run_photos, (body.get("roots", []), opts, bool(body.get("dry_run"))))
             self._send(200, "{}")
-        elif self.path == "/api/similar_scan":
+        elif path == "/api/similar_scan":
             with LOCK:
                 busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
             if busy:
@@ -3200,29 +3282,29 @@ class Handler(BaseHTTPRequestHandler):
             thr = body.get("threshold") if body.get("threshold") in (3, 6, 10) else 6
             start_tracked("similar", dict(body, dry_run=True, opts={"sensitivity": thr}), run_similar_scan, (body.get("roots", []), thr))
             self._send(200, "{}")
-        elif self.path == "/api/similar_apply":
+        elif path == "/api/similar_apply":
             with LOCK:
                 busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
             if busy:
                 return self._send(409, json.dumps({"error": "A job is already running"}))
             start_tracked("similar_apply", {"roots": [], "dry_run": False, "opts": {"photos": len(body.get("items", []))}}, run_similar_apply, ([str(x) for x in body.get("items", [])],))
             self._send(200, "{}")
-        elif self.path == "/api/undo_info":
+        elif path == "/api/undo_info":
             self._send(200, json.dumps(undo_info(body.get("id", ""))))
-        elif self.path == "/api/undo_start":
+        elif path == "/api/undo_start":
             with LOCK:
                 busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
             if busy:
                 return self._send(409, json.dumps({"error": "A job is already running"}))
             start_tracked("undo", {"roots": [], "dry_run": False, "opts": {"run": body.get("id", "")}}, run_undo, (body.get("id", ""),))
             self._send(200, "{}")
-        elif self.path == "/api/similar_folders":
+        elif path == "/api/similar_folders":
             try:
                 folders = check_clean_folders(body.get("roots", []))
                 self._send(200, json.dumps({"groups": fx.find_similar_folders([str(f) for f in folders], bool(body.get("maybe", True)))}))
             except ValueError as e:
                 self._send(200, json.dumps({"error": str(e)}))
-        elif self.path == "/api/consolidate_start":
+        elif path == "/api/consolidate_start":
             with LOCK:
                 busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
             if busy:
@@ -3231,7 +3313,7 @@ class Handler(BaseHTTPRequestHandler):
             start_tracked("consolidate", dict(body, opts={"dupes": dup}), run_consolidate,
                           (body.get("groups", []), body.get("roots", []), bool(body.get("dry_run")), dup))
             self._send(200, "{}")
-        elif self.path == "/api/assess_start":
+        elif path == "/api/assess_start":
             with LOCK:
                 busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
             if busy:
@@ -3239,7 +3321,7 @@ class Handler(BaseHTTPRequestHandler):
             b2 = dict(body, dry_run=True)
             start_tracked("assess", b2, run_assess, (body.get("roots", []), body.get("out", "")))
             self._send(200, "{}")
-        elif self.path == "/api/guided_start":
+        elif path == "/api/guided_start":
             with LOCK:
                 busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
             if busy:
@@ -3250,38 +3332,38 @@ class Handler(BaseHTTPRequestHandler):
             start_tracked('guided', body, run_guided, (
                 body.get("roots", []), body.get("out", ""), bool(body.get("dry_run")), opts))
             self._send(200, "{}")
-        elif self.path == "/api/guide":
+        elif path == "/api/guide":
             self._send(200, json.dumps({"guide": read_doc("USER_GUIDE.md"), "notices": read_doc("THIRD_PARTY_NOTICES.md"),
                                         "license": read_doc("LICENSE"), "email": SUPPORT_EMAIL, "version": VERSION}))
-        elif self.path == "/api/doctor":
+        elif path == "/api/doctor":
             self._send(200, json.dumps(doctor(body.get("roots", []), body.get("dest", ""))))
-        elif self.path == "/api/save_report":
+        elif path == "/api/save_report":
             self._send(200, json.dumps(save_report_html(body.get("id", ""), body.get("html", ""))))
-        elif self.path == "/api/history":
+        elif path == "/api/history":
             self._send(200, json.dumps({"runs": list_history(), "dir": str(REPORTS_DIR)}))
-        elif self.path == "/api/open_run":
+        elif path == "/api/open_run":
             self._send(200, json.dumps(open_path(body.get("id", ""), body.get("what", "report"))))
-        elif self.path == "/api/open_reports":
+        elif path == "/api/open_reports":
             REPORTS_DIR.mkdir(parents=True, exist_ok=True)
             opener = "open" if sys.platform == "darwin" else ("xdg-open" if shutil.which("xdg-open") else None)
             if opener:
                 subprocess.Popen([opener, str(REPORTS_DIR)])
             self._send(200, "{}")
-        elif self.path == "/api/diagnostics":
+        elif path == "/api/diagnostics":
             self._send(200, json.dumps({"text": diagnostics_text()}))
-        elif self.path == "/api/update_check":
+        elif path == "/api/update_check":
             with LOCK:
                 STATE["update"] = {"state": "checking", "files": []}
             threading.Thread(target=check_update, daemon=True).start()
             self._send(200, "{}")
-        elif self.path == "/api/update":
+        elif path == "/api/update":
             self._send(200, json.dumps(apply_update()))
-        elif self.path == "/api/cancel":
+        elif path == "/api/cancel":
             with LOCK:
                 if STATE["state"] in ("scanning", "running"):
                     STATE["cancel"] = True
             self._send(200, "{}")
-        elif self.path == "/api/merge_start":
+        elif path == "/api/merge_start":
             with LOCK:
                 busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
             if busy:
@@ -3292,13 +3374,13 @@ class Handler(BaseHTTPRequestHandler):
             start_tracked('merge', body, run_merge, (
                 body.get("roots", []), body.get("dest", ""), opts, bool(body.get("dry_run"))))
             self._send(200, "{}")
-        elif self.path == "/api/convert_scan":
+        elif path == "/api/convert_scan":
             try:
                 folders = check_clean_folders(body.get("roots", []))
                 self._send(200, json.dumps({"types": fx.count_legacy(folders)}))
             except ValueError as e:
                 self._send(200, json.dumps({"error": str(e)}))
-        elif self.path == "/api/cleanup_start":
+        elif path == "/api/cleanup_start":
             with LOCK:
                 busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
             if busy:
@@ -3309,7 +3391,7 @@ class Handler(BaseHTTPRequestHandler):
             opts["junk"] = opts["junk"] or None
             start_tracked('cleanup', body, run_cleanup, (body.get("roots", []), bool(body.get("dry_run")), opts))
             self._send(200, "{}")
-        elif self.path == "/api/empty_start":
+        elif path == "/api/empty_start":
             with LOCK:
                 busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
             if busy:
@@ -3318,7 +3400,7 @@ class Handler(BaseHTTPRequestHandler):
                 body.get("roots", []), bool(body.get("dry_run")), bool(body.get("ignore_junk")),
                 bool(body.get("remove_top")))).start()
             self._send(200, "{}")
-        elif self.path == "/api/convert_start":
+        elif path == "/api/convert_start":
             with LOCK:
                 busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
             if busy:
@@ -3327,7 +3409,7 @@ class Handler(BaseHTTPRequestHandler):
                 body.get("roots", []), bool(body.get("dry_run")), body.get("exts", []),
                 bool(body.get("include_live")), body.get("quality", "high"), body.get("action", "move"), bool(body.get("estimate"))))
             self._send(200, "{}")
-        elif self.path == "/api/sort_start":
+        elif path == "/api/sort_start":
             with LOCK:
                 busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
             if busy:
@@ -3336,14 +3418,14 @@ class Handler(BaseHTTPRequestHandler):
                 body.get("roots", []), body.get("out", ""), bool(body.get("dry_run")), bool(body.get("dedupe")),
                 bool(body.get("move")), bool(body.get("bring_json")))).start()
             self._send(200, "{}")
-        elif self.path == "/api/clean_scan":
+        elif path == "/api/clean_scan":
             try:
                 cats, files = find_json(check_clean_folders(body.get("folders", [])), bool(body.get("include_other")))
                 self._send(200, json.dumps({"cats": cats, "will_delete": len(files),
                                             "bytes": sum(s for _, s in files)}))
             except ValueError as e:
                 self._send(200, json.dumps({"error": str(e)}))
-        elif self.path == "/api/clean_run":
+        elif path == "/api/clean_run":
             with LOCK:
                 busy = STATE["clean"].get("state") == "running" or STATE["state"] in ("scanning", "running")
             if busy:
@@ -3351,7 +3433,7 @@ class Handler(BaseHTTPRequestHandler):
             threading.Thread(target=run_clean, daemon=True,
                              args=(body.get("folders", []), bool(body.get("include_other")))).start()
             self._send(200, "{}")
-        elif self.path == "/api/reveal":
+        elif path == "/api/reveal":
             with LOCK:
                 rep = STATE["report"]
             if rep:
@@ -3615,6 +3697,7 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
     <button class="tab" data-tab="help" role="tab"><b>&#10067;</b> Help</button>
   </nav>
   <div class="status"><div class="srow"><span id="msg">Ready. Choose a tab, set it up and press Start.</span><a href="#" id="goto" style="display:none">View results &rarr;</a><button id="contbtn" class="sm p" style="display:none;margin-left:10px">Continue</button><button id="stopall" class="sm" style="display:none;margin-left:10px">Stop</button></div>
+  <div id="retrybar" class="retrybar" style="display:none"></div>
   <div class="bar" id="bar"><i id="fill"></i><span id="pct">0%</span></div></div>
 </div>
 <section class="pane" id="pane-guided">
@@ -3626,6 +3709,9 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
 <div class="opt"><input type="checkbox" id="gdedupe" checked><div>Merge same-named folders and remove exact duplicates<small>Every <i>Photos from 2012</i> across all your zips becomes one folder, and the same photo repeated in several albums is kept once.</small></div></div>
 <div class="opt"><input type="checkbox" id="glive" checked><div>Re-pair Live Photos<small>Reconnects each Live Photo&#39;s still and video so Apple Photos shows them together.</small></div></div>
 <div class="opt"><input type="checkbox" id="gnd" checked><div>Use the date in the file name when there is no .json<small>Fills in a missing date from names like <i>IMG_20190704_123456</i>. Never changes a date that is already there.</small></div></div>
+<div class="opt"><input type="checkbox" id="gfd" checked><div>Fill missing dates from the folder name<small>A photo with no date inside, in a folder called <i>2017</i>, <i>2026-06</i> or <i>June 2015</i>, gets that date. A date that already exists is never changed by this.</small></div></div>
+<div class="opt"><input type="checkbox" id="gfx"><div>&#9888;&#65039; Correct dates that disagree with the folder name, and dates in the future<small>A photo in the <i>2017</i> folder that says 2025, or says 2028, almost certainly lost its metadata. This sets it from the folder name. Only tick it if you trust your folder names.</small></div></div>
+<div class="opt"><input type="checkbox" id="ggps"><div>&#9888;&#65039; Guess a location from the folder name (Johannesburg, Japan...)<small>Where a photo has <b>no</b> location and its folder names a city or country, an approximate location is added and labelled as a guess. A location that already exists is never touched.</small></div></div>
 <div class="opt"><input type="checkbox" id="gnear"><div>&#9888;&#65039; Also skip near-identical pictures<small>When your libraries overlap, leave out the smaller version of the same picture and keep the larger one. Off by default: use Compare libraries on the Merge tab to see what it would skip. Folders only.</small></div></div>
 <div class="opt"><input type="checkbox" id="galb" checked><div>Keep album names as keywords<small>When a photo that lived in an album is skipped as a duplicate, the album name is saved as a keyword on the kept copy so you do not lose your albums. A list of albums is saved with the reports.</small></div></div>
 <div class="opt"><div style="flex:1"><label for="gedit" style="font-weight:600">Google-edited copies (IMG_1-edited.jpg)</label><select id="gedit" class="sel"><option value="both" selected>Keep both</option><option value="edited">Keep only the edited version</option><option value="original">Keep only the original</option></select></div></div>
@@ -3650,6 +3736,9 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
 <small>Google sometimes records the day a photo was uploaded or re-saved instead of the day it was taken, and that day is always later. Keeping the earlier of the two is usually right. A photo with no date at all always gets Google&#39;s.</small></div></div>
 <div class="opt"><input type="checkbox" id="ow" checked><div>&#9888;&#65039; Replace location and caption already stored in the photo<small>Every photo has hidden facts saved inside the file itself (called EXIF). <b>Off</b>: only fill in a location or caption that is missing. <b>On</b>: replace a different one with Google&#39;s version. Your pictures themselves are never altered.</small></div></div></div>
 <div class="opt"><input type="checkbox" id="ndates" checked><div>Use the date in the file name when there is no .json<small>For photos with no Google info file and no date of their own, reads a date from names like <i>IMG_20190704_123456</i>, <i>PXL_20210512_...</i> or <i>Screenshot 2019-07-04 at 12.34.56</i>. It only fills in a missing date and never changes one that is already there.</small></div></div>
+<div class="opt"><input type="checkbox" id="fdates" checked><div>Fill missing dates from the folder name<small>No date inside the photo, and the folder is called <i>2017</i>, <i>2026-06</i>, <i>June 2015</i> or <i>Photos from 2019</i>: use that. Existing dates are not changed by this.</small></div></div>
+<div class="opt"><input type="checkbox" id="fdfix"><div>&#9888;&#65039; Correct dates that disagree with the folder name, and dates in the future<small>Sets the date from the folder name when the photo says a different year (a sign it lost its metadata) or a date that has not happened yet. Preview first.</small></div></div>
+<div class="opt"><input type="checkbox" id="fgps"><div>&#9888;&#65039; Guess a location from the folder name<small>Only for photos with no location, in a folder that names a city or country. The location is the middle of that place, and each photo is labelled with a keyword so you can find them. Preview first.</small></div></div>
 <div class="opt"><input type="checkbox" id="near"><div>&#9888;&#65039; Also skip near-identical pictures<small>The same picture saved at a smaller size or re-saved is not an exact copy, so it is normally kept. Tick this to leave out the smaller version when libraries overlap (folders only, not zip files). Check the Compare results first.</small></div></div>
 <div class="opt"><input type="checkbox" id="albums" checked><div>Keep album names when duplicates are removed<small>Google saves a photo once in its year folder and again in every album. When the album copies are skipped as duplicates, the album names are saved as keywords on the kept photo (Apple Photos and Lightroom show keywords), and a list of albums is saved with the reports.</small></div></div>
 <div class="opt"><div style="flex:1"><label for="edited" style="font-weight:600">When Google saved an edited copy (IMG_1-edited.jpg) next to the original</label><select id="edited" class="sel"><option value="both" selected>Keep both</option><option value="edited">Keep only the edited version</option><option value="original">Keep only the original</option></select><small>The ones left out stay in your Takeout; they are just not copied into the new library.</small></div></div>
@@ -3900,7 +3989,7 @@ $('go').onclick=async()=>{
   if(!$('dry').checked&&!dest()&&!confirm('No output folder: files will be edited IN PLACE. Continue?'))return;
   if($('move').checked&&!$('dry').checked&&!confirm('MOVE will take files out of your Takeout folders. Make sure you have another backup. Continue?'))return;
   $('sum').style.display='none';
-  const r=await post('/api/start',{roots:roots(),out:dest(),dry_run:$('dry').checked,overwrite:$('ow').checked,pair_live:$('live').checked,dedupe:$('dedupe').checked,move:$('move').checked,date_policy:$('datepol').value,name_dates:$('ndates').checked,albums:$('albums').checked,edited:$('edited').value,near:$('near').checked});
+  const r=await post('/api/start',{roots:roots(),out:dest(),dry_run:$('dry').checked,overwrite:$('ow').checked,pair_live:$('live').checked,dedupe:$('dedupe').checked,move:$('move').checked,date_policy:$('datepol').value,name_dates:$('ndates').checked,albums:$('albums').checked,edited:$('edited').value,near:$('near').checked,folder_dates:$('fdfix').checked?'fix':($('fdates').checked?'missing':''),guess_gps:$('fgps').checked});
   if(r.error)alert(r.error);else poll();
 };
 $('rev').onclick=()=>post('/api/reveal');
@@ -3927,6 +4016,8 @@ function showSummary(s){
   h+=`<div class="tiles">${tile(s.replaced_files,'files with a value replaced')}${tile((s.live||{}).paired||0,'Live Photos paired')}</div>`;
   const c=s.changes||{},v=s.dry_run?'would change':'changed';
   h+=`<h2>What ${s.dry_run?'would be':'was'} changed</h2><div class="tiles">${tile(c.dates,'dates '+v)}${tile(c.gps,'locations '+v)}${tile(c.desc,'captions '+v)}${tile(c.people,'files with people tagged')}${tile(c.favourites,'favourites marked')}</div>`;
+  if(c.dates_filled||c.dates_corrected||c.gps_guessed||c.flag_future||c.flag_year)h+=`<h2>Dates and places from folder names</h2><div class="tiles">${tile(c.dates_filled||0,'dates filled from the folder name')}${tile(c.dates_corrected||0,'wrong dates corrected')}${tile(c.gps_guessed||0,'locations guessed (labelled)')}${tile(c.flag_future||0,'dates in the future, not fixed')}${tile(c.flag_year||0,'dates that do not fit the folder, not fixed')}</div>`;
+  if(s.drive||(s.status&&(s.status['copy-error']||0)>0))h+=`<div class="tip" style="border-color:var(--acc)"><b>Some files did not get copied.</b> ${s.drive&&s.drive.stopped?'The drive stopped answering, so Backstory paused. ':''}Everything that finished is remembered. Reconnect the drive if needed, then <button class="sm p" id="resumebtn">Continue where I left off</button></div>`;
   h+=`<div class="tip" style="border-color:var(--acc)">${s.dry_run?'Would change':'Changed'} <b>${c.dates.toLocaleString()}</b> dates (${c.dates_added.toLocaleString()} added, ${c.dates_replaced.toLocaleString()} replaced), <b>${c.gps.toLocaleString()}</b> locations (${c.gps_added.toLocaleString()} added, ${c.gps_replaced.toLocaleString()} replaced) and <b>${c.desc.toLocaleString()}</b> captions.</div>`;
   h+='<h2>Information stored in the photos</h2>'+tbl(['Field','Added','Replaced','Left alone (different)','Already correct'],[['date','Date taken'],['gps','Location'],['desc','Description']].map(([k,l])=>{const f=s.fields[k]||{};return [l,(f.added||0).toLocaleString(),(f.replaced||0).toLocaleString(),(f.kept||0).toLocaleString(),(f.same||0).toLocaleString()]}));
   if((s.problems||[]).length)h+='<h2>Problems ('+s.problems.length+(s.problems.length>=100?'+':'')+')</h2>'+tbl(['File','What went wrong'],s.problems.map(p=>[esc(p.file),esc(p.detail||p.status)]))+'<small>These files were skipped. Every other file was processed. The full list is in the CSV report.</small>';
@@ -3991,6 +4082,9 @@ function updGoto(){const a=$('goto');const cur=TABS.find(x=>$('pane-'+x).style.d
   const has=$('prog').style.display!=='none'||$('sum').style.display!=='none';
   a.style.display=(has&&cur!==paneKind()&&jobKind!=='clean')?'inline':'none'}
 $('goto').onclick=e=>{e.preventDefault();showTab(paneKind());$('results').scrollIntoView({behavior:'smooth'})};
+async function rerun(id){if(!confirm('Run this again with the same settings? Files that already finished are remembered and skipped, so it carries on where it stopped.'))return;
+  const r=await post('/api/rerun',{id});if(r.error){alert(r.error);return}$('prog').style.display='block';poll()}
+document.addEventListener('click',async e=>{if(e.target&&e.target.id==='resumebtn'){const s=await (await fetch('/api/status')).json();if(s.run)rerun(s.run.id)}});
 $('contbtn').onclick=async()=>{await post('/api/photos_continue');$('contbtn').style.display='none'};
 $('stopall').onclick=async()=>{const b=$('stopall');b.disabled=true;b.textContent='Stopping...';await post('/api/cancel')};
 document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
@@ -4063,7 +4157,7 @@ $('gst').onclick=async()=>{
   const real=!$('gdry').checked;
   if(real&&$('gcv').checked&&!confirm('After the library is built, old videos in the Destination will be converted to MP4 and the originals moved into an _original_videos folder. Continue?'))return;
   $('sum').style.display='none';curGuided=true;
-  const r=await post('/api/guided_start',{roots:roots(),out:dest(),dry_run:$('gdry').checked,opts:{fix_ext:$('gext').checked,convert:$('gcv').checked,replace:$('gow').checked,live:$('glive').checked,dedupe:$('gdedupe').checked,name_dates:$('gnd').checked,albums:$('galb').checked,edited:$('gedit').value,near:$('gnear').checked}});
+  const r=await post('/api/guided_start',{roots:roots(),out:dest(),dry_run:$('gdry').checked,opts:{fix_ext:$('gext').checked,convert:$('gcv').checked,replace:$('gow').checked,live:$('glive').checked,dedupe:$('gdedupe').checked,name_dates:$('gnd').checked,albums:$('galb').checked,edited:$('gedit').value,near:$('gnear').checked,folder_dates:$('gfd').checked,fix_dates:$('gfx').checked,guess_gps:$('ggps').checked}});
   if(r.error){alert(r.error);curGuided=false}else{placeResults('guided');$('prog').style.display='block';poll()}};
 
 // ---- Help: user guide (rendered from USER_GUIDE.md), safety notice, support, about
@@ -4134,9 +4228,9 @@ document.querySelectorAll('a[data-help]').forEach(a=>a.onclick=e=>{e.preventDefa
   $('ackmore').onclick=()=>{ack.style.display='none';showTab('help');helpView('safety');
     const back=document.createElement('div');back.className='tip';back.innerHTML='Read the notice, then <a href="#" id="ackback">go back and accept it</a>.';$('hview').prepend(back);$('ackback').onclick=e=>{e.preventDefault();ack.style.display='flex'}}})();
 
-const RECMAP={albums:'galb',dedupe:'gdedupe',live:'glive',name_dates:'gnd',fix_ext:'gext',replace:'gow'};
+const RECMAP={albums:'galb',dedupe:'gdedupe',live:'glive',name_dates:'gnd',fix_ext:'gext',replace:'gow',folder_dates:'gfd',fix_dates:'gfx',guess_gps:'ggps'};
 function applyRecs(s){
-  Object.entries(RECMAP).forEach(([k,id])=>{const present=(s.recs||[]).find(r=>r.id===k);const cb=document.getElementById('rc_'+k);$(id).checked=!!present&&(!cb||cb.checked)});
+  Object.entries(RECMAP).forEach(([k,id])=>{const present=(s.recs||[]).find(r=>r.id===k);const cb=document.getElementById('rc_'+k);$(id).checked=!!present&&(!cb||cb.checked)});if(!(s.recs||[]).find(r=>r.id==='folder_dates'))$('gfd').checked=false;
   $('gcv').checked=false}
 function showAssess(s){
   const f=s.facts||{};
@@ -4147,7 +4241,7 @@ function showAssess(s){
   if((s.sources||[]).length>1)h+='<h2>Your '+s.sources.length+' sources</h2>'+tbl(['Source','Type','Photos and videos','Size'],s.sources.map(x=>[esc(x.label),esc(x.kind),x.media.toLocaleString(),esc(fmtB(x.bytes))]))+((s.overlap||[]).length?'<small>Shared between sources: '+s.overlap.map(o=>esc(o.a)+' and '+esc(o.b)+': <b>'+o.n.toLocaleString()+'</b> identical files ('+esc(fmtB(o.bytes))+')').join('; ')+'</small>':'');
   if((s.flow||[]).length)h+='<h2>Your suggested route</h2><div class="flow">'+s.flow.map(f=>`<div class="flowstep ${f.kind}"><span class="fn">${f.n}</span><div style="flex:1;min-width:0"><b>${esc(f.title)}</b> <span class="badge ${f.kind==='do'?'okb':''}">${f.kind==='done'?'Done':f.kind==='do'?'Recommended':'Optional'}</span><div class="why">${esc(f.why)}</div></div>${f.kind==='done'?'':`<button class="sm" data-tab="${f.tab}">Open ${esc(TL[f.tab]||f.tab)}</button>`}</div>`).join('')+'</div>';
   h+='<h2>Settings for the library build</h2><small style="margin-top:0">Each option has the reason and the numbers from your files. Untick anything you do not want.</small>';
-  h+=(s.recs||[]).map(r=>`<label class="rec"><input type="checkbox" id="rc_${r.id}" checked ${r.fixed?'disabled':''}><div><b>${esc(r.title)}</b> <span class="badge ${r.risk==='safe'?'okb':'warnb'}">${r.risk==='safe'?'Safe':'Check this'}</span><div class="why">${esc(r.why)}</div></div></label>`).join('');
+  h+=(s.recs||[]).map(r=>`<label class="rec"><input type="checkbox" id="rc_${r.id}" ${r.on===false?'':'checked'} ${r.fixed?'disabled':''}><div><b>${esc(r.title)}</b> <span class="badge ${r.risk==='safe'?'okb':'warnb'}">${r.risk==='safe'?'Safe':'Check this'}</span><div class="why">${esc(r.why)}</div></div></label>`).join('');
   if((s.extras||[]).length)h+='<h2>Other tools that could help</h2>'+s.extras.map(r=>`<div class="rec"><div style="flex:1"><b>${esc(r.title)}</b> <span class="badge warnb">Check this</span><div class="why">${esc(r.why)}</div></div><button class="sm" data-tab="${r.tab}">Open ${esc(TL[r.tab]||r.tab)} tab</button></div>`).join('');
   h+='<div class="hbtns" style="margin-top:14px"><button class="p" id="rprev">Preview the recommended plan</button><button id="rapply">Apply these settings</button></div><small>A preview changes nothing. These are suggestions from a quick look: always read the preview before a real run.</small>';
   if((s.by_ext||[]).length)h+='<h2>What is in your files</h2>'+tbl(['Type','Files'],s.by_ext.map(r=>[esc(r[0]),r[1].toLocaleString()]));
@@ -4546,8 +4640,9 @@ async function loadHistory(){
   $('hlist').innerHTML=L.length?L.map(e=>`<div class="card hrun"><div class="hhead"><b>${esc(e.title)}</b>${e.dry_run?'<span class="badge">Preview</span>':''}<span class="badge ${e.state==='finished'?'okb':e.state==='failed'?'badb':''}">${esc(e.state)}</span><span class="hwhen">${esc(fmtWhen(e.started))}</span></div>
   <div class="hline">${esc(e.headline||e.message||'')}</div>
   <small>${esc((e.source||[]).map(p=>p.split('/').filter(Boolean).pop()||p).join(', '))}${e.dest?' &rarr; '+esc(e.dest.split('/').filter(Boolean).pop()||e.dest):''} &middot; took ${esc(String(Math.round(e.duration)))}s &middot; version ${esc(e.version)}</small>
-  <div class="hbtns">${e.html?`<button class="sm" data-id="${e.id}" data-w="report">Open report</button>`:''}${e.log?`<button class="sm" data-id="${e.id}" data-w="log">Open log</button>`:''}${e.folder?`<button class="sm" data-id="${e.id}" data-w="folder">Show in Finder</button>`:''}${e.undo&&!e.undo.done?`<button class="sm" data-undo="${e.id}">Undo this run...</button>`:''}${e.undo&&e.undo.done?'<span class="badge">Undone</span>':''}</div></div>`).join(''):'<div class="card"><small style="margin:0">Nothing here yet. Your runs will appear here with their reports.</small></div>';
+  <div class="hbtns">${e.html?`<button class="sm" data-id="${e.id}" data-w="report">Open report</button>`:''}${e.log?`<button class="sm" data-id="${e.id}" data-w="log">Open log</button>`:''}${e.folder?`<button class="sm" data-id="${e.id}" data-w="folder">Show in Finder</button>`:''}${e.undo&&!e.undo.done?`<button class="sm" data-undo="${e.id}">Undo this run...</button>`:''}${e.undo&&e.undo.done?'<span class="badge">Undone</span>':''}${e.again&&e.endpoint&&!e.dry_run?`<button class="sm" data-again="${e.id}">Continue / run again</button>`:''}</div></div>`).join(''):'<div class="card"><small style="margin:0">Nothing here yet. Your runs will appear here with their reports.</small></div>';
   document.querySelectorAll('#hlist button[data-undo]').forEach(b=>b.onclick=()=>undoRun(b.dataset.undo));
+  document.querySelectorAll('#hlist button[data-again]').forEach(b=>b.onclick=()=>rerun(b.dataset.again));
   document.querySelectorAll('#hlist button[data-id]').forEach(b=>b.onclick=async()=>{const x=await post('/api/open_run',{id:b.dataset.id,what:b.dataset.w});if(x.error)alert(x.error)})}
 $('hfolder').onclick=()=>post('/api/open_reports');
 $('hdiag').onclick=async()=>{const r=await post('/api/diagnostics');try{await navigator.clipboard.writeText(r.text);$('hdiag').textContent='Copied'}catch(e){const t=document.createElement('textarea');t.value=r.text;document.body.appendChild(t);t.select();try{document.execCommand('copy');$('hdiag').textContent='Copied'}catch(_){prompt('Copy this:',r.text)}t.remove()}setTimeout(()=>{$('hdiag').textContent='Copy diagnostic info'},2000)};
@@ -4570,6 +4665,7 @@ let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   const gmid=gd&&!gd.final;
   if(s.state==='done'&&s.summary&&!gmid){const was=$('sum').style.display;showSummary(s.summary);if(s.run&&!savedIds.has(s.run.id)){$('repnote').textContent='Saving the report...';$('orep').disabled=true;$('olog').disabled=true;autoSave()}}
   renderCvLive(s);updGoto();
+  {const rb=$('retrybar');const rt=run&&s.retry&&(Date.now()/1000-s.retry.t<90);rb.style.display=rt?'block':'none';if(rt)rb.textContent='\u23F3 '+s.retry.text}
   {const cb=$('contbtn');const w=run&&s.photos&&s.photos.waiting;cb.style.display=w?'inline-block':'none'}
   {const sb=$('stopall');const showStop=run&&!(s.kind==='convert'&&s.cv);sb.style.display=showStop?'inline-block':'none';if(!s.cancel){sb.disabled=false;sb.textContent='Stop'}else{sb.disabled=true;sb.textContent='Stopping...'}}
   if(['done','error','idle'].includes(s.state)&&!gmid)clearInterval(timer);

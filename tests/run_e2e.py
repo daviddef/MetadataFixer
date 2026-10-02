@@ -624,12 +624,164 @@ def t_audit_regressions():
 
 
 
+# ---------------------------------------------------------------- Date sanity, guessed places, persistent copying
+def t_dates_and_places():
+    base = WORK / "sanity"
+    def mk(rel, seed, date=None, gps=None):
+        f = base / rel
+        jpeg(f, seed=seed)
+        a = ["exiftool", "-q", "-overwrite_original"]
+        if date:
+            a += ["-AllDates=" + date]
+        if gps:
+            a += ["-GPSLatitude=%s" % gps[0], "-GPSLongitude=%s" % gps[1], "-GPSLatitudeRef=N", "-GPSLongitudeRef=E"]
+        if len(a) > 3:
+            subprocess.run(a + [str(f)], check=True)
+        return f
+    mk("2017/stripped.jpg", 1, "2025:03:02 10:00:00")          # folder says 2017, file says 2025
+    mk("2017/fine.jpg", 2, "2017:05:01 10:00:00")
+    mk("2017/nodate.jpg", 3)
+    mk("2021/future.jpg", 4, "2028:01:01 10:00:00")
+    mk("Johannesburg 2019/a.jpg", 5, "2019:02:01 10:00:00")
+    mk("Japan 2018/hasgps.jpg", 6, "2018:02:01 10:00:00", gps=("10.0", "20.0"))
+    mk("Misc/none.jpg", 7)
+    # preview first: only flags, nothing written
+    g.run_job([str(base)], str(WORK / "san_prev"), True, False, folder_dates="missing", guess_gps=False)
+    sm = state_ok()
+    assert sm["changes"]["flag_future"] == 1 and sm["changes"]["flag_year"] >= 1, sm["changes"]
+    out = WORK / "san_out"
+    g.run_job([str(base)], str(out), False, False, folder_dates="fix", guess_gps=True)
+    sm = state_ok()
+    assert exif(out / "2017" / "stripped.jpg", "DateTimeOriginal")[0].startswith("2017:07:01"), "wrong year not corrected"
+    assert exif(out / "2017" / "fine.jpg", "DateTimeOriginal")[0].startswith("2017:05:01"), "a correct date was changed"
+    assert exif(out / "2017" / "nodate.jpg", "DateTimeOriginal")[0].startswith("2017:07:01"), "missing date not filled"
+    assert exif(out / "2021" / "future.jpg", "DateTimeOriginal")[0].startswith("2021:07:01"), "future date not corrected"
+    lat, lon = exif(out / "Johannesburg 2019" / "a.jpg", "GPSLatitude", "GPSLongitude")
+    assert lat and abs(float(lat) + 26.2) < 0.1 and abs(float(lon) - 28.05) < 0.1, (lat, lon)
+    lat, lon = exif(out / "Japan 2018" / "hasgps.jpg", "GPSLatitude", "GPSLongitude")
+    assert abs(float(lat) - 10.0) < 1e-3, "an existing location was overwritten"
+    assert exif(out / "Misc" / "none.jpg", "GPSLatitude")[0] == "", "guessed with no clue"
+    assert sm["changes"]["gps_guessed"] == 1 and sm["changes"]["dates_corrected"] >= 2, sm["changes"]
+    kw = subprocess.run(["exiftool", "-s3", "-Subject", str(out / "Johannesburg 2019" / "a.jpg")], capture_output=True, text=True).stdout
+    assert "guessed" in kw, kw
+    # 'missing' mode never changes an existing date
+    out2 = WORK / "san_out2"
+    g.run_job([str(base)], str(out2), False, False, folder_dates="missing", guess_gps=False)
+    state_ok()
+    assert exif(out2 / "2017" / "stripped.jpg", "DateTimeOriginal")[0].startswith("2025:03:02")
+    assert exif(out2 / "2017" / "nodate.jpg", "DateTimeOriginal")[0].startswith("2017:07:01")
+
+
+def t_resilient_copy():
+    import errno
+    d = WORK / "resil"; d.mkdir()
+    big = d / "big.bin"; big.write_bytes(os.urandom(12 << 20))
+    orig = fx._copy_resumable
+    calls = [0]
+    def flaky(src, part, chunk):
+        calls[0] += 1
+        if calls[0] <= 2:
+            with open(src, "rb") as s_, open(part, "wb") as p_:
+                p_.write(s_.read(5 << 20))
+            raise OSError(errno.EIO, "Input/output error")
+        return orig(src, part, chunk)
+    fx.reset_resilience(None, None)
+    fx.RESIL["delays"] = (0.05,) * 6
+    fx._copy_resumable = flaky
+    try:
+        fx.safe_copy(big, d / "copy.bin")
+        assert (d / "copy.bin").read_bytes() == big.read_bytes() and calls[0] == 3 and not (d / "copy.bin.part").exists()
+        # a dead drive: gives up politely, then fails fast instead of hammering
+        fx._copy_resumable = lambda *a: (_ for _ in ()).throw(OSError(errno.EIO, "dead"))
+        fx.reset_resilience(None, None); fx.RESIL["delays"] = (0.01,) * 6
+        for i in range(3):
+            try:
+                fx.safe_copy(big, d / ("x%d" % i)); assert False
+            except OSError:
+                pass
+        assert fx.RESIL["abort"]
+        t0 = time.time()
+        try:
+            fx.safe_copy(big, d / "y"); assert False
+        except OSError as e:
+            assert "Continue" in str(e) and time.time() - t0 < 1
+        # permission errors are not retried
+        fx._copy_resumable = lambda *a: (_ for _ in ()).throw(PermissionError(errno.EACCES, "nope"))
+        fx.reset_resilience(None, None)
+        t0 = time.time()
+        try:
+            fx.safe_copy(big, d / "z"); assert False
+        except PermissionError:
+            assert time.time() - t0 < 1
+    finally:
+        fx._copy_resumable = orig
+        fx.reset_resilience(None, None)
+    # move keeps the original until the copy is complete
+    fx.safe_move(d / "copy.bin", d / "moved.bin")
+    assert (d / "moved.bin").exists() and not (d / "copy.bin").exists()
+    # a job through a flaky drive finishes, and "rerun" can continue it
+    src = WORK / "flaky_src"; jpeg(src / "a.jpg", seed=21); jpeg(src / "b.jpg", seed=22)
+    state = {"n": 0}
+    real_place = fx.place_file
+    def place(srcf, dest, move):
+        state["n"] += 1
+        if state["n"] == 1:
+            raise OSError(errno.EIO, "Input/output error")
+        return real_place(srcf, dest, move)
+    fx.place_file = place
+    try:
+        g.run_job([str(src)], str(WORK / "flaky_out"), False, False)
+    finally:
+        fx.place_file = real_place
+    sm = state_ok()
+    assert sm["status"].get("copy-error") == 1, sm["status"]
+    g.run_job([str(src)], str(WORK / "flaky_out"), False, False)      # same settings again: carries on
+    sm = state_ok()
+    assert sm["status"].get("copy-error", 0) == 0 and sm["status"].get("already-done") == 1, sm["status"]
+    assert len(list((WORK / "flaky_out").rglob("*.jpg"))) == 2
+
+
+
+def t_rerun_over_http():
+    import urllib.request, urllib.error
+    src = WORK / "rr_src"; jpeg(src / "a.jpg", seed=31)
+    srv = g.ThreadingHTTPServer(("127.0.0.1", 0), g.Handler)
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    page = urllib.request.urlopen("http://127.0.0.1:%d/" % port).read().decode()
+    tok = page.split("X-Backstory-Token':'")[1].split("'")[0]
+    def post(path, body):
+        rq = urllib.request.Request("http://127.0.0.1:%d%s" % (port, path), data=json.dumps(body).encode(), headers={"X-Backstory-Token": tok})
+        try:
+            with urllib.request.urlopen(rq, timeout=20) as r:
+                return r.status, json.loads(r.read() or b"{}")
+        except urllib.error.HTTPError as e:
+            return e.code, {}
+    def wait():
+        for _ in range(200):
+            time.sleep(0.1)
+            if g.STATE["state"] in ("done", "error", "idle") and g.STATE.get("run", {}) and g.STATE["run"].get("id"):
+                time.sleep(0.4); return
+    try:
+        assert post("/api/start", {"roots": [str(src)], "out": str(WORK / "rr_out"), "dry_run": False, "overwrite": True})[0] == 200
+        wait(); rid = g.STATE["run"]["id"]
+        entry = g._load_entry(rid)
+        assert entry["endpoint"] == "/api/start" and entry["again"]["roots"] == [str(src)], entry
+        time.sleep(0.5)
+        code, _ = post("/api/rerun", {"id": rid}); assert code == 200, code
+        wait()
+        assert g.STATE["state"] == "done" and g.STATE["summary"]["status"].get("already-done") == 1, g.STATE["summary"]["status"]
+        assert post("/api/rerun", {"id": "nope"})[0] == 404
+    finally:
+        srv.shutdown()
+
+
 ORDER = ["t_fix_copy", "t_fix_namedate", "t_fix_inplace", "t_fix_move", "t_fix_dryrun_changes_nothing", "t_fix_zip", "t_zip_resume", "t_zip_needs_dest", "t_zip_corrupt",
          "t_edited_policies", "t_cancel_mid_run", "t_unreadable_and_zero", "t_dest_not_writable", "t_exiftool_missing", "t_low_disk_zip", "t_assess_and_recommend",
          "t_assess_multi_and_photoslib", "t_guided_end_to_end", "t_guided_no_dest", "t_merge_variants", "t_merge_refuses_unsafe", "t_merge_move_in_place", "t_cleanup_all",
          "t_cleanup_refuses_broad", "t_consolidate", "t_convert", "t_convert_stop", "t_similar_apply_undo", "t_health_and_formats", "t_undo_copy_run", "t_photos_plan_and_run",
          "t_photos_applescript_injection_safe", "t_photos_errors", "t_monitor_rules", "t_monitor_job_paste", "t_compare_and_near", "t_diagnostics", "t_history_report",
-         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs", "t_audit_regressions"]
+         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs", "t_audit_regressions", "t_dates_and_places", "t_resilient_copy", "t_rerun_over_http"]
 if __name__ == "__main__":
     only = sys.argv[1:]
     for n in ORDER:

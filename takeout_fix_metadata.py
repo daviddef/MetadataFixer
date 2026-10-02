@@ -477,7 +477,7 @@ def pick_closest(m, candidates):
 
 REPORT_FIELDS = ["file", "sidecar", "match", "status", "detail", "live", "output",
                  "date", "date_before", "date_google", "date_note",
-                 "gps", "gps_before", "gps_google",
+                 "gps", "gps_before", "gps_google", "gps_guess", "date_fix", "date_flag",
                  "desc", "desc_before", "desc_google",
                  "people", "favourite"]
 
@@ -629,27 +629,180 @@ def plan_live(media, progress=None):
     return plan
 
 
-def place_file(src, dest, move):
-    """Copy or move one file through a temporary .part name, retrying once. The real name only ever holds a complete file."""
-    part = dest.with_name(dest.name + ".part")
-    for attempt in (1, 2):
+# ---- Persistent copying and moving: external drives hiccup, so we wait, retry, resume and never give up quietly --------
+import errno
+
+RESIL = {"stop": None, "say": None, "tries": 6, "delays": (3, 8, 20, 45, 90, 180), "chunk": 4 << 20, "gentle": 0.0,
+         "retries": 0, "bad_run": 0, "abort": False, "wait_drive": 600, "events": []}
+TRANSIENT = {errno.EIO, errno.ENXIO, errno.ENODEV, errno.ETIMEDOUT, errno.EBUSY, errno.EAGAIN, errno.EINTR, errno.ENOTCONN,
+             errno.ESTALE, errno.EHOSTDOWN, errno.ECONNRESET, errno.ENETDOWN, errno.ENOENT, errno.EPIPE, errno.EPROTO, getattr(errno, "EREMOTEIO", -1)}
+
+
+def reset_resilience(stop=None, say=None, tries=6):
+    """Called by a job when it starts. stop() raises when the user pressed Stop; say(text) shows a retry message."""
+    RESIL.update(stop=stop, say=say, tries=tries, gentle=0.0, retries=0, bad_run=0, abort=False, events=[])
+
+
+def _say(msg):
+    f = RESIL.get("say")
+    if f:
         try:
-            if move:
-                shutil.move(str(src), str(part))
+            f(msg)
+        except Exception:
+            pass
+
+
+def _nap(seconds):
+    """Sleep in small steps so Stop is honoured at once."""
+    end = time.time() + seconds
+    while time.time() < end:
+        f = RESIL.get("stop")
+        if f:
+            f()
+        time.sleep(min(0.5, max(0.0, end - time.time())))
+
+
+def _transient(e):
+    return isinstance(e, OSError) and (e.errno in TRANSIENT or e.errno is None)
+
+
+def _wait_for(path):
+    """If the drive holding `path` has gone away, wait for it to come back (up to ten minutes)."""
+    d = os.path.dirname(os.path.abspath(path))
+    waited = 0
+    while not os.path.isdir(d) and waited < RESIL["wait_drive"]:
+        _say("The drive is not answering. Waiting for it to come back (%ds)... reconnect the cable if you can" % waited)
+        _nap(5)
+        waited += 5
+    return os.path.isdir(d)
+
+
+def _copy_resumable(src, part, chunk):
+    size = os.path.getsize(src)
+    have = os.path.getsize(part) if os.path.exists(part) else 0
+    if have > size:
+        have = 0
+    have = max(0, have - chunk)                              # the last piece may be damaged: copy it again
+    with open(src, "rb") as s, open(part, "r+b" if os.path.exists(part) else "wb") as d:
+        s.seek(have)
+        d.seek(have)
+        d.truncate(have)
+        stopf = RESIL.get("stop")
+        while True:
+            buf = s.read(chunk)
+            if not buf:
+                break
+            d.write(buf)
+            if RESIL["gentle"]:
+                time.sleep(RESIL["gentle"])
+            if stopf:
+                stopf()
+        d.flush()
+    if os.path.getsize(part) != size:
+        raise OSError(errno.EIO, "the copy is incomplete (%d of %d bytes)" % (os.path.getsize(part), size))
+    try:
+        shutil.copystat(src, part)
+    except OSError:
+        pass
+
+
+def safe_copy(src, dest):
+    """Copy one file to `dest` through dest.part. Retries with growing pauses, resumes a partly copied file, slows down after
+    errors and waits for a disconnected drive. Raises OSError only when it has really tried."""
+    src, dest = str(src), str(dest)
+    part = dest + ".part"
+    if RESIL["abort"]:
+        raise OSError(errno.EIO, "stopped earlier: the drive is not responding (reconnect it, then press Continue)")
+    last = None
+    for attempt in range(1, RESIL["tries"] + 1):
+        try:
+            if not os.path.exists(src) and not _wait_for(src):
+                raise OSError(errno.ENOENT, "the source drive is not connected")
+            _copy_resumable(src, part, RESIL["chunk"] if not RESIL["gentle"] else 256 * 1024)
+            os.replace(part, dest)
+            RESIL["bad_run"] = 0
+            if RESIL["gentle"] > 0.01:
+                RESIL["gentle"] = RESIL["gentle"] / 2                  # the drive is behaving again: speed back up
             else:
-                shutil.copy2(src, part)
+                RESIL["gentle"] = 0.0
+            return
+        except OSError as e:
+            last = e
+            if not _transient(e) or attempt == RESIL["tries"]:
+                break
+            RESIL["retries"] += 1
+            RESIL["gentle"] = max(RESIL["gentle"], 0.02) * 2 if RESIL["gentle"] else 0.02      # give the drive room to breathe
+            delay = RESIL["delays"][min(attempt - 1, len(RESIL["delays"]) - 1)]
+            if len(RESIL["events"]) < 50:
+                RESIL["events"].append("%s: %s (try %d)" % (os.path.basename(src), e.strerror or e, attempt))
+            _say("The drive hiccuped on %s (%s). Pausing %ds, then trying again (%d of %d)" % (os.path.basename(src), e.strerror or e, delay, attempt, RESIL["tries"] - 1))
+            _nap(delay)
+    try:
+        if os.path.exists(part):
+            os.unlink(part)
+    except OSError:
+        pass
+    RESIL["bad_run"] += 1
+    if RESIL["bad_run"] >= 3:
+        RESIL["abort"] = True                                  # stop hammering a drive that has stopped answering
+    raise last
+
+
+def safe_move(src, dest):
+    """Move a file or folder. Same drive: a rename. Across drives: a verified resumable copy, and only then the original is removed."""
+    src, dest = str(src), str(dest)
+    try:
+        return os.rename(src, dest)
+    except OSError as e:
+        if e.errno not in (errno.EXDEV, errno.EPERM, errno.EACCES, errno.ENOTEMPTY) and not _transient(e):
+            raise
+    if os.path.isdir(src) and not os.path.islink(src):
+        os.makedirs(dest, exist_ok=True)
+        for name in sorted(os.listdir(src)):
+            safe_move(os.path.join(src, name), os.path.join(dest, name))
+        os.rmdir(src)
+        return
+    if os.path.exists(dest):
+        raise FileExistsError(errno.EEXIST, "already exists", dest)
+    safe_copy(src, dest)
+    for attempt in range(3):                                   # the copy is complete and checked: now remove the original
+        try:
+            os.unlink(src)
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            _nap(2)
+    # the original could not be removed: the copy is safe, so report it rather than fail the file
+    RESIL["events"].append("%s: copied, but the original could not be removed" % os.path.basename(src))
+
+
+def safe_copytree(src, dest):
+    os.makedirs(dest, exist_ok=True)
+    for name in sorted(os.listdir(src)):
+        sp, dp = os.path.join(src, name), os.path.join(dest, name)
+        if os.path.islink(sp):
+            os.symlink(os.readlink(sp), dp)
+        elif os.path.isdir(sp):
+            safe_copytree(sp, dp)
+        else:
+            safe_copy(sp, dp)
+
+
+def place_file(src, dest, move):
+    """Copy or move one file into place through a temporary .part name. The real name only ever holds a complete file."""
+    dest = Path(dest)
+    part = dest.with_name(dest.name + ".part")
+    if move:
+        try:
+            os.rename(str(src), str(part))
             os.replace(part, dest)
             return
         except OSError:
-            for p in (part,):
-                try:
-                    if p.exists():
-                        p.unlink()
-                except OSError:
-                    pass
-            if attempt == 2:
-                raise
-            time.sleep(1)
+            pass
+        safe_move(src, dest)
+    else:
+        safe_copy(src, dest)
 
 
 MANIFEST = ".metadatafixer_fix.jsonl"   # one progress log per job type, so Sort or Merge never makes Fix skip files
@@ -695,6 +848,8 @@ def guarded(fn):
         try:
             return fn(m, idx, args, out_root)
         except Exception as e:
+            if type(e).__name__ == "Cancelled":
+                raise                                    # the user pressed Stop
             row = {k: "" for k in REPORT_FIELDS}
             row["file"] = str(m)
             row["status"] = "copy-error" if isinstance(e, OSError) else "error"
@@ -806,6 +961,460 @@ def date_from_name(name):
     return None
 
 
+# ---- Date sanity and best-guess places ------------------------------------------------------------------------------
+# A folder called "2017" or "Johannesburg" tells us a lot about the pictures in it. Used only to FILL gaps or flag oddities.
+GAZETTEER_TEXT = """
+c|South Africa|rsa,za|-30.56|22.94
+c|Japan|nippon|36.20|138.25
+c|United States|usa,america,united states of america|39.83|-98.58
+c|United Kingdom|uk,great britain,britain,england,scotland,wales,northern ireland|54.0|-2.5
+c|France||46.6|2.2
+c|Germany|deutschland|51.16|10.45
+c|Italy|italia|42.8|12.5
+c|Spain|espana|40.4|-3.7
+c|Portugal||39.5|-8.0
+c|Netherlands|holland|52.2|5.3
+c|Belgium||50.6|4.7
+c|Switzerland||46.8|8.2
+c|Austria||47.5|14.5
+c|Greece||39.0|22.0
+c|Ireland||53.4|-8.2
+c|Iceland||64.9|-18.6
+c|Norway||61.0|9.0
+c|Sweden||62.0|15.0
+c|Finland||64.0|26.0
+c|Denmark||56.0|10.0
+c|Poland||52.0|19.4
+c|Czech Republic|czechia|49.8|15.5
+c|Hungary||47.2|19.5
+c|Croatia||45.1|15.2
+c|Slovenia||46.1|14.8
+c|Romania||45.9|25.0
+c|Bulgaria||42.7|25.5
+c|Turkey|turkiye|39.0|35.0
+c|Egypt||26.8|30.8
+c|Morocco||31.8|-7.1
+c|Tunisia||34.0|9.0
+c|Kenya||0.2|37.9
+c|Tanzania||-6.4|34.9
+c|Uganda||1.4|32.3
+c|Rwanda||-1.9|29.9
+c|Ethiopia||9.1|40.5
+c|Namibia||-22.0|17.0
+c|Botswana||-22.3|24.7
+c|Zimbabwe||-19.0|29.2
+c|Zambia||-13.1|27.8
+c|Mozambique||-18.7|35.5
+c|Madagascar||-18.8|47.0
+c|Mauritius||-20.3|57.6
+c|Seychelles||-4.7|55.5
+c|Lesotho||-29.6|28.2
+c|Eswatini|swaziland|-26.5|31.5
+c|Ghana||7.9|-1.0
+c|Nigeria||9.1|8.7
+c|Senegal||14.5|-14.5
+c|Mexico||23.6|-102.5
+c|Canada||56.1|-106.3
+c|Brazil|brasil|-14.2|-51.9
+c|Argentina||-38.4|-63.6
+c|Chile||-35.7|-71.5
+c|Peru||-9.2|-75.0
+c|Colombia||4.6|-74.3
+c|Costa Rica||9.7|-83.8
+c|Panama||8.5|-80.8
+c|Cuba||21.5|-77.8
+c|Jamaica||18.1|-77.3
+c|Bahamas||25.0|-77.4
+c|Australia||-25.3|133.8
+c|New Zealand|nz|-41.0|174.0
+c|Fiji||-17.7|178.1
+c|China||35.9|104.2
+c|Hong Kong|hongkong|22.3|114.2
+c|Taiwan||23.7|121.0
+c|South Korea|korea|36.5|127.9
+c|Thailand||15.9|100.99
+c|Vietnam||14.1|108.3
+c|Cambodia||12.6|104.99
+c|Laos||19.9|102.5
+c|Malaysia||4.2|102.0
+c|Singapore||1.35|103.82
+c|Indonesia||-0.8|113.9
+c|Philippines||12.9|121.8
+c|India||20.6|78.96
+c|Nepal||28.4|84.1
+c|Sri Lanka||7.9|80.8
+c|Maldives||3.2|73.2
+c|Bhutan||27.5|90.4
+c|United Arab Emirates|uae|24.0|54.0
+c|Qatar||25.3|51.2
+c|Oman||21.5|55.9
+c|Israel||31.0|34.9
+c|Saudi Arabia||23.9|45.1
+c|Mongolia||46.9|103.8
+c|Russia||61.5|105.3
+c|Ukraine||48.4|31.2
+c|Estonia||58.6|25.0
+c|Latvia||56.9|24.6
+c|Lithuania||55.2|23.9
+c|Malta||35.9|14.4
+c|Cyprus||35.1|33.4
+c|Luxembourg||49.8|6.1
+c|Bali||-8.4|115.2
+c|Patagonia||-49.3|-72.0
+c|Tasmania||-42.0|146.6
+c|Hawaii||20.8|-156.3
+c|Alaska||64.2|-149.5
+c|Lapland||68.0|25.0
+c|Tuscany||43.4|11.2
+c|Provence||43.9|5.9
+c|Algarve||37.1|-8.2
+c|Kruger||-23.99|31.55
+c|Garden Route||-33.97|22.4
+c|Drakensberg||-29.2|29.4
+c|Serengeti||-2.3|34.8
+c|Victoria Falls||-17.92|25.86
+c|Zanzibar||-6.17|39.2
+t|Johannesburg|joburg,jozi,jhb|-26.2041|28.0473
+t|Cape Town|capetown|-33.9249|18.4241
+t|Durban||-29.8587|31.0218
+t|Pretoria|tshwane|-25.7479|28.2293
+t|Port Elizabeth|gqeberha|-33.9608|25.6022
+t|Bloemfontein||-29.0852|26.1596
+t|Stellenbosch||-33.9321|18.8602
+t|Knysna||-34.0367|23.0471
+t|Sun City||-25.3333|27.0944
+t|Sandton||-26.1076|28.0567
+t|Hermanus||-34.4187|19.2345
+t|Franschhoek||-33.9072|19.1191
+t|Sodwana||-27.5333|32.6833
+t|Nairobi||-1.2921|36.8219
+t|Mombasa||-4.0435|39.6682
+t|Cairo||30.0444|31.2357
+t|Marrakech|marrakesh|31.6295|-7.9811
+t|Casablanca||33.5731|-7.5898
+t|Lagos||6.5244|3.3792
+t|Accra||5.6037|-0.187
+t|Windhoek||-22.5609|17.0658
+t|Dubai||25.2048|55.2708
+t|Abu Dhabi||24.4539|54.3773
+t|Doha||25.2854|51.531
+t|Istanbul||41.0082|28.9784
+t|Tel Aviv||32.0853|34.7818
+t|Jerusalem||31.7683|35.2137
+t|Tokyo||35.6762|139.6503
+t|Kyoto||35.0116|135.7681
+t|Osaka||34.6937|135.5023
+t|Hiroshima||34.3853|132.4553
+t|Nara||34.6851|135.8050
+t|Sapporo||43.0618|141.3545
+t|Okinawa||26.2124|127.6809
+t|Yokohama||35.4437|139.638
+t|Seoul||37.5665|126.978
+t|Busan||35.1796|129.0756
+t|Beijing|peking|39.9042|116.4074
+t|Shanghai||31.2304|121.4737
+t|Shenzhen||22.5431|114.0579
+t|Guangzhou||23.1291|113.2644
+t|Chengdu||30.5728|104.0668
+t|Taipei||25.033|121.5654
+t|Bangkok||13.7563|100.5018
+t|Phuket||7.8804|98.3923
+t|Chiang Mai||18.7883|98.9853
+t|Hanoi||21.0285|105.8542
+t|Ho Chi Minh|saigon|10.8231|106.6297
+t|Siem Reap|angkor|13.3633|103.8564
+t|Kuala Lumpur||3.139|101.6869
+t|Jakarta||-6.2088|106.8456
+t|Ubud||-8.5069|115.2625
+t|Manila||14.5995|120.9842
+t|Delhi|new delhi|28.6139|77.209
+t|Mumbai|bombay|19.076|72.8777
+t|Goa||15.2993|74.124
+t|Jaipur||26.9124|75.7873
+t|Agra||27.1767|78.0081
+t|Kathmandu||27.7172|85.324
+t|Colombo||6.9271|79.8612
+t|Sydney||-33.8688|151.2093
+t|Melbourne||-37.8136|144.9631
+t|Brisbane||-27.4698|153.0251
+t|Perth||-31.9505|115.8605
+t|Cairns||-16.9186|145.7781
+t|Gold Coast||-28.0167|153.4
+t|Adelaide||-34.9285|138.6007
+t|Auckland||-36.8485|174.7633
+t|Wellington||-41.2866|174.7756
+t|Queenstown||-45.0312|168.6626
+t|Christchurch||-43.5321|172.6362
+t|London||51.5074|-0.1278
+t|Edinburgh||55.9533|-3.1883
+t|Manchester||53.4808|-2.2426
+t|Dublin||53.3498|-6.2603
+t|Paris||48.8566|2.3522
+t|Lyon||45.764|4.8357
+t|Marseille||43.2965|5.3698
+t|Bordeaux||44.8378|-0.5792
+t|Berlin||52.52|13.405
+t|Munich|munchen|48.1351|11.582
+t|Hamburg||53.5511|9.9937
+t|Frankfurt||50.1109|8.6821
+t|Amsterdam||52.3676|4.9041
+t|Brussels||50.8503|4.3517
+t|Zurich||47.3769|8.5417
+t|Geneva||46.2044|6.1432
+t|Vienna|wien|48.2082|16.3738
+t|Prague||50.0755|14.4378
+t|Budapest||47.4979|19.0402
+t|Warsaw||52.2297|21.0122
+t|Krakow||50.0647|19.945
+t|Rome|roma|41.9028|12.4964
+t|Florence|firenze|43.7696|11.2558
+t|Venice|venezia|45.4408|12.3155
+t|Milan|milano|45.4642|9.19
+t|Naples|napoli|40.8518|14.2681
+t|Amalfi||40.634|14.6027
+t|Madrid||40.4168|-3.7038
+t|Barcelona||41.3851|2.1734
+t|Seville|sevilla|37.3891|-5.9845
+t|Lisbon|lisboa|38.7223|-9.1393
+t|Porto||41.1579|-8.6291
+t|Athens||37.9838|23.7275
+t|Santorini||36.3932|25.4615
+t|Mykonos||37.4467|25.3289
+t|Dubrovnik||42.6507|18.0944
+t|Reykjavik||64.1466|-21.9426
+t|Oslo||59.9139|10.7522
+t|Stockholm||59.3293|18.0686
+t|Copenhagen||55.6761|12.5683
+t|Helsinki||60.1699|24.9384
+t|Moscow||55.7558|37.6173
+t|St Petersburg|saint petersburg|59.9311|30.3609
+t|New York|nyc,new york city|40.7128|-74.006
+t|Los Angeles||34.0522|-118.2437
+t|San Francisco||37.7749|-122.4194
+t|Las Vegas||36.1699|-115.1398
+t|Chicago||41.8781|-87.6298
+t|Miami||25.7617|-80.1918
+t|Orlando||28.5383|-81.3792
+t|Washington dc|washington d c|38.9072|-77.0369
+t|Boston||42.3601|-71.0589
+t|Seattle||47.6062|-122.3321
+t|San Diego||32.7157|-117.1611
+t|New Orleans||29.9511|-90.0715
+t|Honolulu||21.3069|-157.8583
+t|Grand Canyon||36.1069|-112.1129
+t|Yellowstone||44.428|-110.5885
+t|Yosemite||37.8651|-119.5383
+t|Toronto||43.6532|-79.3832
+t|Vancouver||49.2827|-123.1207
+t|Montreal||45.5017|-73.5673
+t|Banff||51.1784|-115.5708
+t|Mexico City||19.4326|-99.1332
+t|Cancun||21.1619|-86.8515
+t|Havana||23.1136|-82.3666
+t|Rio de Janeiro|rio|-22.9068|-43.1729
+t|Sao Paulo||-23.5505|-46.6333
+t|Buenos Aires||-34.6037|-58.3816
+t|Santiago||-33.4489|-70.6693
+t|Machu Picchu||-13.1631|-72.545
+t|Cusco|cuzco|-13.5319|-71.9675
+t|Bogota||4.711|-74.0721
+c|Jordan||31.2|36.5
+"""
+_GAZ = {"idx": None, "maxn": 1}
+
+
+def _gaz_index():
+    if _GAZ["idx"] is None:
+        idx = {}
+        for line in GAZETTEER_TEXT.strip().splitlines():
+            kind, name, aliases, lat, lon = line.split("|")
+            for a in [name] + [x for x in aliases.split(",") if x]:
+                key = " ".join(re.findall(r"[a-z0-9]+", _fold(a)))
+                if key:
+                    idx.setdefault(key, (name, float(lat), float(lon), kind))
+                    _GAZ["maxn"] = max(_GAZ["maxn"], len(key.split()))
+        _GAZ["idx"] = idx
+    return _GAZ["idx"]
+
+
+def _path_names(path, roots, limit=None):
+    """Folder names from the one holding the file outwards, down to (and including) the folder the user added."""
+    p = Path(path)
+    names = []
+    rts = [Path(r) for r in (roots or [])]
+    root = next((r for r in rts if r == p.parent or r in p.parents), None)
+    cur = p.parent
+    while True:
+        names.append(cur.name)
+        if root is None and limit is None and False:
+            break
+        if (limit and len(names) >= limit) or (root is not None and cur == root) or cur.parent == cur:
+            break
+        cur = cur.parent
+    return [n for n in names if n]
+
+
+def guess_place(path, roots=None, limit=None):
+    """A best-guess place from the folder names: {"place","lat","lon","kind","folder"} or None. Nearest folder wins; a city beats a country."""
+    idx = _gaz_index()
+    for folder in _path_names(path, roots, limit):
+        words = re.findall(r"[a-z0-9]+", _fold(PAREN_RE.sub("", folder)))
+        best = None
+        for n in range(min(_GAZ["maxn"], len(words)), 0, -1):          # the longest name first: "New York" before "York"
+            hits = [idx[k] for k in (" ".join(words[i:i + n]) for i in range(len(words) - n + 1)) if k in idx]
+            if hits:
+                best = next((h for h in hits if h[3] == "t"), hits[0])    # a city beats a country
+                break
+        if best:
+            return {"place": best[0], "lat": best[1], "lon": best[2], "kind": "city" if best[3] == "t" else "country", "folder": folder}
+    return None
+
+
+_MONTHS = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6, "jul": 7, "aug": 8, "sep": 9, "sept": 9, "oct": 10, "nov": 11, "dec": 12,
+           "january": 1, "february": 2, "march": 3, "april": 4, "june": 6, "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12}
+_YMD = re.compile(r"(?<!\d)((?:19|20)\d\d)[-_. /]?(0[1-9]|1[0-2])[-_. /]?(0[1-9]|[12]\d|3[01])(?!\d)")
+_YM = re.compile(r"(?<!\d)((?:19|20)\d\d)[-_. /](0[1-9]|1[0-2])(?!\d)")
+_MY = re.compile(r"(?<![a-z])(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)[a-z]*[\s,._-]*((?:19|20)\d\d)(?!\d)", re.I)
+_YEAR = re.compile(r"(?<!\d)((?:19|20)\d\d)(?!\d)")
+
+
+def date_hint_from_name(name, now=None):
+    """What a folder name says about when its pictures were taken: {"year","month","day","precision","epoch"} or None."""
+    now = now or time.time()
+    this_year = time.gmtime(now).tm_year
+
+    def mk(y, mo, d, prec):
+        try:
+            t = datetime(y, mo or 7, d or (15 if mo else 1), 12, 0, 0, tzinfo=timezone.utc).timestamp()
+        except ValueError:
+            return None
+        if y > this_year or t > now + 86400:
+            return None
+        return {"year": y, "month": mo, "day": d, "precision": prec, "epoch": int(t)}
+    years = set(_YEAR.findall(name))
+    if len(years) > 1 and not _YMD.search(name):
+        return None                                           # "2015-2017": a range says nothing precise
+    m = _YMD.search(name)
+    if m:
+        return mk(int(m.group(1)), int(m.group(2)), int(m.group(3)), "day")
+    m = _YM.search(name)
+    if m:
+        return mk(int(m.group(1)), int(m.group(2)), None, "month")
+    m = _MY.search(name)
+    if m:
+        return mk(int(m.group(2)), _MONTHS.get(m.group(1).lower()) or _MONTHS.get(m.group(1).lower()[:3]), None, "month")
+    m = _YEAR.search(name)
+    if m:
+        return mk(int(m.group(1)), None, None, "year")
+    return None
+
+
+def date_hint_from_path(path, roots=None, now=None, limit=None):
+    for folder in _path_names(path, roots, limit):
+        h = date_hint_from_name(folder, now)
+        if h:
+            h["folder"] = folder
+            return h
+    return None
+
+
+def date_problem(hint, cur, now=None):
+    """None, or why a photo's date looks wrong: "missing", "future", "year" (does not fit the folder's year) or "month"."""
+    now = now or time.time()
+    if cur is None:
+        return "missing"
+    if cur > now + 2 * 86400:
+        return "future"
+    if not hint:
+        return None
+    t = time.gmtime(cur)
+    y = hint["year"]
+    if hint["precision"] == "year":
+        lo = datetime(y, 1, 1, tzinfo=timezone.utc).timestamp() - 2 * 86400
+        hi = datetime(y + 1, 1, 1, tzinfo=timezone.utc).timestamp() + 2 * 86400
+        return None if lo <= cur < hi else "year"
+    if t.tm_year != y and abs(cur - hint["epoch"]) > 45 * 86400:
+        return "year"
+    if hint["month"] and t.tm_year == y and abs(t.tm_mon - hint["month"]) > 1 and abs(cur - hint["epoch"]) > 45 * 86400:
+        return "month"
+    return None
+
+
+def date_args(epoch, is_video):
+    dt = datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y:%m:%d %H:%M:%S")
+    if is_video:
+        return ["-api", "QuickTimeUTC=1", f"-QuickTime:CreateDate={dt}", f"-QuickTime:ModifyDate={dt}",
+                f"-QuickTime:MediaCreateDate={dt}", f"-QuickTime:TrackCreateDate={dt}"]
+    return [f"-AllDates={dt}", f"-XMP:DateCreated={dt}"]
+
+
+def strip_date_args(args):
+    out, skip = [], False
+    for i, a in enumerate(args):
+        if skip:
+            skip = False
+            continue
+        if a == "-api" and i + 1 < len(args) and args[i + 1].startswith("QuickTimeUTC"):
+            skip = True
+            continue
+        if a.startswith(("-AllDates=", "-XMP:DateCreated=", "-QuickTime:CreateDate=", "-QuickTime:ModifyDate=", "-QuickTime:MediaCreateDate=", "-QuickTime:TrackCreateDate=")):
+            continue
+        out.append(a)
+    return out
+
+
+def gps_args(lat, lon, is_video, guessed=True):
+    if is_video:
+        c = f"{lat}, {lon}, 0"
+        return [f"-Keys:GPSCoordinates={c}", f"-UserData:GPSCoordinates={c}"]
+    a = [f"-GPSLatitude={abs(lat)}", f"-GPSLatitudeRef={'N' if lat >= 0 else 'S'}", f"-GPSLongitude={abs(lon)}", f"-GPSLongitudeRef={'E' if lon >= 0 else 'W'}"]
+    if guessed:
+        a += [f"-XMP-dc:Subject-={GUESS_TAG}", f"-XMP-dc:Subject+={GUESS_TAG}"]
+    return a
+
+
+GUESS_TAG = "Backstory: location guessed from folder name"
+
+
+def apply_sanity(m, args, ext, d, ex_now, final_taken, row, exif_args, taken):
+    """Folder-name date and place helpers for one file. Returns (exif_args, taken, final_taken, used, ex_now). Fills gaps; fixes
+    a wrong year only in 'fix' mode; never touches a location that exists."""
+    fd = getattr(args, "folder_dates", "") or ""
+    gg = bool(getattr(args, "guess_gps", False))
+    is_video = ext in VIDEO_EXT
+    used = False
+    if not ex_now:
+        ex_now = read_existing(m, is_video)
+    if ex_now.get("_failed"):
+        return exif_args, taken, final_taken, False, ex_now
+    now = time.time()
+    cur = final_taken or (_epoch(ex_now.get("date", "")) if ex_now.get("date") and not ex_now["date"].startswith("0000") else None)
+    hint = date_hint_from_path(m, getattr(args, "roots", None))
+    prob = date_problem(hint, cur, now)
+    if prob in ("future", "year", "month") and not (fd == "fix" and prob in ("future", "year") and hint):
+        row["date_flag"] = prob                                  # reported, not changed
+        row["date_note"] = {"future": "this photo's date is in the future, so it is wrong",
+                            "year": "the date does not fit the year in the folder name ('%s')" % (hint or {}).get("folder", ""),
+                            "month": "the date is a few months away from the folder name ('%s')" % (hint or {}).get("folder", "")}[prob]
+    if fd and hint and ((prob == "missing") or (fd == "fix" and prob in ("future", "year"))) and ext not in NO_WRITE_EXT:
+        before = ex_now.get("date", "") if prob != "missing" else ""
+        exif_args = strip_date_args(exif_args) + date_args(hint["epoch"], is_video)
+        taken = final_taken = hint["epoch"]
+        row["date"] = "added" if prob == "missing" else "replaced"
+        row["date_before"] = (str(before) or "")[:19] if prob != "missing" else ""
+        row["date_fix"] = "filled" if prob == "missing" else "corrected"
+        row["date_flag"] = prob if prob != "missing" else ""
+        row["date_note"] = "date set from the folder name '%s'%s" % (hint["folder"], "" if prob == "missing" else " (the photo said %s)" % (str(before)[:10] or "a wrong date"))
+        used = True
+    if gg and ex_now.get("lat") is None and not (row.get("gps") in ("added", "replaced", "same", "kept")):
+        pl = guess_place(m, getattr(args, "roots", None))
+        if pl:
+            exif_args = exif_args + gps_args(pl["lat"], pl["lon"], is_video, ext not in NO_WRITE_EXT and not is_video)
+            row["gps"], row["gps_google"], row["gps_guess"] = "added", "%.4f, %.4f" % (pl["lat"], pl["lon"]), "%s (%s, from folder '%s')" % (pl["place"], pl["kind"], pl["folder"])
+            used = True
+    return exif_args, taken, final_taken, used, ex_now
+
+
 def process(m, idx, args, out_root):
     sc, how = find_sidecar(m, idx)
     if how == "tree-ambiguous":
@@ -864,6 +1473,11 @@ def process(m, idx, args, out_root):
     exif_args, taken = build_args(d, ext, args.overwrite, skip) if d else ([], None)
     if ex_now.get("rating") and "-XMP:Rating=5" in exif_args:
         exif_args.remove("-XMP:Rating=5")          # a rating you gave yourself is not replaced
+    sanity = False
+    if ext not in NO_WRITE_EXT and not read_failed and (ex_now or getattr(args, "folder_dates", "") or getattr(args, "guess_gps", False)):
+        exif_args, taken, final_taken, sanity, ex_now = apply_sanity(m, args, ext, d, ex_now, final_taken, row, exif_args, taken)
+        if sanity and not d:
+            d = {"_sanity": True}
     if final_taken:
         taken = final_taken  # file times follow the date that actually won
     dest, at_dest = None, False
@@ -977,7 +1591,7 @@ def sort_one(m, idx, args, out_root):
     if sc:  # keep the info file next to its photo so metadata can be fixed afterwards
         jd = dest.with_name(dest.name + ".json")
         if not jd.exists():
-            shutil.copy2(sc, jd)
+            safe_copy(sc, jd)
     row["status"] = "placed"
     record_progress(args, m, dest)
     return row
@@ -1204,7 +1818,7 @@ def convert_file(src, root, opts, progress=None):
             if sp.exists():
                 dp = final.with_name(final.name + sc[len(src.name):])
                 if not dp.exists():
-                    shutil.copy2(sp, dp)
+                    safe_copy(sp, dp)
     row["size_after"] = final.stat().st_size
     action = opts.get("action", "keep")
     try:
@@ -1215,7 +1829,7 @@ def convert_file(src, root, opts, progress=None):
             dest = Path(root) / ORIGINALS_DIR / src.relative_to(root)
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest = unique_dest(dest)
-            shutil.move(str(src), str(dest))
+            safe_move(str(src), str(dest))
             row["original"] = f"moved to {dest}"
         else:
             row["original"] = "kept"
@@ -1410,7 +2024,7 @@ def fix_extensions(folders, dry_run, progress=None, rename_json=True, aside=Fals
                 else:
                     try:
                         dest.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.move(str(p), _free_name(str(dest)) if dest.exists() else str(dest))
+                        safe_move(str(p), _free_name(str(dest)) if dest.exists() else str(dest))
                         row["action"] += " (moved aside)"
                     except OSError as e:
                         row["detail"] += f"; could not move aside: {e}"
@@ -1570,7 +2184,7 @@ def merge_dir(src, dst, dupes_action, stats):
                 os.remove(sp)
                 continue
             if not os.path.exists(tp):
-                shutil.move(sp, tp)
+                safe_move(sp, tp)
                 stats["moved"] += 1
             elif _same_content(sp, tp):
                 stats["dupes"] += 1
@@ -1579,9 +2193,9 @@ def merge_dir(src, dst, dupes_action, stats):
                 else:
                     aside = os.path.join(os.path.dirname(dst), "_duplicates", os.path.basename(dst), rel if rel != "." else "")
                     os.makedirs(aside, exist_ok=True)
-                    shutil.move(sp, _free_name(os.path.join(aside, f)) if os.path.exists(os.path.join(aside, f)) else os.path.join(aside, f))
+                    safe_move(sp, _free_name(os.path.join(aside, f)) if os.path.exists(os.path.join(aside, f)) else os.path.join(aside, f))
             else:
-                shutil.move(sp, _free_name(tp))
+                safe_move(sp, _free_name(tp))
                 stats["moved"] += 1
                 stats["conflicts"] += 1
     for dp, _, _ in os.walk(src, topdown=False):
@@ -1790,7 +2404,7 @@ def merge_trees(roots, dest, opts, dry_run=False, on_progress=None, on_item=None
         target = Path(target)
         target.parent.mkdir(parents=True, exist_ok=True)
         if is_bundle_item:
-            shutil.move(src, str(target)) if move else shutil.copytree(src, str(target), symlinks=True)
+            safe_move(src, str(target)) if move else safe_copytree(src, str(target))
         else:
             place_file(Path(src), target, move)
 
@@ -1809,7 +2423,7 @@ def merge_trees(roots, dest, opts, dry_run=False, on_progress=None, on_item=None
             if jd.exists():
                 return 0
             jd.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(sc, jd)
+            safe_copy(sc, jd)
         return 1
 
     def json_mark(src):
@@ -1843,7 +2457,7 @@ def merge_trees(roots, dest, opts, dry_run=False, on_progress=None, on_item=None
                     if dupes == "delete":
                         os.remove(src)
                     else:
-                        shutil.move(src, aside(DUPES_DIR, dparts, name))
+                        safe_move(src, aside(DUPES_DIR, dparts, name))
                     row["detail"] += "; extra copy " + ("deleted" if dupes == "delete" else "moved to _duplicates")
                 return row
             row["dest"] = str(target)
@@ -1868,7 +2482,7 @@ def merge_trees(roots, dest, opts, dry_run=False, on_progress=None, on_item=None
                     if dupes == "delete":
                         os.remove(src)
                     else:
-                        shutil.move(src, aside(DUPES_DIR, dparts, name))
+                        safe_move(src, aside(DUPES_DIR, dparts, name))
                     row["detail"] = "extra copy " + ("deleted" if dupes == "delete" else "moved to _duplicates")
             elif existing:
                 per_root[ri]["conflicts"] += 1
@@ -1893,10 +2507,10 @@ def merge_trees(roots, dest, opts, dry_run=False, on_progress=None, on_item=None
                         row["status"], row["detail"] = "replaced", f"{conflict} file takes the name; the other is in {CONFLICTS_DIR}"
                         if not dry_run:
                             if target.exists():
-                                shutil.move(str(target), aside(CONFLICTS_DIR, dparts, name))
+                                safe_move(str(target), aside(CONFLICTS_DIR, dparts, name))
                                 oj = Path(str(target) + ".json")
                                 if oj.exists():
-                                    shutil.move(str(oj), aside(CONFLICTS_DIR, dparts, name + ".json"))
+                                    safe_move(str(oj), aside(CONFLICTS_DIR, dparts, name + ".json"))
                             put(src, target, is_b)
                         claimed[str(target)] = src
                         row["json"] = json_for(src, target)
@@ -2359,6 +2973,17 @@ def assess(entries, dest="", progress=None, should_stop=None, sample_n=120):
         ent = Path(entries[oi]).expanduser() if oi < len(entries) else Path("")
         kind = "photos library" if ent.suffix.lower() == ".photoslibrary" else ("zip files" if any(zip_owner.get(z) == oi for z in zips) else "folder")
         F["sources"].append({"label": labels[oi] if oi < len(labels) else "?", "kind": kind, "media": src_stat[oi]["media"], "bytes": src_stat[oi]["bytes"]})
+    # Folder names that carry a date or a place (no file is opened for this)
+    cache = {}
+    hint_files = place_files = 0
+    for m_ in media:
+        par = "/" + str(m_[0].parent)
+        if par not in cache:
+            fp = par + "/x"
+            cache[par] = (bool(date_hint_from_path(fp, None, None, 4)), bool(guess_place(fp, None, 4)))
+        hint_files += cache[par][0]
+        place_files += cache[par][1]
+    F["hint_files"], F["place_files"] = hint_files, place_files
     # A small sample of real files: how many already have a date and a location, and what Google's info would add
     cand = [m for m in media if m[0].suffix.lower() in MEDIA_EXT and m[0].suffix.lower() not in NO_WRITE_EXT and 0 < m[1] <= 60 * 1024 * 1024]
     rnd = random.Random(7)
@@ -2366,7 +2991,8 @@ def assess(entries, dest="", progress=None, should_stop=None, sample_n=120):
     if pick and shutil.which("exiftool"):
         tmp = tempfile.mkdtemp(prefix="metadatafixer_assess_")
         story = []
-        S = {"n": 0, "has_date": 0, "has_gps": 0, "has_desc": 0, "with_json": 0, "add_date": 0, "add_gps": 0, "add_desc": 0, "diff_date": 0, "diff_gps": 0}
+        S = {"n": 0, "has_date": 0, "has_gps": 0, "has_desc": 0, "with_json": 0, "add_date": 0, "add_gps": 0, "add_desc": 0, "diff_date": 0, "diff_gps": 0,
+             "date_odd": 0, "future": 0, "no_date_hint": 0, "gps_guess": 0}
         try:
             zfs = {}
             for k, (vp, sz, crc, src, mem) in enumerate(pick, 1):
@@ -2389,6 +3015,14 @@ def assess(entries, dest="", progress=None, should_stop=None, sample_n=120):
                 has_t = bool(ex.get("desc"))
                 S["has_date"] += has_d
                 S["has_gps"] += has_g
+                vpath = "/" + str(vp)
+                hint_ = date_hint_from_path(vpath, None, None, 4)
+                cur_ = _epoch(str(ex.get("date"))) if has_d else None
+                why_ = date_problem(hint_, cur_) if (has_d and cur_) else None
+                S["future"] += why_ == "future"
+                S["date_odd"] += why_ == "year"
+                S["no_date_hint"] += bool((not has_d) and hint_)
+                S["gps_guess"] += bool((not has_g) and guess_place(vpath, None, 4))
                 S["has_desc"] += has_t
                 sc = matched_paths.get(str(vp))
                 if sc is not None:
@@ -3173,7 +3807,8 @@ def health_scan(roots, deep=False, progress=None, should_stop=None, exif_cap=400
         pool = [f for f in files if f[2] in MEDIA_EXT]
         rnd = random.Random(11)
         pick = pool if (deep and len(pool) <= exif_cap) else rnd.sample(pool, min(len(pool), exif_cap if deep else 400))
-        mism = no_date = no_gps = yr_mismatch = n_read = 0
+        mism = no_date = no_gps = yr_mismatch = n_read = future = month_mis = fillable = guessable = 0
+        date_ex, fut_ex, place_ex = [], [], []
         models = Counter()
         mism_list = []
         for k in range(0, len(pick), 300):
@@ -3199,12 +3834,26 @@ def health_scan(roots, deep=False, progress=None, should_stop=None, exif_cap=400
                     d = str(it.get("DateTimeOriginal") or it.get("CreateDate") or "")
                     if not d or d.startswith("0000"):
                         no_date += 1
+                        if date_hint_from_path(p, roots):
+                            fillable += 1
                     else:
-                        m = re.search(r"Photos from (\d{4})", p)
-                        if m and d[:4].isdigit() and d[:4] != m.group(1):
+                        ep = _epoch(d)
+                        why = date_problem(date_hint_from_path(p, roots), ep) if ep else None
+                        if why == "future":
+                            future += 1
+                        elif why == "year":
                             yr_mismatch += 1
+                        elif why == "month":
+                            month_mis += 1
+                        if why in ("future", "year") and len(date_ex if why == "year" else fut_ex) < 6:
+                            (date_ex if why == "year" else fut_ex).append("%s (in '%s') says %s" % (os.path.basename(p), (date_hint_from_path(p, roots) or {}).get("folder", os.path.basename(os.path.dirname(p))), d[:10]))
                     if it.get("GPSLatitude") is None:
                         no_gps += 1
+                        pg = guess_place(p, roots)
+                        if pg:
+                            guessable += 1
+                            if len(place_ex) < 6:
+                                place_ex.append("%s: %s" % (pg["folder"], pg["place"]))
                     if it.get("Model"):
                         models[str(it["Model"])] += 1
             except (ValueError, OSError):
@@ -3212,6 +3861,7 @@ def health_scan(roots, deep=False, progress=None, should_stop=None, exif_cap=400
             finally:
                 Path(arg).unlink(missing_ok=True)
         deep_stats = {"read": n_read, "pool": len(pool), "mismatch": mism, "no_date": no_date, "no_gps": no_gps, "year_mismatch": yr_mismatch,
+                      "future": future, "month_mismatch": month_mis, "fillable": fillable, "guessable": guessable, "date_examples": date_ex, "future_examples": fut_ex, "place_examples": place_ex,
                       "models": models.most_common(5), "mism_list": mism_list, "sampled": not deep or len(pool) > exif_cap}
     # ---------------------------------------------------------------- findings
     def add(fid, cat, sev, title, detail, count=0, nbytes=0, tab="", label="", extra=None):
@@ -3244,7 +3894,16 @@ def health_scan(roots, deep=False, progress=None, should_stop=None, exif_cap=400
         if pct >= 2:
             add("nodate", "meta", "warn" if pct < 20 else "bad", "Photos with no date inside", "About %d%% of the files checked have no date taken, so apps cannot place them on your timeline." % pct, deep_stats["no_date"], 0, "guided", "Open Guided")
         if deep_stats["year_mismatch"]:
-            add("yearmis", "meta", "info", "Photos in the wrong year folder", "%s files sit in a 'Photos from YYYY' folder that does not match the year inside the photo." % f"{deep_stats['year_mismatch']:,}", deep_stats["year_mismatch"])
+            add("yearmis", "meta", "warn", "Dates that do not fit the folder", "%s photos sit in a folder named for a year or month (like '2017' or '2026-06') but the date inside the photo is a different year. This usually means the picture lost its metadata somewhere along the way." % f"{deep_stats['year_mismatch']:,}",
+                deep_stats["year_mismatch"], 0, "guided", "Open Guided", {"examples": deep_stats["date_examples"]})
+        if deep_stats["future"]:
+            add("future", "meta", "bad", "Dates in the future", "%s photos claim to be taken in the future, which cannot be right." % f"{deep_stats['future']:,}",
+                deep_stats["future"], 0, "guided", "Open Guided", {"examples": deep_stats["future_examples"]})
+        if deep_stats["fillable"]:
+            add("fillable", "meta", "info", "No date inside, but the folder name has one", "%s photos have no date taken, yet their folder name gives the year. Backstory can fill it in." % f"{deep_stats['fillable']:,}", deep_stats["fillable"], 0, "guided", "Open Guided")
+        if deep_stats["guessable"]:
+            add("guessable", "meta", "info", "No location, but the folder names a place", "%s photos have no location, but the folder name mentions a place you could safely guess (for example %s). Backstory can add an approximate location and label it as a guess." % (f"{deep_stats['guessable']:,}", "; ".join(deep_stats["place_examples"][:2])),
+                deep_stats["guessable"], 0, "guided", "Open Guided", {"examples": deep_stats["place_examples"]})
     if empty:
         add("empty", "folders", "info", "Empty folders", "%s hold no files." % _pl(len(empty), "folder"), len(empty), 0, "clean", "Open Clean up")
     if sim:
