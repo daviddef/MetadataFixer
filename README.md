@@ -4,6 +4,7 @@ Gives every photo its backstory back. A free, local, private app for taking cont
 
 ## What it does
 - **Fix metadata** from Google Takeout `.json` files (dates, locations, captions, people, favourites), across zip files and batches, with Live Photo re-pairing, edited-copy handling and dates from file names.
+- **Time zones, dates and places:** dates written as local time with a UTC offset; missing dates rebuilt from every clue (file name, neighbouring photo numbers, folder, file time) with a confidence; locations filled from nearby photos or a GPX track; a pre-flight check before anything is touched; a shareable migration receipt after.
 - **Dates and places from folder names:** fill a missing date from a folder called `2017` or `2026-06`; optionally correct dates that disagree with the folder or lie in the future; optionally guess an approximate location from a folder like `Johannesburg` (labelled as a guess, never over an existing location); flag locations that look mismatched.
 - **Merge and de-duplicate** libraries: exact duplicates, near-identical pictures with matching rules and ordered keeper rules (favourite, edited, resolution, size, metadata, album...), bursts kept by default, missing metadata carried onto the kept copy. **Compare libraries** shows how alike two libraries are and which copy a merge would keep.
 - **Clean up, convert and check:** junk and odd files, look-alike folders, old video formats to MP4, the same file in several formats, and a library **Health** score with full **Diagnostics**.
@@ -33,7 +34,7 @@ Existing EXIF values are kept and only missing tags are filled in; add `--overwr
 
 ## Notes
 - Handles `.supplemental-metadata.json` (including truncated), 46-character name truncation, `(1)` duplicates, `-edited` copies and live-photo videos.
-- Google stores times in UTC and they are written as-is (time-zone correction is on the roadmap).
+- Google stores times in UTC. The app writes local time plus a UTC offset (option *Correct the time zone*, on by default); the command line still writes them as-is.
 - Formats exiftool can't write (avi, mkv, wmv, mpg, mts, bmp) only get their modified time fixed.
 - Re-pairing Live Photos (`--pair-live` with `--out`, or the app's option) copies each still's Apple ContentIdentifier onto its video and saves it as `.MOV`. Stills that lost their Apple ID are reported as `no-id` / `no-still`.
 

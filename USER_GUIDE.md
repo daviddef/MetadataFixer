@@ -244,6 +244,40 @@ Nothing is changed by diagnostics.
 - A zip with a damaged or password-protected file inside no longer stops the run: that file is listed in the report, the rest carry on, and that zip is not marked as finished so you can run it again.
 - The app only answers requests from its own window.
 
+## Time zones (Guided and Fix: *Correct the time zone of dates*)
+
+Google stores every photo time in **UTC**. Apple Photos reads a time with no zone as **local time**, so a photo taken at noon in Johannesburg could show 10:00, and one taken late in the evening could land on the wrong day. With this option on (it is on in every style), Backstory writes the **local wall-clock time together with its UTC offset** (for example *12:00 +02:00*):
+- if the photo has a location, the time zone of that place is used (daylight saving included, from the computer's built-in time-zone data);
+- if it has no location, **this Mac's time zone** is used;
+- **videos keep UTC**, because video files define their times that way.
+The zone for a location comes from the nearest of about 100 reference cities. Near a zone border it can be one zone out; the report shows the zone used.
+
+## Pre-flight check (Check my files)
+
+**Check my files** now starts with a **Pre-flight check**: a verdict (*Ready*, *Check first* or *Not ready*) and a short list. It shows the share of photos with a Google info file, photos with none (and how many can still get a date from their name), info files with no photo, Google's newer *.supplemental-metadata* names, edited copies, Live Photos, Motion Photos, exact duplicates, empty files, damaged or missing zips, free space, and an estimate of how many dates, locations and captions the restore will add. Nothing is changed.
+
+## Smarter dates and locations (Guided and Fix, under Customise)
+
+- **Reconstruct missing dates from every clue.** For a photo with no date inside, Backstory combines the date in its **file name**, the **photos numbered either side of it** (IMG_0412 between two dated neighbours), its **folder name** and the file's **modified time**. Each result gets a **confidence** (high, medium, low; two clues that agree raise it) and says why in the report (*date_note*, *date_conf*). Choose the lowest confidence you will accept: *only when sure*, *fairly sure*, or *best guess*. A date that already exists is never changed.
+- **Fill missing locations from photos taken minutes apart** (⚠️). A photo with no location takes the location of photos taken within about 30 minutes before and after it when those are close together (or one very close neighbour within 15 minutes). It never replaces a location and is labelled with a keyword.
+- **Fill missing locations from a GPX track** (optional). Choose a `.gpx` file from a watch or app; each photo's time is matched to where the track says you were (interpolated between points, within about 10 minutes of a point). Use it with *Correct the time zone*. A GPX location beats a nearby-photo location, which beats a folder-name guess.
+
+## Albums and Live Photos in Apple Photos
+
+After you check upload status (Monitor tab), Backstory also checks **whether your albums and Live Photos arrived**: how many album folders became albums with all their photos, which are missing or short, and how many Live Photos Photos holds against how many were sent. This reads a copy of Photos' own database, which Apple does not document, so treat it as a strong hint.
+
+## Migration receipt
+
+On the Monitor tab, **Make a migration receipt** creates a single shareable page (saved with your reports) with: what was done and when, how complete the metadata in the finished library is (a sample: dates, locations, captions, time-zone offsets, dates in the future), what is in Apple Photos and iCloud, and which albums or Live Photos need a look. It is made on your computer; nothing is uploaded. Keep your original Takeout until you have checked Photos and iCloud yourself.
+
+## Blurry pictures and screenshots
+
+Two more keeper rules can be added to the duplicate settings: **the sharper picture wins** (a blurry copy loses) and **a real photo beats a screenshot**. They are off in most styles and on in *Thorough*. Sharpness is measured on a small copy of each picture, so it compares fairly between copies of the same photo at different sizes. The **Health** tab also lists **screenshots** (by name, and PNGs with no camera information at a typical screen size) and warns when a noticeable share of a sample of pictures look very soft; that second one is only a hint, since a plain sky can score the same as blur.
+
+## Google Motion Photos
+
+Pixel *Motion Photos* (files like *PXL_…MP.jpg* or *MVIMG_…*) are a picture with a short MP4 attached to the end. The option **Save the video inside Google Motion Photos as its own file** saves that video next to the photo as a `.MP4` (the picture itself is not changed). Apple Photos cannot turn these into Live Photos, because a Live Photo needs an Apple ID written inside the still and exiftool cannot create one, so Photos imports a still plus a video.
+
 ## Dates and places from folder names (Guided and Fix)
 
 Folder names carry clues. A folder called **2017**, **2026-06**, **June 2015** or **Photos from 2019** tells us when its pictures were probably taken; a folder called **Johannesburg**, **South Africa** or **Japan 2025** tells us where. Backstory can use these clues, **only to fill gaps or to flag things that look wrong**. Each option below is also recommended (with your own numbers) by **Check my files**, and each is in Guided and on the Fix tab. Preview first.

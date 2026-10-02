@@ -7,7 +7,7 @@ Goal: the safest, simplest, free tool for taking control of a photo and video li
 | Area | Today |
 |---|---|
 | Fix metadata | Dates, GPS, captions, people, favourites from Google `.json`; zips read directly; matches across batches; date policy; Live Photo re-pairing; edited copies; dates from file names |
-| Dates and places | Fill missing dates from folder names; optionally correct wrong-year and future dates; optional guessed locations from folder names (labelled); mismatched-location flags |
+| Dates and places | Time-zone-correct dates; reconstruct missing dates from every clue with confidence; fill missing dates from folder names; optionally correct wrong-year and future dates; optional guessed locations from folder names, nearby photos or a GPX track (labelled); mismatched-location flags |
 | Merge and duplicates | Same-name folder merge, exact duplicates, near-identical pictures with matching rules and ordered keeper rules, bursts, metadata carry-over, Compare libraries |
 | Clean up and convert | Odd files, junk, name tidy, look-alike folders, empty folders; old videos to MP4, verified |
 | Health and diagnostics | Library health score, duplicate formats, date/location checks, full diagnostics, Photos and iCloud log monitor |
@@ -40,8 +40,8 @@ Most Takeout tools are one-shot scripts: they fix dates and stop, with no previe
 - ~~**Album preservation:**~~ DONE (keywords + albums csv): Takeout turns albums into folders and duplicates photos into them. Keep one copy, and write albums out as a list or as keywords so they are not lost.
 - ~~**Google edits handling:**~~ DONE: pair `-edited` versions with originals; choose keep both, keep edited or keep original.
 - **Missing and broken sidecars report:** list photos with no `.json`, ~~and offer a date from the filename~~ DONE (dates from file names) (`IMG_20190704_...`, `PXL_...`, `Screenshot ...`) when there is nothing else.
-- **Time zone care:** use the photo's location to put the right local time, not just UTC. (Apple Photos reads a time with no zone as local time, so UTC times can be hours off.) *Highest priority.*
-- **Takeout pre-flight report:** before anything is touched, count orphaned `.json` files, unmatched photos and edited pairs, and estimate the dates and locations the restore will add.
+- ~~**Time zone care**~~ DONE: local time with UTC offset, from the photo's location or this Mac's zone.
+- ~~**Takeout pre-flight report**~~ DONE (top of Check my files).
 - ~~**Review screen for near-duplicates:**~~ DONE (Similar tab): same photo at different sizes or re-saved versions, shown side by side, with a keep-best suggestion. Never automatic deletion.
 - ~~**Undo:**~~ DONE (History tab): one-click "put everything back" from the manifest for copy and move runs.
 - **Faster:** parallel hashing, smarter resume, progress that survives sleep.
@@ -52,10 +52,10 @@ Most Takeout tools are one-shot scripts: they fix dates and stop, with no previe
 - ~~**Library health report:**~~ DONE (Health tab). One page of what is wrong with a library: missing dates, no GPS, duplicates, odd formats, corrupt files, biggest folders.
 - **Corrupt file triage:** detect truncated or damaged photos and videos, and repair the simple cases (like the leading-bytes problem we saw).
 - **HEIC/RAW/format helpers:** optional convert for HEIC to JPG, and old RAW to DNG, with the same verify-before-replace rule.
-- **Location tools:** ~~guess from folder names~~ DONE; still to do: fill missing GPS from neighbouring photos taken minutes apart, GPX track import, place-name lookup offline.
-- **Receipt:** a shareable before/after report proving counts, dates, locations and albums arrived, including iCloud upload confirmation.
-- **Quality helpers:** blurry and screenshot detection feeding the keeper rules; side-by-side zoom compare.
-- **Motion Photos:** pair Google Motion Photo files as Live Photos.
+- **Location tools:** ~~guess from folder names~~ DONE; ~~fill from neighbouring photos~~ DONE, ~~GPX track import~~ DONE; still to do: place-name lookup offline.
+- ~~**Receipt**~~ DONE (Monitor tab): a shareable page with metadata coverage, Photos/iCloud counts, albums and Live Photos.
+- ~~**Quality helpers:**~~ blurry and screenshot detection DONE (keeper rules, Health). Still to do: side-by-side zoom compare.
+- ~~**Motion Photos**~~ extraction DONE (video saved as .MP4). Pairing as Apple Live Photos is not possible with exiftool alone.
 - **Face/people names** carried through as keywords for apps that read them.
 - **Scheduled "keep tidy"** for a watched folder.
 

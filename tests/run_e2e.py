@@ -906,8 +906,19 @@ def t_qa_hunt_regressions():
         results = []
         def go():
             results.append(post("/api/start", {"roots": [str(big)], "out": str(WORK / "dstart_out"), "dry_run": True})[0])
+        real_job = g.run_job
+        def slow_job(*a, **k):
+            with g.LOCK:
+                g.STATE.update(state="running", message="slow test job")
+            time.sleep(2.0)
+            with g.LOCK:
+                g.STATE.update(state="done", message="Finished")
+        g.run_job = slow_job
         ths = [threading.Thread(target=go) for _ in range(8)]
-        [t.start() for t in ths]; [t.join() for t in ths]
+        try:
+            [t.start() for t in ths]; [t.join() for t in ths]
+        finally:
+            time.sleep(2.2); g.run_job = real_job
         assert results.count(200) == 1 and results.count(409) == 7, results
         for _ in range(100):
             if g.STATE["state"] in ("done", "error", "idle"):
@@ -1032,12 +1043,32 @@ def t_blur_and_screenshots():
     assert any(f["id"] == "screenshots" and f["count"] == 1 for f in r["findings"]), [f["id"] for f in r["findings"]]
 
 
+def t_motion_photo_extract():
+    d = WORK / "motion"; d.mkdir()
+    jpeg(d / "PXL_20230101_120000.MP.jpg", seed=95)
+    subprocess.run(["exiftool", "-q", "-overwrite_original", "-XMP-GCamera:MicroVideo=1", "-XMP-GCamera:MicroVideoOffset=100", str(d / "PXL_20230101_120000.MP.jpg")], check=True)
+    video(d / "v.mp4", 1)
+    with open(d / "PXL_20230101_120000.MP.jpg", "ab") as fh:
+        fh.write((d / "v.mp4").read_bytes())
+    (d / "v.mp4").unlink()
+    jpeg(d / "plain.jpg", seed=96)
+    assert fx.is_motion_photo(d / "PXL_20230101_120000.MP.jpg") and not fx.is_motion_photo(d / "plain.jpg")
+    g.run_job([str(d)], str(WORK / "motion_out"), True, False, motion=True); sm = state_ok()
+    assert sm["live"].get("motion-found") == 1, sm["live"]
+    g.run_job([str(d)], str(WORK / "motion_out"), False, False, motion=True); sm = state_ok()
+    out = list((WORK / "motion_out").rglob("*.MP4"))
+    assert len(out) == 1 and sm["live"].get("motion-extracted") == 1, (out, sm["live"])
+    pr = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(out[0])], capture_output=True, text=True)
+    assert float(pr.stdout.strip()) > 0.5, pr.stdout
+    assert list((WORK / "motion_out").rglob("plain.MP4")) == []
+
+
 ORDER = ["t_fix_copy", "t_fix_namedate", "t_fix_inplace", "t_fix_move", "t_fix_dryrun_changes_nothing", "t_fix_zip", "t_zip_resume", "t_zip_needs_dest", "t_zip_corrupt",
          "t_edited_policies", "t_cancel_mid_run", "t_unreadable_and_zero", "t_dest_not_writable", "t_exiftool_missing", "t_low_disk_zip", "t_assess_and_recommend",
          "t_assess_multi_and_photoslib", "t_guided_end_to_end", "t_guided_no_dest", "t_merge_variants", "t_merge_refuses_unsafe", "t_merge_move_in_place", "t_cleanup_all",
          "t_cleanup_refuses_broad", "t_consolidate", "t_convert", "t_convert_stop", "t_similar_apply_undo", "t_health_and_formats", "t_undo_copy_run", "t_photos_plan_and_run",
          "t_photos_applescript_injection_safe", "t_photos_errors", "t_monitor_rules", "t_monitor_job_paste", "t_compare_and_near", "t_diagnostics", "t_history_report",
-         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs", "t_audit_regressions", "t_dates_and_places", "t_resilient_copy", "t_rerun_over_http", "t_keeper_rules_and_matching", "t_bursts_and_compare_rules", "t_qa_hunt_regressions", "t_timezone_correct_dates", "t_preflight_report", "t_albums_and_live_arrival", "t_receipt", "t_context_dates_and_locations", "t_blur_and_screenshots"]
+         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs", "t_audit_regressions", "t_dates_and_places", "t_resilient_copy", "t_rerun_over_http", "t_keeper_rules_and_matching", "t_bursts_and_compare_rules", "t_qa_hunt_regressions", "t_timezone_correct_dates", "t_preflight_report", "t_albums_and_live_arrival", "t_receipt", "t_context_dates_and_locations", "t_blur_and_screenshots", "t_motion_photo_extract"]
 if __name__ == "__main__":
     only = sys.argv[1:]
     for n in ORDER:

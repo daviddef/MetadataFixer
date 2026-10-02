@@ -1888,6 +1888,55 @@ def apply_sanity(m, args, ext, d, ex_now, final_taken, row, exif_args, taken):
             used = True
     return exif_args, taken, final_taken, used, ex_now
 
+# ---- Google Motion Photos: a JPEG with a short MP4 stuck on the end -------------------------------------------------------
+MOTION_NAME_RE = re.compile(r"(\.MP(~\d+)?\.jpe?g$)|(^MVIMG_)", re.I)
+
+
+def is_motion_photo(path):
+    """True when the JPEG's XMP says it carries a motion video (Google's MotionPhoto / MicroVideo)."""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(131072)
+    except OSError:
+        return False
+    return head[:2] == b"\xff\xd8" and (b"MotionPhoto" in head or b"MicroVideo" in head)
+
+
+def extract_motion_video(path, dest=None):
+    """Save the short video hidden inside a Motion Photo as its own .MP4 next to it (the picture is not changed). Returns the new path or None."""
+    path = Path(path)
+    if path.suffix.lower() not in (".jpg", ".jpeg") or not is_motion_photo(path):
+        return None
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    eoi = data.find(b"\xff\xd9")
+    start = -1
+    for m_ in re.finditer(b"ftyp", data):
+        i = m_.start() - 4
+        if i > (eoi if eoi > 0 else 0) and 8 <= int.from_bytes(data[i:i + 4], "big") <= 64:
+            start = i
+            break
+    if start < 0 or len(data) - start < 2048:
+        return None
+    out = Path(dest) if dest else path.with_suffix(".MP4")
+    if out.exists():
+        return out if out.stat().st_size == len(data) - start else None
+    try:
+        tmp = out.with_name(out.name + ".part")
+        tmp.write_bytes(data[start:])
+        os.replace(tmp, out)
+        try:
+            st = path.stat()
+            os.utime(out, (st.st_atime, st.st_mtime))
+        except OSError:
+            pass
+    except OSError:
+        return None
+    return out
+
+
 
 def process(m, idx, args, out_root):
     sc, how = find_sidecar(m, idx)
@@ -2005,6 +2054,8 @@ def process(m, idx, args, out_root):
     if args.dry_run:
         row["status"] = "would-update" if d else status0
         row["detail"] = " ".join(exif_args)[:200] if d else ""
+        if getattr(args, "motion", False) and ext in (".jpg", ".jpeg") and is_motion_photo(m):
+            row["live"] = "motion-found"
         return row
     target = dest if (out_root and at_dest) else m
     if out_root and not at_dest:
@@ -2040,6 +2091,16 @@ def process(m, idx, args, out_root):
             os.utime(target, (taken, taken))
         except OSError:
             pass
+    if getattr(args, "motion", False) and ext in (".jpg", ".jpeg"):
+        mv = extract_motion_video(target)
+        if mv:
+            row["live"] = "motion-extracted"
+            row["detail"] = ((row.get("detail") or "") + " saved the video inside this Motion Photo as " + mv.name).strip()[:300]
+            if taken:
+                try:
+                    os.utime(mv, (taken, taken))
+                except OSError:
+                    pass
     if out_root:
         record_progress(args, m, target)
     return row
@@ -3393,6 +3454,7 @@ def assess(entries, dest="", progress=None, should_stop=None, sample_n=120):
         if date_from_name(vp.name):
             F["name_date_candidates"] += 1
     used_json = {str(v) for v in matched_paths.values()}
+    F["motion_names"] = sum(1 for m_ in media if MOTION_NAME_RE.search(m_[0].name))
     F["orphan_json"] = sum(1 for vp, _, _ in jsons if str(vp) not in used_json and Path(DUP_RE.sub("", json_key(vp))).suffix in MEDIA_EXT)
     F["supplemental_json"] = sum(1 for vp, _, _ in jsons if ".supplemental-metadata" in vp.name.lower() or ".supplemental-meta" in vp.name.lower())
     # Exact duplicates
