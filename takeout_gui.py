@@ -8,6 +8,7 @@ server only listens on localhost. Needs exiftool (brew install exiftool).
 """
 import argparse
 import hashlib
+import tempfile
 import time
 import urllib.request
 import csv
@@ -26,7 +27,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.01-z3"
+VERSION = "2026.10.01-z4"
 class Cancelled(Exception):
     pass
 
@@ -41,13 +42,25 @@ def stopped_state(what="Nothing further was changed."):
         STATE.update(state="idle", phase=None, cv=None, message="Stopped by you. " + what)
 
 
-STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}, "recent": [], "clean": {"state": "idle"}, "update": {"state": "idle", "files": []}, "phase": None, "kind": "fix", "cv": None, "cancel": False, "version": VERSION, "boot": time.time()}
+STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}, "recent": [], "clean": {"state": "idle"}, "update": {"state": "idle", "files": []}, "phase": None, "kind": "fix", "cv": None, "cancel": False, "guided": None, "version": VERSION, "boot": time.time()}
 LOCK = threading.Lock()
 
 
 def choose_folders(prompt):
     """Native macOS picker allowing several folders; returns a list of POSIX paths."""
     script = ('set fs to choose folder with prompt "%s" with multiple selections allowed\n'
+              'set out to {}\nrepeat with f in fs\nset end of out to POSIX path of f\nend repeat\n'
+              'set AppleScript\'s text item delimiters to linefeed\nreturn out as text' % prompt)
+    try:
+        r = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
+    except FileNotFoundError:
+        return []
+    return [p.rstrip("/") for p in r.stdout.splitlines() if p.strip()] if r.returncode == 0 else []
+
+
+def choose_zips(prompt):
+    """Native macOS picker for Takeout .zip files (several allowed)."""
+    script = ('set fs to choose file with prompt "%s" of type {"public.zip-archive", "zip"} with multiple selections allowed\n'
               'set out to {}\nrepeat with f in fs\nset end of out to POSIX path of f\nend repeat\n'
               'set AppleScript\'s text item delimiters to linefeed\nreturn out as text' % prompt)
     try:
@@ -206,94 +219,193 @@ def write_text_summary(path, sm):
 def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=False, date_policy="earlier"):
     with LOCK:
         STATE.update(state="scanning", cancel=False, total=0, done=0, counts={}, message="Scanning folders...",
-                     report="", summary=None, scan=None, extra={}, recent=[], phase=None, kind="fix")
+                     report="", summary=None, scan=None, extra={}, recent=[], phase=None, kind="fix", **({} if IN_GUIDED[0] else {"guided": None}))
+    stage_dir = None
     try:
+        zips, folder_entries = fx.split_sources(roots)
         resolved, seen = [], set()
-        for r in roots:
-            p = Path(r).expanduser()
-            if not p.is_dir():
-                raise ValueError(f"Not a folder: {p}")
+        for p in folder_entries:
             rp = p.resolve()
             if rp not in seen:
                 seen.add(rp)
                 resolved.append(p)
-        if not resolved:
-            raise ValueError("Add at least one folder")
+        if not resolved and not zips:
+            raise ValueError("Add at least one folder or Takeout zip file")
+        if zips and not out:
+            raise ValueError("Choose a Destination: Takeout zip files are never changed, so the fixed copies need somewhere to go.")
+        if zips and move:
+            raise ValueError("Move cannot be used with zip files (they are never changed). Untick Move.")
         if move and not out:
             out = str(resolved[0])  # Move with no destination: merge into the first source folder, like Sort
         if not dry_run and not shutil.which("exiftool"):
             raise ValueError("exiftool not found. In Terminal run: brew install exiftool")
-        media, sidecars, mseen, sseen = [], [], set(), set()
-        noext = 0
-        for p in resolved:
-            m, sc = fx.scan(p)
-            noext += getattr(fx.scan, "noext", 0)
-            media += [x for x in m if x.resolve() not in mseen and not mseen.add(x.resolve())]
-            sidecars += [x for x in sc if x.resolve() not in sseen and not sseen.add(x.resolve())]
-        idx = fx.build_index(sidecars)
-        with LOCK:
-            STATE.update(state="running", total=len(media),
-                         scan={"media": len(media), "json": len(sidecars), "folders": len(resolved)},
-                         message=f"{len(media)} media files, {len(sidecars)} json files")
-        args = argparse.Namespace(dry_run=dry_run, overwrite=overwrite, pair_live=pair_live,
-                                  dedupe=dedupe, move=move, out_root=out or None, roots=resolved, date_policy=date_policy)
-        with LOCK:
-            STATE["message"] = "Finding exact duplicates..." if dedupe else "Preparing..."
-
-        def hashing(stage, done, todo):
-            check_cancel()
-            with LOCK:
-                STATE["phase"] = {"stage": stage, "done": done, "total": todo}
-                if stage == "dedupe":
-                    STATE["message"] = (f"Step 1: checking {todo:,} files that share a size with another file for "
-                                        f"exact duplicates ({done:,}/{todo:,})")
-                else:
-                    STATE["message"] = f"Step 2: reading Live Photo IDs ({done:,}/{todo:,} stills)"
-        fx.prepare(args, media, hashing)
-        with LOCK:
-            STATE["phase"] = None
-        with LOCK:
-            STATE["message"] = f"Step 3: fixing and placing {len(media):,} files"
         out_root = Path(out) if out else None
         rows, counts, extra = [], defaultdict(int), defaultdict(int)
         out_dirs, recent = set(), []
-        with ThreadPoolExecutor(max_workers=4) as ex:
-            def work(m):
+        all_sidecars, noext, dupe_bytes, claimed_all = [], 0, 0, set()
+        shared_sizes, prior_sig = set(), {}
+        zip_info = {"zips": 0, "skipped": 0, "bad": []}
+
+        def run_pass(media, sidecars, pass_roots, ns=""):
+            nonlocal dupe_bytes
+            idx = fx.build_index(sidecars)
+            args = argparse.Namespace(dry_run=dry_run, overwrite=overwrite, pair_live=pair_live,
+                                      dedupe=dedupe, move=move, out_root=out or None, roots=pass_roots,
+                                      date_policy=date_policy, manifest_ns=ns)
+
+            def hashing(stage, done, todo):
                 check_cancel()
-                return fx.guarded(fx.process)(m, idx, args, out_root)
-            for row in ex.map(work, media):
-                rows.append(row)
-                counts[row["status"]] += 1
-                if row["status"] in ("updated", "would-update"):
-                    if "replaced" in (row["date"], row["gps"], row["desc"]):
-                        extra["replaced_files"] += 1
-                    extra["fields_replaced"] += [row["date"], row["gps"], row["desc"]].count("replaced")
-                if row["status"] in ("updated", "would-update"):
-                    if row["date"] in ("added", "replaced"):
-                        extra["dates_changed"] += 1
-                    if row["gps"] in ("added", "replaced"):
-                        extra["gps_changed"] += 1
-                    if row["desc"] in ("added", "replaced"):
-                        extra["desc_changed"] += 1
-                if row["live"] == "paired":
-                    extra["live_paired"] += 1
-                if row["status"] in ("copy-error", "error", "exiftool-error"):
-                    extra["errors"] += 1
-                if row["status"] == "duplicate":
-                    extra["duplicates"] += 1
-                if row["output"]:
-                    extra["written"] += 1
-                    out_dirs.add(str(Path(row["output"]).parent))
-                    extra["folders"] = len(out_dirs)
-                recent.append(row)
-                del recent[:-12]
                 with LOCK:
-                    STATE["done"] = len(rows)
-                    STATE["counts"] = dict(counts)
-                    STATE["extra"] = dict(extra)
-                    STATE["recent"] = [{"name": Path(r["file"]).name, "status": r["status"],
-                                        "to": (Path(r["output"]).parent.name + "/" if r["output"] else ""),
-                                        "live": r["live"]} for r in recent]
+                    STATE["phase"] = {"stage": stage, "done": done, "total": todo}
+                    if stage == "dedupe":
+                        STATE["message"] = (f"Step 1: checking {todo:,} files that share a size with another file for "
+                                            f"exact duplicates ({done:,}/{todo:,})")
+                    else:
+                        STATE["message"] = f"Step 2: reading Live Photo IDs ({done:,}/{todo:,} stills)"
+            with LOCK:
+                STATE["message"] = "Finding exact duplicates..." if dedupe else "Preparing..."
+            fx.prepare(args, media, hashing)
+            args.claimed |= claimed_all
+            cur_sig = {}
+            if dedupe and zips and shared_sizes:
+                # the same photo in an earlier zip is not placed a second time (size + CRC32 fingerprint)
+                for m in media:
+                    try:
+                        if str(m) in args.dupes or m.stat().st_size not in shared_sizes:
+                            continue
+                        sg = fx.file_sig(m)
+                    except OSError:
+                        continue
+                    cur_sig[str(m)] = sg
+                    if sg in prior_sig:
+                        args.dupes[str(m)] = prior_sig[sg]
+                        args.dupe_bytes += sg[0]
+            with LOCK:
+                STATE["phase"] = None
+                STATE["message"] = (STATE.get("zipmsg", "") + f"fixing and placing {len(media):,} files") if zips else f"Step 3: fixing and placing {len(media):,} files"
+            with ThreadPoolExecutor(max_workers=4) as ex:
+                def work(m):
+                    check_cancel()
+                    return fx.guarded(fx.process)(m, idx, args, out_root)
+                for row in ex.map(work, media):
+                    rows.append(row)
+                    counts[row["status"]] += 1
+                    if row["status"] in ("updated", "would-update"):
+                        if "replaced" in (row["date"], row["gps"], row["desc"]):
+                            extra["replaced_files"] += 1
+                        extra["fields_replaced"] += [row["date"], row["gps"], row["desc"]].count("replaced")
+                        if row["date"] in ("added", "replaced"):
+                            extra["dates_changed"] += 1
+                        if row["gps"] in ("added", "replaced"):
+                            extra["gps_changed"] += 1
+                        if row["desc"] in ("added", "replaced"):
+                            extra["desc_changed"] += 1
+                    if row["live"] == "paired":
+                        extra["live_paired"] += 1
+                    if row["status"] in ("copy-error", "error", "exiftool-error"):
+                        extra["errors"] += 1
+                    if row["status"] == "duplicate":
+                        extra["duplicates"] += 1
+                    if row["output"]:
+                        extra["written"] += 1
+                        out_dirs.add(str(Path(row["output"]).parent))
+                        extra["folders"] = len(out_dirs)
+                    recent.append(row)
+                    del recent[:-12]
+                    with LOCK:
+                        STATE["done"] = len(rows)
+                        STATE["counts"] = dict(counts)
+                        STATE["extra"] = dict(extra)
+                        STATE["recent"] = [{"name": Path(r["file"]).name, "status": r["status"],
+                                            "to": (Path(r["output"]).parent.name + "/" if r["output"] else ""),
+                                            "live": r["live"]} for r in recent]
+            for r in rows[-len(media):] if media else []:
+                sg = cur_sig.get(r["file"])
+                if sg and r["output"] and sg not in prior_sig:
+                    prior_sig[sg] = r["output"]
+            dupe_bytes += getattr(args, "dupe_bytes", 0)
+            claimed_all.update(args.claimed)
+
+        # ---- ordinary folders
+        if resolved:
+            media, sidecars, mseen, sseen = [], [], set(), set()
+            for p in resolved:
+                m, sc = fx.scan(p)
+                noext += getattr(fx.scan, "noext", 0)
+                media += [x for x in m if x.resolve() not in mseen and not mseen.add(x.resolve())]
+                sidecars += [x for x in sc if x.resolve() not in sseen and not sseen.add(x.resolve())]
+            all_sidecars += sidecars
+            plan = fx.zip_plan(zips) if zips else []
+            with LOCK:
+                STATE.update(state="running", total=len(media) + sum(z["media"] for z in plan),
+                             scan={"media": len(media), "json": len(sidecars), "folders": len(resolved)},
+                             message=f"{len(media)} media files, {len(sidecars)} json files")
+            run_pass(media, sidecars, resolved)
+
+        # ---- Takeout zip files: one at a time, so only one zip's photos are ever unpacked
+        if zips:
+            plan = fx.zip_plan(zips)
+            bad = [z for z in plan if z["error"]]
+            zip_info["bad"] = [(z["name"], z["error"]) for z in bad]
+            good = [Path(z["path"]) for z in plan if not z["error"]]
+            if not good:
+                raise ValueError("None of the zip files could be opened: " + "; ".join(f"{n}: {e}" for n, e in zip_info["bad"]))
+            if not dry_run:
+                out_root.mkdir(parents=True, exist_ok=True)
+            parent = out_root if out_root.exists() else Path(tempfile.gettempdir())
+            stage_dir = parent / fx.ZIP_STAGE
+            shutil.rmtree(stage_dir, ignore_errors=True)
+            tree = stage_dir / "tree"
+            tree.mkdir(parents=True)
+            done_keys = fx.zips_done(out_root) if (out_root.exists() and not dry_run) else set()
+            todo = [z for z in good if fx.zip_key(z) not in done_keys]
+            zip_info["skipped"] = len(good) - len(todo)
+            from collections import Counter
+            sz = Counter(x for z in plan if Path(z["path"]) in todo for x in z["sizes"])
+            shared_sizes.update(k for k, v in sz.items() if v > 1 and k)
+            biggest = max((z["bytes"] for z in plan if Path(z["path"]) in todo), default=0)
+            free = shutil.disk_usage(parent).free
+            if todo and free < biggest * (1 if dry_run else 2) + 200 * 1024 * 1024:
+                raise ValueError("Not enough free space on the destination drive: about %s is needed while the largest zip is unpacked "
+                                 "(%s free). Free some space or choose another Destination." % (fmt_bytes(biggest * (1 if dry_run else 2)), fmt_bytes(free)))
+            with LOCK:
+                STATE.update(state="running", total=len(rows) + sum(z["media"] for z in plan if Path(z["path"]) in todo),
+                             message="Reading the info (.json) files from all zips...")
+            n_json = fx.stage_json(good, tree, check_cancel)
+            _, json_sidecars = fx.scan(tree)
+            all_sidecars += json_sidecars
+            with LOCK:
+                STATE["scan"] = {"media": sum(z["media"] for z in plan), "json": n_json, "folders": len(good), "zips": len(good)}
+            for k, z in enumerate(todo, 1):
+                check_cancel()
+                with LOCK:
+                    STATE["zipmsg"] = f"Zip {k} of {len(todo)} ({z.name}): "
+                    STATE["message"] = STATE["zipmsg"] + "unpacking photos and videos"
+                    STATE["phase"] = None
+                start = len(rows)
+                fx.stage_media(z, tree, check_cancel)
+                fx.fix_extensions([tree], False, rename_json=True, aside=False)
+                media, sidecars = fx.scan(tree)
+                noext += getattr(fx.scan, "noext", 0)
+                run_pass(media, sidecars, [tree], ns=fx.zip_key(z) + "::")
+                zip_info["zips"] += 1
+                for r in rows[start:]:
+                    try:
+                        r["file"] = z.name + "/" + str(Path(r["file"]).relative_to(tree))
+                    except ValueError:
+                        pass
+                for dp, dns, fns in os.walk(tree):
+                    for f in fns:
+                        if not f.lower().endswith(".json"):
+                            try:
+                                os.remove(os.path.join(dp, f))
+                            except OSError:
+                                pass
+                if not dry_run and not any(r["status"] in ("copy-error", "error", "exiftool-error") for r in rows[start:]):
+                    fx.mark_zip_done(out_root, z)
+            shutil.rmtree(stage_dir, ignore_errors=True)
+            stage_dir = None
+            sidecars = all_sidecars
         report_dir = out_root or Path.home() / "Desktop"
         report_dir.mkdir(parents=True, exist_ok=True)
         tag = "dryrun" if dry_run else "report"
@@ -315,14 +427,22 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
             w.writerows(changed)
         fx.close_all()
         pruned = fx.prune_empty_dirs(resolved) if (move and out_root and not dry_run) else 0
-        sm = summarise(rows, sidecars, resolved, dry_run)
+        sm = summarise(rows, all_sidecars, resolved or [out_root], dry_run)
         sm["pruned"] = pruned
         if noext:
             sm["tips"].insert(0, "%d files with no file extension were skipped (Fix only works on files with a known type, such as .jpg or .heic). "
                               "Open the Clean up tab, tick 'Fix files with no extension', then run Fix again." % noext)
         if pruned:
             sm["tips"].append("%d folders left empty by the move were removed. Google's .json files are left where they were; remove them with the Clean up tab, then use Empty folders to tidy the rest." % pruned)
-        sm["dupe_bytes"] = getattr(args, "dupe_bytes", 0)
+        sm["dupe_bytes"] = dupe_bytes
+        if zip_info["zips"] or zip_info["skipped"] or zip_info["bad"]:
+            sm["zip"] = zip_info
+            if zip_info["zips"]:
+                sm["tips"].insert(0, "Read %d Takeout zip file%s directly: nothing was unzipped to your drive and the zip files were not changed." % (zip_info["zips"], "" if zip_info["zips"] == 1 else "s"))
+            if zip_info["skipped"]:
+                sm["tips"].append("%d zip file%s already finished in an earlier run and %s skipped." % (zip_info["skipped"], "" if zip_info["skipped"] == 1 else "s", "was" if zip_info["skipped"] == 1 else "were"))
+            for n, e in zip_info["bad"]:
+                sm["tips"].append("Could not read %s (%s). It may be incomplete: download it again." % (n, e))
         sm["samples"] = [{"file": Path(r["file"]).name, "date": [r["date"], r["date_before"], r["date_google"], r.get("date_note", "")],
                           "gps": [r["gps"], r["gps_before"], r["gps_google"]],
                           "desc": [r["desc"], r["desc_before"], r["desc_google"]]}
@@ -336,10 +456,83 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
             fx.close_all()
         except Exception:
             pass
+        if stage_dir:
+            shutil.rmtree(stage_dir, ignore_errors=True)
         stopped_state("Files already handled stay done; run it again to carry on.")
     except Exception as e:  # surface any failure in the UI
+        if stage_dir:
+            shutil.rmtree(stage_dir, ignore_errors=True)
         with LOCK:
             STATE.update(state="error", message=str(e))
+
+
+IN_GUIDED = [False]
+
+
+def run_guided(roots, out, dry_run, opts):
+    try:
+        _run_guided(roots, out, dry_run, opts)
+    finally:
+        IN_GUIDED[0] = False
+
+
+def _run_guided(roots, out, dry_run, opts):
+    """Fix my Takeout: the safe sequence in one go. Each step is an ordinary job; the results are combined."""
+    IN_GUIDED[0] = True
+    with LOCK:
+        STATE.update(state="scanning", cancel=False, total=0, done=0, counts={}, message="Getting ready...", report="",
+                     summary=None, scan=None, extra={}, recent=[], phase=None, kind="fix", cv=None,
+                     guided={"steps": [], "i": 0, "final": False})
+    try:
+        zips, folders = fx.split_sources(roots)
+        if not zips and not folders:
+            raise ValueError("Add your Takeout folders or zip files in the bar at the top")
+        if not out:
+            raise ValueError("Choose a Destination in the bar at the top. Your originals are never changed: the finished library is copied there.")
+        steps = []
+        if opts.get("fix_ext") and folders:
+            steps.append(("Repair files with a missing file type", lambda: run_cleanup(
+                [str(p) for p in folders], dry_run, {"ext": {"json": True, "aside": False}, "json": False, "json_other": False,
+                                                     "junk": None, "names": None, "empty": None})))
+        steps.append(("Put dates, locations and captions back, and merge into one library", lambda: run_job(
+            roots, out, dry_run, bool(opts.get("replace", True)), bool(opts.get("live", True)), bool(opts.get("dedupe", True)), False, "earlier")))
+        if opts.get("convert") and not dry_run:
+            steps.append(("Convert old videos to MP4", lambda: run_convert([out], False, list(fx.DEFAULT_EXT), False, "high", "move", False)))
+        titles = [t for t, _ in steps]
+        results = []
+        for i, (title, fn) in enumerate(steps, 1):
+            with LOCK:
+                STATE["guided"] = {"steps": titles, "i": i, "final": False}
+            fn()
+            with LOCK:
+                st, sm = STATE["state"], STATE.get("summary")
+            if st != "done":
+                with LOCK:
+                    STATE["guided"] = {"steps": titles, "i": i, "final": True}
+                return                      # an error or a Stop: leave that message on screen
+            results.append({"title": title, "summary": sm})
+            with LOCK:
+                STATE.update(state="running", summary=None, message="Next step...")
+        tips = []
+        if dry_run:
+            tips.append("This was a preview: nothing was changed. Untick Preview only and run again to do it for real.")
+            if opts.get("convert"):
+                tips.append("Video conversion is not part of a preview. Use the Convert tab to preview it once the library exists.")
+            if opts.get("fix_ext") and folders:
+                tips.append("Files with a missing file type are only counted in a preview, so the numbers below may be a little low.")
+        else:
+            tips.append("Your originals were not touched. Your finished library is in %s." % out)
+        with LOCK:
+            STATE.update(state="done", message="Finished", kind="guided", cv=None,
+                         summary={"kind": "guided", "dry_run": dry_run, "steps": results, "tips": tips, "dest": out},
+                         guided={"steps": titles, "i": len(steps), "final": True})
+    except Cancelled:
+        stopped_state("Steps that already finished stay done.")
+        with LOCK:
+            STATE["guided"] = {"steps": [], "i": 0, "final": True}
+    except Exception as e:
+        with LOCK:
+            STATE.update(state="error", message=str(e), guided={"steps": [], "i": 0, "final": True})
 
 
 def run_sort(roots, out, dry_run, dedupe, move, bring_json):
@@ -462,7 +655,7 @@ def run_sort(roots, out, dry_run, dedupe, move, bring_json):
 def run_convert(roots, dry_run, exts, include_live, quality, action, estimate=False):
     with LOCK:
         STATE.update(state="scanning", total=0, done=0, counts={}, message="Looking for old videos...", report="",
-                     summary=None, scan=None, extra={}, recent=[], phase=None, kind="convert", cv=None, cancel=False)
+                     summary=None, scan=None, extra={}, recent=[], phase=None, kind="convert", **({} if IN_GUIDED[0] else {"guided": None}), cv=None, cancel=False)
     try:
         if not fx.have_ffmpeg():
             raise ValueError("ffmpeg not found. In Terminal run: brew install ffmpeg")
@@ -826,7 +1019,7 @@ def run_cleanup(roots, dry_run, opts):
     """One Clean up job: .json files, junk files, name tidying, empty folders, always in that safe order."""
     with LOCK:
         STATE.update(state="scanning", cancel=False, total=0, done=0, counts={}, message="Preparing...", report="",
-                     summary=None, scan=None, extra={}, recent=[], phase=None, kind="cleanup")
+                     summary=None, scan=None, extra={}, recent=[], phase=None, kind="cleanup", **({} if IN_GUIDED[0] else {"guided": None}))
     try:
         folders = check_clean_folders(roots)
         tasks = [t for t in ("ext", "json", "junk", "names", "empty") if opts.get(t)]
@@ -1035,7 +1228,7 @@ def fmt_bytes(b):
 def run_merge(roots, dest, opts, dry_run):
     with LOCK:
         STATE.update(state="scanning", cancel=False, total=0, done=0, counts={}, message="Looking through the folders...", report="",
-                     summary=None, scan=None, extra={}, recent=[], phase=None, kind="merge")
+                     summary=None, scan=None, extra={}, recent=[], phase=None, kind="merge", **({} if IN_GUIDED[0] else {"guided": None}))
     try:
         resolved, seen = [], set()
         for r in roots:
@@ -1331,7 +1524,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.headers.get("Host", "").split(":")[0] not in ("127.0.0.1", "localhost"):
             return self._send(403, "{}")
         if self.path == "/api/choose":
-            self._send(200, json.dumps({"paths": choose_folders(body.get("prompt", "Choose folders"))}))
+            pick = choose_zips if body.get("kind") == "zip" else choose_folders
+            self._send(200, json.dumps({"paths": pick(body.get("prompt", "Choose folders"))}))
         elif self.path == "/api/start":
             with LOCK:
                 busy = STATE["state"] in ("scanning", "running")
@@ -1341,6 +1535,16 @@ class Handler(BaseHTTPRequestHandler):
                 body.get("roots", []), body.get("out", ""),
                 bool(body.get("dry_run")), bool(body.get("overwrite")), bool(body.get("pair_live")),
                 bool(body.get("dedupe")), bool(body.get("move")), body.get("date_policy", "earlier"))).start()
+            self._send(200, "{}")
+        elif self.path == "/api/guided_start":
+            with LOCK:
+                busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
+            if busy:
+                return self._send(409, json.dumps({"error": "A job is already running"}))
+            o = body.get("opts", {})
+            opts = {k: bool(o.get(k)) for k in ("fix_ext", "convert", "replace", "live", "dedupe")}
+            threading.Thread(target=run_guided, daemon=True, args=(
+                body.get("roots", []), body.get("out", ""), bool(body.get("dry_run")), opts)).start()
             self._send(200, "{}")
         elif self.path == "/api/update_check":
             with LOCK:
@@ -1527,7 +1731,7 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
     </div>
   </div>
   <div class="fbar" id="fbar">
-    <div class="frow" id="frs"><span class="flabel">&#128193; Source <b id="fsum"></b></span><div class="fchips" id="fchips"></div><button id="fadd" class="sm">Add folders...</button><button id="fedit" class="sm">Edit list</button></div>
+    <div class="frow" id="frs"><span class="flabel">&#128193; Source <b id="fsum"></b></span><div class="fchips" id="fchips"></div><button id="fadd" class="sm">Add folders...</button><button id="fzip" class="sm" data-tip="Add Google Takeout .zip files directly. They are read one at a time and never changed, so there is no need to unzip them first.">Add zip files...</button><button id="fedit" class="sm">Edit list</button></div>
     <div id="fpanel" style="display:none"><textarea id="fall" placeholder="One folder path per line (drag folders here too)" spellcheck="false"></textarea><div class="row" style="margin-top:6px"><button id="fdone" class="p sm">Done</button><button id="fclear" class="sm">Clear all</button></div></div>
     <div class="frow" id="frd"><span class="flabel">&#127919; Destination</span><input type="text" id="fdest" placeholder="Where fixed or sorted copies go (optional when moving)" spellcheck="false"><button id="fdbtn" class="sm">Choose...</button><button id="fdclr" class="sm">Clear</button></div>
   </div>
@@ -1535,6 +1739,7 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 
 <div id="frame">
   <nav class="tabs" role="tablist">
+    <button class="tab" data-tab="guided" role="tab"><b>&#10024;</b> Guided</button>
     <button class="tab" data-tab="fix" role="tab"><b>1</b> Fix metadata</button>
     <button class="tab" data-tab="merge" role="tab"><b>2</b> Merge folders</button>
     <button class="tab" data-tab="clean" role="tab"><b>3</b> Clean up</button>
@@ -1543,6 +1748,19 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
   <div class="status"><div class="srow"><span id="msg">Ready. Choose a tab, set it up and press Start.</span><a href="#" id="goto" style="display:none">View results &rarr;</a><button id="stopall" class="sm" style="display:none;margin-left:10px">Stop</button></div>
   <div class="bar" id="bar"><i id="fill"></i><span id="pct">0%</span></div></div>
 </div>
+<section class="pane" id="pane-guided">
+<h2 class="ph">Fix my Takeout</h2>
+<div class="card"><small style="margin-top:0">The easy way. Add your Google Takeout <b>zip files</b> (or the folders you unzipped) in the bar at the top, choose where the finished library should go, and press the button. Your originals are <b>never changed</b>: a clean, merged copy is made in the Destination, with the real dates, locations and captions put back, duplicates removed and your folder structure kept.</small>
+<div class="usef" style="margin-top:10px"><b>From:</b> <span class="fnote"></span></div>
+<div class="usef"><b>To (the Destination):</b> <span class="dnote" data-empty="none chosen yet. Choose a Destination in the bar at the top"></span></div>
+<div class="opt"><input type="checkbox" id="gdry" checked><div>Preview only<small>On by default. Shows what would happen and changes nothing. Untick to do it for real.</small></div></div>
+<div class="opt"><input type="checkbox" id="gdedupe" checked><div>Merge same-named folders and remove exact duplicates<small>Every <i>Photos from 2012</i> across all your zips becomes one folder, and the same photo repeated in several albums is kept once.</small></div></div>
+<div class="opt"><input type="checkbox" id="glive" checked><div>Re-pair Live Photos<small>Reconnects each Live Photo&#39;s still and video so Apple Photos shows them together.</small></div></div>
+<div class="opt"><input type="checkbox" id="gow" checked><div>&#9888;&#65039; Replace location and caption already stored in the photo<small>Google&#39;s values win for location and caption. Dates keep the earlier of the two. Change this in the Fix tab if you want other rules.</small></div></div>
+<div class="opt"><input type="checkbox" id="gext" checked><div>&#9888;&#65039; Repair files with a missing file type<small>Some Takeout photos have no .jpg or .heic ending. Inside zip files they are repaired in the copy automatically. For folders you already unzipped, this renames those files in the source folders.</small></div></div>
+<div class="opt"><input type="checkbox" id="gcv"><div>&#9888;&#65039; Also convert old videos (.avi, .mpg, .wmv...) to MP4 afterwards<small>Runs after the library is built, on the Destination. The old videos are moved into an <i>_original_videos</i> folder, not deleted. Not part of a preview.</small></div></div>
+<button class="p" id="gst" style="margin-top:10px">Fix my Takeout</button></div>
+</section>
 <section class="pane" id="pane-fix">
 <h2 class="ph" data-tip="Reads the .json file Google added to each photo and writes the real date taken, location, caption and tagged people back into the photo. The picture itself is never changed.">Fix dates, locations and captions</h2>
 <div class="card usefcard"><b>1. Takeout folders</b><div class="usef" style="margin:8px 0 0"><span class="fnote"></span>. Add every Takeout batch: a photo in one batch finds its JSON in another.</div></div>
@@ -1660,7 +1878,7 @@ function makeIcon(html){const b=document.createElement('button');b.type='button'
   b.onfocus=()=>{if(b.matches(':focus-visible'))showTip(b)};b.onblur=hideTip;
   b.onclick=e=>{e.preventDefault();e.stopPropagation();if(b._pt==='mouse'){showTip(b);return}tipEl._owner===b?hideTip():showTip(b)};return b}
 document.addEventListener('click',hideTip);window.addEventListener('scroll',hideTip,{passive:true});
-const PANE_SUB={fix:'Put the real date, location and caption back into your photos.',merge:'Bring two or more folders together into one.',clean:'Tidy up leftovers once you are done.',convert:'Turn older video formats into MP4.'};
+const PANE_SUB={guided:'The easy way: zips or folders in, a clean library out. Originals never change.',fix:'Put the real date, location and caption back into your photos.',merge:'Bring two or more folders together into one.',clean:'Tidy up leftovers once you are done.',convert:'Turn older video formats into MP4.'};
 function decorate(){
   document.querySelectorAll('.opt').forEach(o=>{
     const box=o.querySelector(':scope > div');if(!box)return;
@@ -1691,6 +1909,7 @@ function renderFolders(){
 function saveFolders(){try{localStorage.setItem('folders',JSON.stringify(FOLDERS))}catch(e){};renderFolders()}
 function addFolders(list){list.forEach(p=>{p=(p||'').trim().replace(/\/+$/,'');if(p&&!FOLDERS.includes(p))FOLDERS.push(p)});saveFolders()}
 $('fadd').onclick=async()=>{const r=await post('/api/choose',{prompt:'Choose one or more folders (hold Cmd to select several)'});if(r.paths)addFolders(r.paths)};
+$('fzip').onclick=async()=>{const r=await post('/api/choose',{kind:'zip',prompt:'Choose your Google Takeout zip files (hold Cmd to select several)'});if(r.paths)addFolders(r.paths)};
 $('fedit').onclick=()=>{const p=$('fpanel');p.style.display=p.style.display==='none'?'block':'none'};
 $('fdone').onclick=()=>{FOLDERS=[];addFolders($('fall').value.split('\n'));$('fpanel').style.display='none'};
 $('fclear').onclick=()=>{FOLDERS=[];saveFolders()};
@@ -1731,6 +1950,7 @@ function showSummary(s){
   if(s.kind==='cleanup'){showCleanup(s);return}
   if(s.kind==='merge'){showMerge(s);return}
   if(s.kind==='convert'){showConvert(s);return}
+  if(s.kind==='guided'){showGuided(s);return}
   let h=`<div class="tiles">${tile(s.total,'media files')}${tile(s.duplicates,'exact duplicates skipped')}${tile(s.matched,'unique files matched ('+s.pct_matched+'%)','ok')}${tile(s.no_json,'no JSON found',s.no_json?'bad':'ok')}${tile(s.orphans,'JSON with no photo')}</div>`;
   h+=s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
   h+=`<div class="tiles">${tile(s.replaced_files,'files with a value replaced')}${tile((s.live||{}).paired||0,'Live Photos paired')}</div>`;
@@ -1785,7 +2005,7 @@ function setBar(barId,fillId,pctId,pct,indet){
     for(let i=0;i<30;i++){await new Promise(x=>setTimeout(x,1000));const s=await st();if(s&&s.boot!==boot){location.reload();return}}
     $('updmsg').textContent='Updated. If the page does not reload, restart the app in Terminal.'}
 })();
-const TABS=['fix','merge','clean','convert'];const tabOf=k=>({cleanup:'clean',sort:'merge'}[k]||k);let jobKind='fix';
+const TABS=['guided','fix','merge','clean','convert'];const tabOf=k=>({cleanup:'clean',sort:'merge'}[k]||k);let curGuided=false;const paneKind=()=>curGuided?'guided':tabOf(jobKind);let jobKind='fix';
 function showTab(t){if(!TABS.includes(t))t='fix';
   TABS.forEach(x=>{$('pane-'+x).style.display=x===t?'block':'none';document.querySelector('.tab[data-tab="'+x+'"]').classList.toggle('on',x===t)});
   try{localStorage.setItem('tab',t)}catch(e){}
@@ -1793,12 +2013,12 @@ function showTab(t){if(!TABS.includes(t))t='fix';
   updGoto()}
 function updGoto(){const a=$('goto');const cur=TABS.find(x=>$('pane-'+x).style.display==='block');
   const has=$('prog').style.display!=='none'||$('sum').style.display!=='none';
-  a.style.display=(has&&cur!==tabOf(jobKind)&&jobKind!=='clean')?'inline':'none'}
-$('goto').onclick=e=>{e.preventDefault();showTab(tabOf(jobKind));$('results').scrollIntoView({behavior:'smooth'})};
+  a.style.display=(has&&cur!==paneKind()&&jobKind!=='clean')?'inline':'none'}
+$('goto').onclick=e=>{e.preventDefault();showTab(paneKind());$('results').scrollIntoView({behavior:'smooth'})};
 $('stopall').onclick=async()=>{const b=$('stopall');b.disabled=true;b.textContent='Stopping...';await post('/api/cancel')};
 document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
-function placeResults(kind){const pane=$('pane-'+(kind==='clean'?'fix':tabOf(kind)));if(pane&&$('results').parentNode!==pane)pane.appendChild($('results'))}
-let startTab='fix';try{startTab=location.hash.slice(1)||localStorage.getItem('tab')||'fix'}catch(e){}
+function placeResults(kind){const pane=$('pane-'+(curGuided?'guided':(kind==='clean'?'fix':tabOf(kind))));if(pane&&$('results').parentNode!==pane)pane.appendChild($('results'))}
+let startTab='guided';try{startTab=location.hash.slice(1)||localStorage.getItem('tab')||'guided'}catch(e){}
 if(startTab==='sort')startTab='merge';
 showTab(startTab);
 
@@ -1838,6 +2058,19 @@ $('mgo').onclick=async()=>{
   $('sum').style.display='none';
   const r=await post('/api/merge_start',{roots:roots(),dest:dest(),dry_run:$('mgdry').checked,opts:{move:mv,conflict:$('mgconf').value,dupes:$('mgdup').value,tidy:$('mgtidy').checked,nocase:$('mgcase').checked,takeout:$('mgtk').checked,global_dedupe:$('mgdd').checked}});
   if(r.error)alert(r.error);else{jobKind='merge';placeResults('merge');$('prog').style.display='block';poll()}};
+function showGuided(s){
+  const parts=[];
+  (s.steps||[]).forEach((st,i)=>{showSummary(st.summary);parts.push('<h2 style="margin-top:18px">Step '+(i+1)+': '+esc(st.title)+'</h2>'+$('sumbody').innerHTML)});
+  const tips=(s.tips||[]).map(t=>`<div class="tip" style="border-color:var(--acc)">${esc(t)}</div>`).join('');
+  $('sumbody').innerHTML=tips+parts.join('');$('sum').style.display='block'}
+$('gst').onclick=async()=>{
+  if(!roots().length){alert('Add your Takeout zip files or folders in the bar at the top first');return}
+  if(!dest()){alert('Choose a Destination in the bar at the top. That is where your finished library will be created.');return}
+  const real=!$('gdry').checked;
+  if(real&&$('gcv').checked&&!confirm('After the library is built, old videos in the Destination will be converted to MP4 and the originals moved into an _original_videos folder. Continue?'))return;
+  $('sum').style.display='none';curGuided=true;
+  const r=await post('/api/guided_start',{roots:roots(),out:dest(),dry_run:$('gdry').checked,opts:{fix_ext:$('gext').checked,convert:$('gcv').checked,replace:$('gow').checked,live:$('glive').checked,dedupe:$('gdedupe').checked}});
+  if(r.error){alert(r.error);curGuided=false}else{placeResults('guided');$('prog').style.display='block';poll()}};
 function showMerge(s){
   const w=s.dry_run?'would be ':'';
   let h=`<div class="tiles">${tile(s.total,'files found')}${tile(s.brought,'files '+w+(s.move?'moved':'copied')+' in','ok')}${tile(s.in_place_files,'already in place')}${tile(s.identical,'identical copies (kept once)')}${tile(s.clashes,'name clashes resolved')}${tile(s.merged_dirs,'folders '+w+'merged from 2+ sources')}${s.json_along?tile(s.json_along,'.json files brought along'):''}${tile(s.failed,'problems',s.failed?'bad':'')}</div>`;
@@ -1944,8 +2177,8 @@ function showCleanup(s){
 
 let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   const s=await (await fetch('/api/status')).json();$('prog').style.display='block';
-  const run=s.state==='scanning'||s.state==='running';$('go').disabled=run;
-  jobKind=s.kind||'fix';placeResults(jobKind);
+  const run=s.state==='scanning'||s.state==='running';$('go').disabled=run;$('gst').disabled=run;
+  jobKind=s.kind||'fix';const gd=s.guided||null;curGuided=!!gd;placeResults(jobKind);
   let pct=0,indet=false;
   if(s.state==='done'){pct=100}
   else if(s.phase&&(s.phase.stage==='convert'||s.phase.stage==='pct')&&s.phase.total){pct=100*s.phase.done/s.phase.total}
@@ -1953,15 +2186,16 @@ let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   else if(s.phase&&s.phase.total){pct=100*s.phase.done/s.phase.total}
   else if(s.state==='scanning'||s.state==='running'){indet=true}
   setBar('bar','fill','pct',pct,indet);
-  const LBL={fix:'Part 1 Fix',convert:'Part 4 Convert',cleanup:'Part 3 Clean up',merge:'Part 2 Merge'}[jobKind]||'';
+  const LBL=(gd&&!gd.final&&gd.steps.length)?('Guided &middot; step '+gd.i+' of '+gd.steps.length+': '+esc(gd.steps[gd.i-1]||'')):gd&&jobKind==='guided'?'Guided':{fix:'Part 1 Fix',convert:'Part 4 Convert',cleanup:'Part 3 Clean up',merge:'Part 2 Merge'}[jobKind]||'';
   $('msg').innerHTML=(LBL?'<b>'+LBL+'</b> &middot; ':'')+(s.state==='error'?'<span class="err">'+esc(s.message)+'</span>':s.state==='done'?'<span class="ok">Finished.</span>':esc(s.message)+(s.done?` (${s.done.toLocaleString()} / ${s.total.toLocaleString()})`:''));
   const c=s.counts||{},done=s.done||0,nj=c['no-json']||0;
   $('tiles').innerHTML=liveTiles(s,c,done,nj);
   $('recent').innerHTML=(s.recent||[]).map(r=>`${esc(r.name)} &rarr; ${r.status==='duplicate'?'duplicate (skipped)':esc(r.to)+' ['+esc(r.status)+(r.live==='paired'?', live paired':'')+']'}`).reverse().join('<br>');
-  if(s.state==='done'&&s.summary)showSummary(s.summary);
+  const gmid=gd&&!gd.final;
+  if(s.state==='done'&&s.summary&&!gmid)showSummary(s.summary);
   renderCvLive(s);updGoto();
   {const sb=$('stopall');const showStop=run&&!(s.kind==='convert'&&s.cv);sb.style.display=showStop?'inline-block':'none';if(!s.cancel){sb.disabled=false;sb.textContent='Stop'}else{sb.disabled=true;sb.textContent='Stopping...'}}
-  if(['done','error','idle'].includes(s.state))clearInterval(timer);
+  if(['done','error','idle'].includes(s.state)&&!gmid)clearInterval(timer);
 },500)}
 (async function(){try{const s=await (await fetch('/api/status')).json();if(s.state&&s.state!=='idle'){jobKind=s.kind||'fix';placeResults(jobKind);$('prog').style.display='block';poll()}}catch(e){}})();
 </script></main></body></html>"""

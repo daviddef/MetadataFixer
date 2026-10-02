@@ -47,7 +47,7 @@ To keep each tab uncluttered, the longer explanations sit behind small **i** but
 
 ## Layout
 
-The app has four tabs: **1 Fix metadata**, **2 Merge folders** (also sorts Takeout folders and removes duplicates), **3 Clean up** (`.json` files, junk, names, empty folders) and **4 Convert videos**.
+The app has five tabs: **Guided** (the easy way), **1 Fix metadata**, **2 Merge folders** (also sorts Takeout folders and removes duplicates), **3 Clean up** (`.json` files, junk, names, empty folders) and **4 Convert videos**.
 
 ## The warning sign
 
@@ -56,6 +56,33 @@ Options marked with a warning sign (⚠️) can delete, overwrite, merge or empt
 ## Stopping a job
 
 Every job (preview or real) has a **Stop** button in the status bar at the top. Stopping is safe: files already handled stay done, nothing is left half-written, and running the same settings again carries on where it stopped. Stopping a preview changes nothing.
+
+## Guided: Fix my Takeout (the easy way)
+
+The **Guided** tab does the whole job in one go, in the safe order, for people who just want a clean library.
+
+1. In the bar at the top, add your Takeout **zip files** (press **Add zip files...**, or **Add folders...** and choose the folder that holds the zips) or the folders you already unzipped.
+2. Choose a **Destination**: where the finished library will be created. Your originals are never changed.
+3. Leave **Preview only** ticked and press **Fix my Takeout**. You get a summary of what would happen.
+4. Untick Preview and run it for real.
+
+What it does, in order:
+- **Repairs files with a missing file type** (only for folders you unzipped; this renames those files in the source folders. Zip files are handled automatically in the copy).
+- **Puts dates, locations and captions back, merges same-named folders and removes exact duplicates**, keeping your folder structure and re-pairing Live Photos.
+- Optionally **converts old videos to MP4** afterwards (not part of a preview). The old videos go into an `_original_videos` folder.
+
+You see which step is running in the status bar, and **Stop** works at any time. If a run is interrupted, run it again with the same settings and it carries on.
+
+## Takeout zip files
+
+You do not need to unzip Google Takeout downloads. Add the `.zip` files (or the folder that holds them) to the Source list and use **Guided** or **1 Fix metadata**:
+
+- The info (`.json`) files from **all** the zips are read first, so a photo in one zip finds its info file even if it is in another zip.
+- The zips are then processed **one at a time**: only that zip's photos are unpacked, fixed and copied to the Destination, then the temporary files are deleted. You need free space for the largest single zip (twice over), not for the whole Takeout.
+- A **Destination is required** and **Move is not available**, because the zip files are never changed.
+- A photo that appears in more than one zip is copied once.
+- Zips that finished are remembered in the Destination, so an interrupted run carries on with the remaining zips.
+- Limits: Live Photo pairing works when the still and its video are in the same zip (Google normally keeps them together). The other tabs (Merge, Clean up, Convert) work on folders, not zip files.
 
 ## Choosing your folders (once, for every tab)
 

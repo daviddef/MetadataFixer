@@ -627,12 +627,13 @@ def record_progress(args, src, dest):
         return
     with args.lock:
         with open(Path(root) / getattr(args, "manifest_file", MANIFEST), "a", encoding="utf-8") as fh:
-            fh.write(json.dumps({"src": str(src), "dest": str(dest)}, ensure_ascii=False) + "\n")
-        args.manifest[str(src)] = str(dest)
+            key = getattr(args, "manifest_ns", "") + str(src)
+            fh.write(json.dumps({"src": key, "dest": str(dest)}, ensure_ascii=False) + "\n")
+        args.manifest[key] = str(dest)
 
 
 def already_done(m, args):
-    d = (getattr(args, "manifest", None) or {}).get(str(m))
+    d = (getattr(args, "manifest", None) or {}).get(getattr(args, "manifest_ns", "") + str(m))
     return d if d and Path(d).exists() else None
 
 
@@ -1792,6 +1793,156 @@ def merge_trees(roots, dest, opts, dry_run=False, on_progress=None, on_item=None
         prune_empty_dirs(roots)
     merged = {d: sorted(v) for d, v in dir_sources.items() if len(v) > 1}
     return rows, per_root, merged
+
+
+# ---- Zip support: read Google Takeout .zip files without unzipping everything first --------------------------
+import zipfile
+
+ZIP_STAGE = ".metadatafixer_stage"
+ZIPS_LOG = ".metadatafixer_zips.jsonl"
+
+
+def split_sources(entries):
+    """Sort what the user added into zip files and ordinary folders.
+    A folder that holds .zip files at its top level counts as those zips."""
+    zips, folders, seen = [], [], set()
+    for r in entries:
+        p = Path(r).expanduser()
+        if p.is_file() and p.suffix.lower() == ".zip":
+            found = [p]
+        elif p.is_dir():
+            found = sorted(q for q in p.iterdir() if q.is_file() and q.suffix.lower() == ".zip" and not q.name.startswith("._"))
+            if not found:
+                if p.resolve() not in seen:
+                    seen.add(p.resolve())
+                    folders.append(p)
+                continue
+        else:
+            raise ValueError(f"Not a folder or zip file: {p}")
+        for q in found:
+            if q.resolve() not in seen:
+                seen.add(q.resolve())
+                zips.append(q)
+    return zips, folders
+
+
+def _safe_member(name):
+    """Relative path inside the zip, or None when the name is unsafe (absolute or climbing out with ..)."""
+    parts = [x for x in name.replace("\\", "/").split("/") if x not in ("", ".")]
+    if not parts or ".." in parts or name.startswith("/") or (len(parts[0]) == 2 and parts[0][1] == ":"):
+        return None
+    return parts
+
+
+def _wanted_media(parts):
+    n = parts[-1]
+    if n.startswith("._") or n.lower() in JUNK_NAMES or n.startswith("."):
+        return False
+    return Path(n).suffix.lower() in MEDIA_EXT or "." not in n or bogus_ext(n)
+
+
+def zip_plan(zips):
+    """Quick look inside each zip (reads only its table of contents)."""
+    plan = []
+    for z in zips:
+        item = {"path": str(z), "name": z.name, "media": 0, "json": 0, "bytes": 0, "error": "", "sizes": []}
+        try:
+            with zipfile.ZipFile(z) as zf:
+                for i in zf.infolist():
+                    if i.is_dir():
+                        continue
+                    parts = _safe_member(i.filename)
+                    if not parts:
+                        continue
+                    if parts[-1].lower().endswith(".json"):
+                        item["json"] += 1
+                    elif _wanted_media(parts):
+                        item["media"] += 1
+                        item["bytes"] += i.file_size
+                        item["sizes"].append(i.file_size)
+        except (zipfile.BadZipFile, OSError) as e:
+            item["error"] = f"{type(e).__name__}: {e}"[:200]
+        plan.append(item)
+    return plan
+
+
+def _extract_member(zf, info, parts, tree):
+    target = Path(tree).joinpath(*parts)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with zf.open(info) as src, open(target, "wb") as dst:
+        shutil.copyfileobj(src, dst, 1 << 20)
+    try:
+        t = time.mktime(info.date_time + (0, 0, -1))
+        os.utime(target, (t, t))
+    except (OverflowError, ValueError, OSError):
+        pass
+    return target
+
+
+def stage_json(zips, tree, should_stop=None):
+    """Copy every .json file from every zip into one folder tree, so a photo can find its info file in another zip."""
+    n = 0
+    for z in zips:
+        with zipfile.ZipFile(z) as zf:
+            for i in zf.infolist():
+                if i.is_dir():
+                    continue
+                parts = _safe_member(i.filename)
+                if parts and parts[-1].lower().endswith(".json"):
+                    if should_stop:
+                        should_stop()
+                    _extract_member(zf, i, parts, tree)
+                    n += 1
+    return n
+
+
+def stage_media(zpath, tree, should_stop=None):
+    """Extract the photos and videos of one zip into the same tree. Returns the extracted paths."""
+    out = []
+    with zipfile.ZipFile(zpath) as zf:
+        for i in zf.infolist():
+            if i.is_dir():
+                continue
+            parts = _safe_member(i.filename)
+            if parts and not parts[-1].lower().endswith(".json") and _wanted_media(parts):
+                if should_stop:
+                    should_stop()
+                out.append(_extract_member(zf, i, parts, tree))
+    return out
+
+
+def file_sig(path):
+    """(size, CRC32) of a file: a cheap fingerprint for spotting the same photo in two different zips."""
+    import zlib
+    crc = 0
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            crc = zlib.crc32(chunk, crc)
+    return (os.path.getsize(path), crc)
+
+
+def zip_key(z):
+    st = Path(z).stat()
+    return f"{Path(z).name}|{st.st_size}|{int(st.st_mtime)}"
+
+
+def zips_done(dest):
+    done = set()
+    try:
+        with open(Path(dest) / ZIPS_LOG, encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    done.add(json.loads(line)["zip"])
+                except (ValueError, KeyError):
+                    pass
+    except OSError:
+        pass
+    return done
+
+
+def mark_zip_done(dest, z):
+    with open(Path(dest) / ZIPS_LOG, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"zip": zip_key(z)}) + "\n")
 
 
 def main():
