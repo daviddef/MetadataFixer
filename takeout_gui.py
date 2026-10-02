@@ -29,7 +29,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.02-m"
+VERSION = "2026.10.02-n"
 class Cancelled(Exception):
     pass
 
@@ -2122,6 +2122,89 @@ def photos_preflight():
             "free": free, "library": str(Path.home() / "Pictures" / "Photos Library.photoslibrary")}
 
 
+def _upload_log_path():
+    return APP_HOME / "upload.jsonl"
+
+
+def upload_record(lib, st):
+    if not st.get("ok") or st.get("pending") is None:
+        return
+    try:
+        APP_HOME.mkdir(parents=True, exist_ok=True)
+        with open(_upload_log_path(), "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"t": time.time(), "lib": str(lib), "total": st["total"], "uploaded": st["uploaded"], "pending": st["pending"]}) + "\n")
+    except OSError:
+        pass
+
+
+def upload_eta(lib, window_h=4.0):
+    """Upload speed, time left and whether it looks stuck, from the checks recorded so far."""
+    pts = []
+    try:
+        for line in _upload_log_path().read_text(encoding="utf-8").splitlines()[-2000:]:
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            if d.get("lib") == str(lib) and time.time() - d["t"] <= window_h * 3600:
+                pts.append(d)
+    except OSError:
+        return {}
+    out = {"points": len(pts)}
+    if len(pts) < 2:
+        return out
+    first, last = pts[0], pts[-1]
+    dt = (last["t"] - first["t"]) / 3600.0
+    if dt >= 0.08:
+        rate = (first["pending"] - last["pending"]) / dt          # items per hour; negative when more is being added
+        out["rate_per_hour"] = round(rate)
+        if rate > 0 and last["pending"] > 0:
+            out["eta_hours"] = round(last["pending"] / rate, 1)
+    recent = [p for p in pts if last["t"] - p["t"] <= 45 * 60]
+    if last["pending"] > 0 and len(recent) >= 3 and (recent[-1]["t"] - recent[0]["t"]) >= 30 * 60 and recent[0]["pending"] <= recent[-1]["pending"]:
+        out["stalled"] = True
+    return out
+
+
+def adapt_batch(cur, seconds, lo=1e9, hi=50e9, fast=20 * 60, slow=3 * 3600):
+    """Next batch size: bigger when iCloud kept up easily, smaller when the last batch took hours to upload."""
+    if seconds < fast:
+        return min(hi, cur * 1.5)
+    if seconds > slow:
+        return max(lo, cur * 0.5)
+    return cur
+
+
+def _wanted_for(files):
+    out = []
+    for f in files:
+        try:
+            out.append((os.path.basename(f), os.path.getsize(f)))
+        except OSError:
+            pass
+    return out
+
+
+def photos_verify_report(lib, root):
+    """Check every file Backstory has sent so far against the Photos database."""
+    log = Path(root) / fx.PHOTOS_LOG
+    sent = []
+    try:
+        for line in log.read_text(encoding="utf-8").splitlines():
+            try:
+                sent.append(json.loads(line)["path"])
+            except (ValueError, KeyError):
+                pass
+    except OSError:
+        pass
+    st = fx.photos_upload_status(lib, _wanted_for(sent) if sent else None)
+    st["sent"] = len(sent)
+    if st.get("ok"):
+        upload_record(lib, st)
+        st["eta"] = upload_eta(lib)
+    return st
+
+
 def run_photos(roots, opts, dry_run):
     with LOCK:
         STATE.update(state="scanning", cancel=False, total=0, done=0, counts={}, message="Planning the import...", report="",
@@ -2132,8 +2215,12 @@ def run_photos(roots, opts, dry_run):
         root = folders[0]
         batch_bytes = int(max(1e-6, float(opts.get("batch_gb", 10))) * 1e9)
         keep_free = int(max(0.0, float(opts.get("keep_free_gb", 20))) * 1e9)
-        pace = opts.get("pace") if opts.get("pace") in ("space", "ask", "none") else "space"
+        pace = opts.get("pace") if opts.get("pace") in ("verify", "space", "ask", "none") else "space"
+        adaptive = bool(opts.get("adaptive", True)) and pace == "verify"
+        lib = opts.get("library") or (fx.find_photos_libraries() or [str(Path.home() / "Pictures" / "Photos Library.photoslibrary")])[0]
+        verify_pct = float(opts.get("verify_pct", 99)) / 100.0
         limit = int(opts["limit"]) if opts.get("limit") else None
+        poll_s = 2 if os.environ.get("BACKSTORY_OSASCRIPT") else 60
         log = root / fx.PHOTOS_LOG
         done = set()
         try:
@@ -2144,67 +2231,126 @@ def run_photos(roots, opts, dry_run):
                     pass
         except OSError:
             pass
-        plan = fx.plan_photos_import(root, batch_bytes, opts.get("order", "oldest"), bool(opts.get("albums", True)), done, limit)
+        order, albums = opts.get("order", "oldest"), bool(opts.get("albums", True))
+        plan = fx.plan_photos_import(root, batch_bytes, order, albums, done, limit)
         batches = plan["batches"]
         pre = photos_preflight()
+        pace_text = {"verify": "waits until Photos shows each batch as uploaded to iCloud", "space": "waits until your Mac has at least %s free" % fmt_bytes(keep_free),
+                     "ask": "pauses until you press Continue", "none": "does not wait"}
         rows = [{"n": b["index"], "files": b["files"], "bytes": fmt_bytes(b["bytes"]), "from": b["first"], "to": b["last"],
                  "albums": ", ".join("%s (%d)" % kv for kv in list(b["albums"].items())[:4]), "status": "planned"} for b in batches]
         sm = {"kind": "photos", "dry_run": dry_run, "files": plan["files"], "bytes": fmt_bytes(plan["bytes"]), "batches": len(batches),
               "unsupported": sorted(plan["unsupported"].items(), key=lambda kv: -kv[1]), "already": plan["skipped_done"], "imported": 0, "failed": 0,
               "rows": rows[:300], "tips": [], "free": fmt_bytes(pre["free"]) if pre["free"] else "", "keep_free": fmt_bytes(keep_free), "pace": pace,
-              "root": str(root), "limit": limit}
+              "root": str(root), "limit": limit, "library": lib}
         if not batches:
             sm["tips"].append("Nothing left to import from this folder.")
         if dry_run:
-            sm["tips"].append("This was a preview: nothing was sent to Photos. Each batch is about %s. Between batches Backstory %s." % (
-                fmt_bytes(batch_bytes), {"space": "waits until your Mac has at least %s free" % fmt_bytes(keep_free), "ask": "pauses until you press Continue", "none": "does not wait"}[pace]))
+            sm["tips"].append("This was a preview: nothing was sent to Photos. Each batch is about %s. Between batches Backstory %s.%s" % (
+                fmt_bytes(batch_bytes), pace_text[pace], " The batch size adapts to how fast iCloud keeps up." if adaptive else ""))
+            if pace == "verify":
+                chk = fx.photos_upload_status(lib)
+                sm["tips"].append(("Photos library found: %s items, %s uploaded to iCloud." % (f"{chk['total']:,}", f"{chk['uploaded']:,}") if chk.get("ok") and chk.get("uploaded") is not None else
+                                   "Could not read the Photos database to verify uploads (%s). Backstory will fall back to waiting for free space." % chk.get("why", "unknown")))
             with LOCK:
                 STATE.update(state="done", message="Finished", summary=sm, phase=None)
             return
         if not (pre["mac"] and pre["osascript"] and pre["photos_app"] or os.environ.get("BACKSTORY_OSASCRIPT")):
             raise ValueError("Sending to Apple Photos needs a Mac with the Photos app. Nothing was imported.")
         total = plan["files"]
-        n_done = n_fail = 0
+        n_done = 0
         with LOCK:
             STATE.update(state="running", total=total, done=0)
+        use_verify = pace == "verify" and fx.photos_upload_status(lib).get("ok")
+        if pace == "verify" and not use_verify:
+            sm["tips"].append("Backstory could not read the Photos database, so it waited for free space between batches instead of verifying uploads.")
 
         def free_now():
             return shutil.disk_usage(Path.home()).free
 
-        def wait_for_room(i, nb):
-            need_wait = (pace == "ask" and i < nb) or (pace == "space" and free_now() < keep_free)
-            if not need_wait:
-                return
+        def hold(mode_msg, cond, extra=None, cap_s=None):
+            """Wait until cond() is true, the user presses Continue, or cap_s passes. Stop works throughout."""
             with LOCK:
                 STATE["photos_continue"] = False
+            t0 = time.time()
             while True:
                 check_cancel()
-                f = free_now()
+                ok, info = cond()
                 with LOCK:
                     cont = STATE.get("photos_continue")
-                    STATE["photos"] = {"waiting": True, "batch": i, "of": nb, "free": f, "need": keep_free, "pace": pace}
-                    STATE["message"] = ("Batch %d of %d finished. Paused: press Continue when Photos has finished uploading." % (i, nb)) if pace == "ask" else (
-                        "Waiting for room: %s free, %s wanted. Photos uploads to iCloud and macOS then frees space; this can take hours." % (fmt_bytes(f), fmt_bytes(keep_free)))
-                if cont or (pace == "space" and f >= keep_free):
+                    STATE["photos"] = {"waiting": True, "batch": len(rows), **info}
+                    STATE["message"] = mode_msg(info)
+                if cont or ok:
                     break
-                time.sleep(2 if os.environ.get("BACKSTORY_OSASCRIPT") else 20)
+                if cap_s and time.time() - t0 > cap_s:
+                    return False
+                time.sleep(poll_s)
             with LOCK:
-                STATE["photos"] = {"waiting": False, "batch": i, "of": nb}
+                STATE["photos"] = {"waiting": False, "batch": len(rows)}
+            return True
+
+        def verify_batch(files, k):
+            wanted = _wanted_for(files)
+            t0 = time.time()
+
+            def cond():
+                st = fx.photos_upload_status(lib, wanted)
+                if not st.get("ok"):
+                    return False, {"verified": 0, "of": len(wanted), "note": st.get("why", "")}
+                upload_record(lib, st)
+                matched, up = st.get("matched", 0), st.get("matched_uploaded", 0)
+                waited = time.time() - t0
+                seen_enough = matched >= 0.9 * len(wanted) or waited > (15 * 60 if poll_s > 5 else 6)
+                ok = bool(matched) and seen_enough and up >= verify_pct * matched
+                eta = upload_eta(lib)
+                return ok, {"verified": up, "of": matched or len(wanted), "eta": eta.get("eta_hours"), "stalled": bool(eta.get("stalled"))}
+
+            def msg(info):
+                s = "Batch %d sent. Verifying upload: %s of %s are in iCloud" % (k, f"{info.get('verified', 0):,}", f"{info.get('of', 0):,}")
+                if info.get("stalled"):
+                    s += ". Uploads look stuck: open the Monitor tab for likely causes."
+                elif info.get("eta"):
+                    s += ", about %s h left." % info["eta"]
+                return s
+            hold(msg, cond, cap_s=float(opts.get("verify_timeout_h", 12)) * 3600 if poll_s > 5 else 30)
+            return time.time() - t0
+
+        def wait_room(k, remaining):
+            need_wait = remaining and ((pace == "ask") or (pace in ("space", "verify") and free_now() < keep_free))
+            if not need_wait:
+                return
+            if pace == "ask":
+                hold(lambda i: "Batch %d finished. Paused: press Continue when Photos has finished uploading." % k, lambda: (False, {"pace": "ask"}))
+            else:
+                hold(lambda i: "Waiting for room: %s free, %s wanted. macOS frees space as iCloud finishes uploading; this can take a while." % (fmt_bytes(i["free"]), fmt_bytes(keep_free)),
+                     lambda: (free_now() >= keep_free, {"free": free_now(), "need": keep_free, "pace": pace}), cap_s=(20 * 60 if pace == "verify" and poll_s > 5 else None))
+
         if pace == "space" and free_now() < keep_free:
-            wait_for_room(0, len(batches))
-        for b in batches:
-            i = b["index"]
+            wait_room(0, True)
+        rows = []
+        cur = batch_bytes
+        k = 0
+        while True:
             check_cancel()
+            left = (limit - n_done) if limit else None
+            if limit and left <= 0:
+                break
+            pl = fx.plan_photos_import(root, cur, order, albums, done, left)
+            if not pl["batches"]:
+                break
+            b = pl["batches"][0]
+            k += 1
             by_album = {}
             for u in b["units"]:
                 by_album.setdefault(u["album"], []).extend(u["files"])
+            sent_files = []
             for album, files in by_album.items():
-                for k in range(0, len(files), 150):
+                for j in range(0, len(files), 150):
                     check_cancel()
-                    chunk = files[k:k + 150]
+                    chunk = files[j:j + 150]
                     with LOCK:
-                        STATE["photos"] = {"waiting": False, "batch": i, "of": len(batches)}
-                        STATE["message"] = "Batch %d of %d: sending %d files to Photos%s" % (i, len(batches), len(chunk), (" (album " + album + ")") if album else "")
+                        STATE["photos"] = {"waiting": False, "batch": k}
+                        STATE["message"] = "Batch %d: sending %d files to Photos%s" % (k, len(chunk), (" (album " + album + ")") if album else "")
                     script = fx.applescript_import(chunk, album)
                     try:
                         r = subprocess.run([OSA, "-"], input=script, capture_output=True, text=True, timeout=3 * 3600)
@@ -2216,21 +2362,34 @@ def run_photos(roots, opts, dry_run):
                         raise ValueError("Photos refused the import: %s.%s Files already imported are remembered, so running again carries on." % (err, hint))
                     with open(log, "a", encoding="utf-8") as fh:
                         for f in chunk:
-                            fh.write(json.dumps({"path": f, "batch": i}, ensure_ascii=False) + "\n")
+                            fh.write(json.dumps({"path": f, "batch": k}, ensure_ascii=False) + "\n")
+                    done.update(chunk)
+                    sent_files += chunk
                     n_done += len(chunk)
                     with LOCK:
-                        STATE.update(done=n_done)
-            rows[i - 1]["status"] = "sent"
+                        STATE.update(done=n_done, total=max(total, n_done))
+            row = {"n": k, "files": len(sent_files), "bytes": fmt_bytes(b["bytes"]), "from": b["first"], "to": b["last"],
+                   "albums": ", ".join("%s (%d)" % kv for kv in list(b["albums"].items())[:4]), "status": "sent"}
+            rows.append(row)
             sm["imported"] = n_done
-            if i < len(batches):
-                wait_for_room(i, len(batches))
-        sm["imported"] = n_done
-        sm["rows"] = rows[:300]
+            remaining = bool(fx.plan_photos_import(root, cur, order, albums, done, (limit - n_done) if limit else None)["batches"])
+            if use_verify:
+                secs = verify_batch(sent_files, k)
+                row["status"] = "verified in iCloud (%d min)" % round(secs / 60)
+                if adaptive:
+                    nxt = adapt_batch(cur, secs) if poll_s > 5 else cur
+                    if nxt != cur:
+                        row["status"] += "; next batch %s" % ("larger" if nxt > cur else "smaller")
+                    cur = nxt
+            wait_room(k, remaining)
+            if not remaining:
+                break
+        sm["batches"], sm["rows"], sm["imported"] = len(rows), rows[:300], n_done
         if n_done:
-            sm["tips"].append("%s files were sent to Photos. Open Photos: if iCloud Photos is on it uploads in the background, and with Optimize Mac Storage macOS keeps small copies once the originals are safely in iCloud. Leave Photos open until the upload finishes." % f"{n_done:,}")
+            sm["tips"].append("%s files were sent to Photos. If iCloud Photos is on it uploads in the background, and with Optimize Mac Storage macOS keeps small copies once the originals are safely in iCloud. Leave Photos open until the upload finishes." % f"{n_done:,}")
         if plan["unsupported"]:
             sm["tips"].append("%s files in formats Photos cannot import were left out (%s). Convert them on the Convert tab, then run this again." % (
-                f"{sum(plan['unsupported'].values()):,}", ", ".join(k for k, _ in sm["unsupported"][:5])))
+                f"{sum(plan['unsupported'].values()):,}", ", ".join(k_ for k_, _ in sm["unsupported"][:5])))
         with LOCK:
             STATE.update(state="done", message="Finished", summary=sm, phase=None, photos=None)
     except Cancelled:
@@ -2242,97 +2401,53 @@ def run_photos(roots, opts, dry_run):
             STATE.update(state="error", message=str(e), photos=None)
 
 
-def run_similar_apply(items):
-    _setaside(items, SIMILAR, "_similar_set_aside", "similar_apply", "photos")
+def _monitor_log_path():
+    return APP_HOME / "monitor.jsonl"
 
 
-FORMATS = {"roots": [], "allowed": set()}
-
-
-def run_formats_apply(items):
-    _setaside(items, FORMATS, "_older_formats", "formats_apply", "files")
-
-
-def _health_key(roots):
-    return "|".join(sorted(str(Path(r).expanduser()) for r in roots))
-
-
-def health_history(roots, limit=60):
-    out = []
-    d = APP_HOME / "health"
-    try:
-        for p in sorted(d.glob("*.json"))[-400:]:
-            try:
-                e = json.loads(p.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            if e.get("key") == _health_key(roots):
-                out.append({"when": e["when"], "score": e["score"], "waste": e.get("waste", 0), "files": e.get("files", 0)})
-    except OSError:
-        pass
-    return out[-limit:]
-
-
-def run_health(roots, deep):
+def run_monitor(hours, pasted):
     with LOCK:
-        STATE.update(state="scanning", cancel=False, total=0, done=0, counts={}, message="Checking your library's health...", report="",
-                     summary=None, scan=None, extra={}, recent=[], phase=None, kind="health", cv=None, guided=None)
+        STATE.update(state="scanning", cancel=False, total=0, done=0, counts={}, message="Reading the Photos and iCloud logs...", report="",
+                     summary=None, scan=None, extra={}, recent=[], phase=None, kind="monitor", cv=None, guided=None)
     try:
-        zips, folders = fx.split_sources(roots) if roots else ([], [])
-        if not folders and not zips:
-            raise ValueError("Add your library folders in the bar at the top first")
-        if not folders:
-            raise ValueError("Health checks look inside folders. Zip files are skipped: build your library first, then check it.")
-
-        def prog(msg, done, total):
+        lines, note, src = [], "", {}
+        if pasted and pasted.strip():
+            lines = pasted.splitlines()
+            src["pasted"] = len(lines)
+        else:
+            lines, note = fx.collect_mac_logs(hours)
+            src["mac_log"] = len(lines)
             check_cancel()
-            with LOCK:
-                STATE.update(state="running", total=total, done=done, message=msg + (" (%s of %s)" % (f"{done:,}", f"{total:,}") if total else ""))
-                STATE["phase"] = {"stage": "pct", "done": done, "total": total} if total else None
-        R = fx.health_scan([str(f) for f in folders], deep, prog, check_cancel)
-        # experimental hints from any Photos library among the sources
-        db = []
-        for r in roots:
-            p = Path(r).expanduser()
-            if p.suffix.lower() == ".photoslibrary" and p.is_dir():
-                h = fx.photos_db_health(p)
-                h["name"] = p.name
-                db.append(h)
-                if h.get("ok") and h.get("not_in_cloud"):
-                    R["findings"].insert(0, {"id": "pdb_cloud", "cat": "cloud", "sev": "warn", "title": "Photos items not yet in iCloud (experimental)", "count": h["not_in_cloud"], "bytes": 0, "tab": "", "label": "",
-                                             "detail": "Photos' own database lists %s of %s items in %s as not uploaded to iCloud. Apple does not document this, so treat it as a hint: open Photos and look at the iCloud upload status." % (f"{h['not_in_cloud']:,}", f"{h['total']:,}", p.name)})
-        formats = []
-        allowed = set()
-        inside = any(fx.inside_photos_library(f) for f in folders)
-        if not inside:
-            for g in R["formats"][:150]:
-                mem = []
-                for k, m in enumerate(g["members"]):
-                    allowed.add(m["path"])
-                    mem.append({"path": m["path"], "name": m["name"], "ext": m["ext"], "size": m["size"], "duration": round(m["duration"], 1), "w": m["w"], "h": m["h"], "best": k == 0})
-                formats.append({"kind": g["kind"], "where": os.path.basename(g["dir"]), "stem": g["stem"], "members": mem})
-        with LOCK:
-            FORMATS.update(roots=[str(f) for f in folders], allowed=allowed)
-        st = R["stats"]
-        hist = health_history(roots)
-        entry = {"when": time.time(), "key": _health_key(roots), "score": R["score"], "waste": st["waste_bytes"], "files": st["files"], "parts": R["parts"]}
+            crashes = fx.collect_crash_reports(max(1, hours // 24 + 1) if hours > 24 else 7)
+            lines += crashes
+            src["crash_reports"] = len(crashes)
+            # Backstory's own recent problems
+            mine = []
+            for e in list_history(40):
+                if e.get("state") in ("failed", "stopped") and e.get("message") and time.time() - e["started"] < max(hours, 24) * 3600:
+                    mine.append("%s Backstory %s: %s" % (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(e["started"])), e["title"], e["message"]))
+            lines += mine
+            src["backstory"] = len(mine)
+        issues, other = fx.interpret_log_lines(lines)
+        prev = {}
         try:
-            (APP_HOME / "health").mkdir(parents=True, exist_ok=True)
-            (APP_HOME / "health" / (time.strftime("%Y%m%d-%H%M%S") + ".json")).write_text(json.dumps(entry), encoding="utf-8")
-        except OSError:
+            last = _monitor_log_path().read_text(encoding="utf-8").splitlines()[-1]
+            prev = json.loads(last).get("issues", {})
+        except (OSError, IndexError, ValueError):
             pass
-        tips = []
-        if hist and hist[-1]["score"] - R["score"] >= 5:
-            tips.append("Your health score dropped from %d to %d since the last check." % (hist[-1]["score"], R["score"]))
-        elif hist and R["score"] - hist[-1]["score"] >= 5:
-            tips.append("Your health score improved from %d to %d since the last check." % (hist[-1]["score"], R["score"]))
-        if zips:
-            tips.append("%d zip file%s skipped: health checks look inside folders." % (len(zips), "" if len(zips) == 1 else "s"))
-        if not R["deep"]:
-            tips.append("This was a quick check: metadata was read from a sample of about 400 files. Tick the deep check to read up to 40,000.")
-        sm = {"kind": "health", "dry_run": True, "score": R["score"], "parts": R["parts"], "findings": R["findings"], "stats": {k: v for k, v in st.items()},
-              "formats": formats, "formats_total": len(R["formats"]), "db": db, "trend": hist + [{"when": entry["when"], "score": R["score"], "waste": entry["waste"], "files": st["files"]}],
-              "deep": R["deep"], "tips": tips}
+        for i in issues:
+            i["new"] = i["id"] not in prev and not pasted
+        if not pasted:
+            try:
+                APP_HOME.mkdir(parents=True, exist_ok=True)
+                with open(_monitor_log_path(), "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps({"t": time.time(), "issues": {i["id"]: i["count"] for i in issues}}) + "\n")
+            except OSError:
+                pass
+        sm = {"kind": "monitor", "dry_run": True, "issues": issues, "other": other, "note": note, "sources": src, "hours": hours, "pasted": bool(pasted and pasted.strip()),
+              "lines": len(lines), "tips": []}
+        if not issues and not other:
+            sm["tips"].append("No problems found in the logs that were read." + (" (%s)" % note if note else ""))
         with LOCK:
             STATE.update(state="done", message="Finished", summary=sm, phase=None)
     except Cancelled:
@@ -2347,7 +2462,7 @@ APP_HOME = Path(os.environ.get("METADATAFIXER_HOME") or (
     Path.home() / "Library" / "Application Support" / "MetadataFixer" if sys.platform == "darwin" else Path.home() / ".metadatafixer"))
 HIST_DIR = APP_HOME / "history"
 REPORTS_DIR = Path(os.environ.get("METADATAFIXER_REPORTS") or (Path.home() / "Documents" / "Backstory Reports"))
-KIND_TITLE = {"health": "Library health check", "formats_apply": "Set older formats aside", "photos": "Send to Apple Photos", "similar": "Find similar photos", "similar_apply": "Set similar photos aside", "undo": "Undo a run", "assess": "Check my files", "consolidate": "Merge similar folders", "fix": "Fix metadata", "merge": "Merge folders", "cleanup": "Clean up", "convert": "Convert videos", "guided": "Guided: Fix my Takeout"}
+KIND_TITLE = {"monitor": "Photos and iCloud log check", "health": "Library health check", "formats_apply": "Set older formats aside", "photos": "Send to Apple Photos", "similar": "Find similar photos", "similar_apply": "Set similar photos aside", "undo": "Undo a run", "assess": "Check my files", "consolidate": "Merge similar folders", "fix": "Fix metadata", "merge": "Merge folders", "cleanup": "Clean up", "convert": "Convert videos", "guided": "Guided: Fix my Takeout"}
 
 
 def _headline(sm):
@@ -2356,6 +2471,8 @@ def _headline(sm):
         return ""
     k = sm.get("kind")
     try:
+        if k == "monitor":
+            return "%s issues found in %s log lines" % (len(sm.get("issues", [])), f"{sm.get('lines', 0):,}")
         if k == "health":
             return "Health score %s, %s findings" % (sm.get("score"), len(sm.get("findings", [])))
         if k == "formats_apply":
@@ -2724,6 +2841,27 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(409, json.dumps({"error": "A job is already running"}))
             start_tracked("formats_apply", {"roots": [], "dry_run": False, "opts": {"files": len(body.get("items", []))}}, run_formats_apply, ([str(x) for x in body.get("items", [])],))
             self._send(200, "{}")
+        elif self.path == "/api/monitor_start":
+            with LOCK:
+                busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
+            if busy:
+                return self._send(409, json.dumps({"error": "A job is already running"}))
+            hrs = body.get("hours") if body.get("hours") in (1, 6, 24, 168) else 6
+            pasted = str(body.get("pasted") or "")[:2_000_000]
+            start_tracked("monitor", {"roots": [], "dry_run": True, "opts": {"hours": hrs, "pasted": bool(pasted)}}, run_monitor, (hrs, pasted))
+            self._send(200, "{}")
+        elif self.path == "/api/photos_libs":
+            self._send(200, json.dumps({"libs": fx.find_photos_libraries()}))
+        elif self.path == "/api/upload_status":
+            lib = body.get("library") or (fx.find_photos_libraries() or [""])[0]
+            if not lib:
+                return self._send(200, json.dumps({"ok": False, "why": "no Photos library found"}))
+            st = photos_verify_report(lib, body["root"]) if body.get("root") else fx.photos_upload_status(lib)
+            if st.get("ok") and not body.get("root"):
+                upload_record(lib, st)
+                st["eta"] = upload_eta(lib)
+            st["library"] = lib
+            self._send(200, json.dumps(st))
         elif self.path == "/api/photos_preflight":
             self._send(200, json.dumps(photos_preflight()))
         elif self.path == "/api/photos_continue":
@@ -2737,7 +2875,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(409, json.dumps({"error": "A job is already running"}))
             o = body.get("opts", {})
             opts = {"batch_gb": o.get("batch_gb", 10), "keep_free_gb": o.get("keep_free_gb", 20), "pace": o.get("pace", "space"),
-                    "albums": bool(o.get("albums", True)), "order": o.get("order", "oldest"), "limit": o.get("limit")}
+                    "albums": bool(o.get("albums", True)), "order": o.get("order", "oldest"), "limit": o.get("limit"),
+                    "library": o.get("library") or "", "adaptive": bool(o.get("adaptive", True)), "verify_pct": o.get("verify_pct", 99)}
             start_tracked("photos", dict(body, opts=opts), run_photos, (body.get("roots", []), opts, bool(body.get("dry_run"))))
             self._send(200, "{}")
         elif self.path == "/api/similar_scan":
@@ -3137,6 +3276,7 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
     <button class="tab" data-tab="merge" role="tab"><b>&#128450;&#65039;</b> Merge</button>
     <button class="tab" data-tab="clean" role="tab"><b>&#129529;</b> Clean up</button>
     <button class="tab" data-tab="convert" role="tab"><b>&#127902;&#65039;</b> Convert</button>
+    <button class="tab" data-tab="monitor" role="tab"><b>&#128225;</b> Monitor</button>
     <button class="tab" data-tab="health" role="tab"><b>&#129658;</b> Health</button>
     <button class="tab" data-tab="photos" role="tab"><b>&#127822;</b> Photos</button>
     <button class="tab" data-tab="similar" role="tab"><b>&#128269;</b> Similar</button>
@@ -3301,8 +3441,9 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
 <div class="gcheck" id="pcheck"></div>
 <div class="usef" style="margin-top:6px"><b>Library to send:</b> <span id="proot">the first folder in the Source list</span></div>
 <div class="opt"><div style="flex:1"><label for="pbatch" style="font-weight:600">Batch size</label><select id="pbatch" class="sel"><option value="2">About 2 GB</option><option value="5">About 5 GB</option><option value="10" selected>About 10 GB</option><option value="25">About 25 GB</option><option value="50">About 50 GB</option></select></div></div>
-<div class="opt"><div style="flex:1"><label for="ppace" style="font-weight:600">Between batches</label><select id="ppace" class="sel"><option value="space" selected>Wait until my Mac has enough free space</option><option value="ask">Pause and let me press Continue</option><option value="none">Do not wait</option></select>
+<div class="opt"><div style="flex:1"><label for="ppace" style="font-weight:600">Between batches</label><select id="ppace" class="sel"><option value="verify" selected>Wait until Photos shows each batch as uploaded to iCloud (recommended)</option><option value="space">Wait until my Mac has enough free space</option><option value="ask">Pause and let me press Continue</option><option value="none">Do not wait</option></select>
 <div style="margin-top:6px">Keep at least <input type="number" id="pfree" value="20" min="0" max="2000" style="width:80px;flex:none"> GB free</div></div></div>
+<div class="opt"><input type="checkbox" id="padapt" checked><div>Adapt the batch size<small>Sends bigger batches when iCloud keeps up easily and smaller ones when a batch takes hours to upload. Only with upload verification.</small></div></div>
 <div class="opt"><input type="checkbox" id="palb" checked><div>Create albums from album folders<small>Folders such as <i>Japan 2025</i> (not <i>Photos from 2012</i>) become albums in Photos.</small></div></div>
 <div class="opt"><input type="checkbox" id="pdry" checked><div>Preview only<small>Shows the batches and changes nothing. Untick to send to Photos.</small></div></div>
 <div class="tip">&#9888;&#65039; Photos has no undo for imports. Always preview, then send a small test first. Photos skips photos it already has, so running again does not duplicate them.</div>
@@ -3316,6 +3457,22 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
 <div class="opt"><div style="flex:1"><label for="hauto" style="font-weight:600">Check again automatically</label><select id="hauto" class="sel"><option value="0">Off</option><option value="1">Every hour</option><option value="6">Every 6 hours</option><option value="24">Every day</option></select><small>Only while Backstory is open. A new check is skipped while another job is running.</small></div></div>
 <button class="p" id="hgo" style="margin-top:6px">Check library health</button></div>
 </section>
+<section class="pane" id="pane-monitor">
+<h2 class="ph">Photos and iCloud monitor</h2>
+<div class="card"><b>Is everything in iCloud yet?</b>
+<small style="margin-top:4px">Reads a copy of your Photos library's database to count what has uploaded, how fast it is going, and whether it looks stuck. It also checks the files Backstory sent from your first Source folder. Apple does not document this database, so treat the numbers as a strong hint and confirm in Photos and on iCloud.com.</small>
+<div class="opt"><div style="flex:1"><label for="uplib" style="font-weight:600">Photos library</label><select id="uplib" class="sel"><option value="">Find it automatically</option></select></div></div>
+<div class="opt"><input type="checkbox" id="upsent" checked><div>Also check the files Backstory sent<small>Compares each file sent from the first Source folder with Photos, by name and size.</small></div></div>
+<div class="hbtns"><button class="p" id="upgo">Check upload status</button></div><div id="upres"></div></div>
+<div class="card"><b>Log issues</b>
+<small style="margin-top:4px">Reads recent Photos, iCloud and Backstory errors that you never see in Console and explains them in plain language, with fixes. It only reads. Nothing is uploaded.</small>
+<div class="opt"><div style="flex:1"><label for="mhours" style="font-weight:600">Look back</label><select id="mhours" class="sel"><option value="1">1 hour</option><option value="6" selected>6 hours</option><option value="24">24 hours</option><option value="168">7 days</option></select></div></div>
+<div class="opt"><div style="flex:1"><label for="mauto" style="font-weight:600">Check automatically</label><select id="mauto" class="sel"><option value="0">Off</option><option value="15">Every 15 minutes</option><option value="60">Every hour</option></select><small>Only while Backstory is open (macOS asks permission before showing notifications).</small></div></div>
+<div class="hbtns"><button class="p" id="mgo">Check the logs</button></div>
+<div class="opt"><div style="flex:1"><label for="mpaste" style="font-weight:600">Or paste log text</label><textarea id="mpaste" placeholder="Paste lines from Console or a crash report here" spellcheck="false" style="min-height:70px"></textarea></div></div>
+<div class="hbtns"><button id="mpastego">Interpret the pasted text</button></div></div>
+</section>
+
 
 
 
@@ -3338,7 +3495,7 @@ function makeIcon(html){const b=document.createElement('button');b.type='button'
   b.onfocus=()=>{if(b.matches(':focus-visible'))showTip(b)};b.onblur=hideTip;
   b.onclick=e=>{e.preventDefault();e.stopPropagation();if(b._pt==='mouse'){showTip(b);return}tipEl._owner===b?hideTip():showTip(b)};return b}
 document.addEventListener('click',hideTip);window.addEventListener('scroll',hideTip,{passive:true});
-const PANE_SUB={health:'Space waste, folder problems, ghosts and statistics for your library, tracked over time.',photos:'Send your finished library to Apple Photos in batches, with room for iCloud to catch up.',similar:'Find the same picture saved twice, and choose what to set aside.',help:'The user guide, safety notice and how to get support.',history:'Every run, with its full report and log.',guided:'The easy way: zips or folders in, a clean library out. Originals never change.',fix:'Put the real date, location and caption back into your photos.',merge:'Bring two or more folders together into one.',clean:'Tidy up leftovers once you are done.',convert:'Turn older video formats into MP4.'};
+const PANE_SUB={monitor:'Is it in iCloud yet, and what are the logs saying? Plain-language answers.',health:'Space waste, folder problems, ghosts and statistics for your library, tracked over time.',photos:'Send your finished library to Apple Photos in batches, with room for iCloud to catch up.',similar:'Find the same picture saved twice, and choose what to set aside.',help:'The user guide, safety notice and how to get support.',history:'Every run, with its full report and log.',guided:'The easy way: zips or folders in, a clean library out. Originals never change.',fix:'Put the real date, location and caption back into your photos.',merge:'Bring two or more folders together into one.',clean:'Tidy up leftovers once you are done.',convert:'Turn older video formats into MP4.'};
 function decorate(){
   document.querySelectorAll('.opt').forEach(o=>{
     const box=o.querySelector(':scope > div');if(!box)return;
@@ -3418,6 +3575,7 @@ function showSummary(s){
   if(s.kind==='similar'){showSimilar(s);return}
   if(s.kind==='photos'){showPhotos(s);return}
   if(s.kind==='health'){showHealth(s);return}
+  if(s.kind==='monitor'){showMonitor(s);return}
   if(s.kind==='similar_apply'||s.kind==='formats_apply'){showSimilarApply(s);return}
   let h=`<div class="tiles">${tile(s.total,'media files')}${tile(s.duplicates,'exact duplicates skipped')}${tile(s.matched,'unique files matched ('+s.pct_matched+'%)','ok')}${tile(s.no_json,'no JSON found',s.no_json?'bad':'ok')}${tile(s.orphans,'JSON with no photo')}${s.name_dates?tile(s.name_dates,'dates from file names','ok'):''}</div>`;
   h+=s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
@@ -3474,12 +3632,13 @@ function setBar(barId,fillId,pctId,pct,indet){
     for(let i=0;i<30;i++){await new Promise(x=>setTimeout(x,1000));const s=await st();if(s&&s.boot!==boot){location.reload();return}}
     $('updmsg').textContent='Updated. If the page does not reload, restart the app in Terminal.'}
 })();
-const TABS=['guided','fix','merge','clean','convert','health','photos','similar','history','help'];const tabOf=k=>({formats_apply:'health',similar_apply:'similar',undo:'history',consolidate:'clean',cleanup:'clean',sort:'merge',assess:'guided'}[k]||k);let curGuided=false;const paneKind=()=>curGuided?'guided':tabOf(jobKind);let jobKind='fix';
+const TABS=['guided','fix','merge','clean','convert','health','monitor','photos','similar','history','help'];const tabOf=k=>({formats_apply:'health',similar_apply:'similar',undo:'history',consolidate:'clean',cleanup:'clean',sort:'merge',assess:'guided'}[k]||k);let curGuided=false;const paneKind=()=>curGuided?'guided':tabOf(jobKind);let jobKind='fix';
 function showTab(t){if(!TABS.includes(t))t='fix';
   TABS.forEach(x=>{$('pane-'+x).style.display=x===t?'block':'none';document.querySelector('.tab[data-tab="'+x+'"]').classList.toggle('on',x===t)});
   try{localStorage.setItem('tab',t)}catch(e){}
   if(t==='history')loadHistory();
   if(t==='photos')renderPCheck();
+  if(t==='monitor')loadLibs();
   if(t==='help'&&!$('hview').dataset.loaded){$('hview').dataset.loaded='1';helpView('guide')}
   try{history.replaceState(null,'','#'+t)}catch(e){}
   updGoto()}
@@ -3726,7 +3885,7 @@ $('simscan').onclick=async()=>{
   const r=await post('/api/similar_scan',{roots:roots(),threshold:+$('simsens').value});
   if(r.error)alert(r.error);else{placeResults('similar');$('prog').style.display='block';poll()}};
 
-function photosOpts(limit){return {batch_gb:+$('pbatch').value,keep_free_gb:+$('pfree').value,pace:$('ppace').value,albums:$('palb').checked,order:'oldest',limit:limit||null}}
+function photosOpts(limit){return {batch_gb:+$('pbatch').value,keep_free_gb:+$('pfree').value,pace:$('ppace').value,albums:$('palb').checked,order:'oldest',limit:limit||null,adaptive:$('padapt').checked,library:($('uplib')||{}).value||''}}
 async function renderPCheck(){
   $('proot').textContent=roots()[0]||'none chosen yet: add your finished library folder in the bar at the top';
   let p={};try{p=await post('/api/photos_preflight')}catch(e){}
@@ -3802,6 +3961,54 @@ $('hgo').onclick=()=>startHealth(false);
   setInterval(async()=>{const hrs=+$('hauto').value;if(!hrs||!roots().length)return;let last=0;try{last=+localStorage.getItem('health_last')||0}catch(e){}
     if(Date.now()-last<hrs*3600e3)return;try{const s=await (await fetch('/api/status')).json();if(s.state==='scanning'||s.state==='running')return}catch(e){return}
     startHealth(true)},60000)})();
+
+function fmtEta(h){if(!h)return '';return h<1?Math.max(1,Math.round(h*60))+' minutes':h<48?h.toFixed(1)+' hours':Math.round(h/24)+' days'}
+async function loadLibs(){try{const r=await post('/api/photos_libs');const sel=$('uplib');const cur=sel.value;sel.innerHTML='<option value="">Find it automatically</option>'+(r.libs||[]).map(l=>`<option value="${esc(l)}">${esc(l.split('/').slice(-2).join('/'))}</option>`).join('');sel.value=cur}catch(e){}}
+async function checkUpload(){
+  $('upgo').disabled=true;$('upres').innerHTML='<small>Reading the Photos database...</small>';
+  const r=await post('/api/upload_status',{library:$('uplib').value,root:$('upsent').checked?(roots()[0]||''):''});
+  $('upgo').disabled=false;
+  if(!r.ok){$('upres').innerHTML=`<div class="tip">Could not read the Photos database${r.why?': '+esc(r.why):''}. This needs a Mac with a Photos library; the check is experimental.</div>`;return}
+  const pct=r.total&&r.uploaded!=null?Math.round(100*r.uploaded/r.total):null;
+  let h='';
+  if(r.icloud_on===false)h+='<div class="tip">iCloud Photos looks <b>switched off</b> for this library: nothing is marked as uploaded. Turn it on in Photos > Settings > iCloud.</div>';
+  if(r.uploaded!=null)h+=`<div class="tiles">${tile(r.total,'items in Photos')}${tile(r.uploaded,'in iCloud','ok')}${tile(r.pending,'waiting to upload',r.pending?'bad':'ok')}</div><div class="bar" style="margin:8px 0"><i style="width:${pct}%"></i></div>`;
+  else h+='<div class="tip">This version of Photos does not expose upload state, so only the item count is available: '+r.total.toLocaleString()+' items.</div>';
+  const eta=r.eta||{};
+  if(eta.stalled)h+='<div class="tip" style="border-color:var(--bad)"><b>Uploads look stuck:</b> the number waiting has not fallen for about 45 minutes. <a href="#" id="whystuck">Check the logs for the cause</a> (Low Power Mode, a paused sync, no iCloud space and a lost network are the usual ones).</div>';
+  else if(eta.rate_per_hour>0&&eta.eta_hours)h+=`<div class="tip" style="border-color:var(--acc)">Uploading about <b>${eta.rate_per_hour.toLocaleString()}</b> items an hour. About <b>${fmtEta(eta.eta_hours)}</b> left at that speed.</div>`;
+  else if(r.pending>0&&(eta.points||0)<2)h+='<div class="tip">Press the button again in a few minutes and Backstory will work out the upload speed and time left.</div>';
+  if(r.sent!=null&&r.sent>0){
+    if(r.wanted_note)h+='<div class="tip">Could not verify the files Backstory sent ('+esc(r.wanted_note)+').</div>';
+    else if(r.matched!=null){const ok=r.matched_uploaded===r.matched&&r.not_found===0;
+      h+=`<div class="tip" style="border-color:${ok?'var(--ok)':'var(--warn)'}"><b>Files Backstory sent:</b> ${r.matched.toLocaleString()} of ${r.sent.toLocaleString()} are in Photos, ${r.matched_uploaded.toLocaleString()} of those are in iCloud${r.not_found?`; ${r.not_found.toLocaleString()} were not found in Photos (skipped as duplicates, still importing, or renamed)`:''}.${(r.missing_examples||[]).length?'<br>Not found: '+r.missing_examples.map(esc).join(', '):''}</div>`;
+      if(ok)h+='<h2>Ready to retire the staging copy?</h2><div class="rec"><div class="why" style="margin:0">All files Backstory sent are in iCloud. Before you remove anything: (1) look through Photos and on iCloud.com (Photos) for a few years and albums; (2) compare the item counts; (3) keep a backup of your library on another drive; (4) <b>keep your Takeout zip files and the staging drive until you are satisfied</b>. The zips hold Google\'s original information and are your only copy of it.</div></div>'}}
+  $('upres').innerHTML=h;const w=$('whystuck');if(w)w.onclick=e=>{e.preventDefault();startMonitor(false)}}
+$('upgo').onclick=checkUpload;
+async function startMonitor(quiet,pasted){
+  if(!quiet){$('sum').style.display='none'}curGuided=false;
+  const r=await post('/api/monitor_start',{hours:+$('mhours').value,pasted:pasted||''});
+  try{localStorage.setItem('mon_last',String(Date.now()))}catch(e){}
+  if(r.error){if(!quiet)alert(r.error)}else{placeResults('monitor');$('prog').style.display='block';poll()}}
+$('mgo').onclick=()=>startMonitor(false);
+$('mpastego').onclick=()=>{const t=$('mpaste').value;if(!t.trim()){alert('Paste some log text first');return}startMonitor(false,t)};
+function showMonitor(s){
+  const src=Object.entries(s.sources||{}).map(([k,v])=>({mac_log:'macOS log',crash_reports:'crash reports',backstory:'Backstory runs',pasted:'pasted text'}[k]+': '+v.toLocaleString()+' lines')).join(' &middot; ');
+  let h=`<div class="tiles">${tile(s.issues.length,'issues found',s.issues.some(i=>i.sev==='bad')?'bad':s.issues.length?'':'ok')}${tile(s.lines,'log lines read')}${tile((s.other||[]).length,'unrecognised errors')}</div><small>${src}</small>`;
+  if(s.note)h+=`<div class="tip">${esc(s.note)}</div>`;
+  h+=(s.tips||[]).map(t=>`<div class="tip" style="border-color:var(--ok)">${esc(t)}</div>`).join('');
+  h+=s.issues.map(i=>`<div class="card"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="font-size:16px">${esc(i.title)}</b><span class="badge ${i.sev==='bad'?'badb':i.sev==='warn'?'warnb':''}">${i.sev==='bad'?'Fix':i.sev==='warn'?'Worth fixing':'For your information'}</span>${i.new?'<span class="badge okb">New</span>':''}<span class="mutes">${i.count.toLocaleString()} time${i.count===1?'':'s'}${i.last&&i.last!==i.first?' &middot; last '+esc(i.last):''}</span></div>
+  <div class="why" style="margin:6px 0">${esc(i.meaning)}</div><b style="font-size:13px">What to do</b><ol style="margin:4px 0 8px;padding-left:20px">${i.fixes.map(f=>'<li>'+esc(f)+'</li>').join('')}</ol>
+  <details><summary class="mutes">Show the log lines</summary><pre style="white-space:pre-wrap;font-size:11.5px;margin:6px 0">${i.examples.map(esc).join('\n')}</pre></details></div>`).join('');
+  if((s.other||[]).length)h+='<h2>Errors Backstory does not recognise</h2><small style="margin-top:0">These are errors without a known explanation. If something is not working, copy them into an email to support.</small><pre style="white-space:pre-wrap;font-size:11.5px">'+s.other.map(o=>esc(o.text)+'  (x'+o.count+')').join('\n')+'</pre>';
+  $('sumbody').innerHTML=h;$('sum').style.display='block';
+  const bad=s.issues.filter(i=>i.new&&i.sev==='bad');
+  if(bad.length&&window.Notification&&Notification.permission==='granted'){try{new Notification('Backstory: '+bad[0].title,{body:bad[0].meaning})}catch(e){}}}
+(function(){let a='0';try{a=localStorage.getItem('mon_auto')||'0'}catch(e){}$('mauto').value=a;
+  $('mauto').onchange=()=>{try{localStorage.setItem('mon_auto',$('mauto').value)}catch(e){}if($('mauto').value!=='0'&&window.Notification&&Notification.permission==='default')Notification.requestPermission()};
+  setInterval(async()=>{const m=+$('mauto').value;if(!m)return;let last=0;try{last=+localStorage.getItem('mon_last')||0}catch(e){}
+    if(Date.now()-last<m*60e3)return;try{const s=await (await fetch('/api/status')).json();if(s.state==='scanning'||s.state==='running')return}catch(e){return}
+    startMonitor(true)},60000)})();
 function showMerge(s){
   const w=s.dry_run?'would be ':'';
   let h=`<div class="tiles">${tile(s.total,'files found')}${tile(s.brought,'files '+w+(s.move?'moved':'copied')+' in','ok')}${tile(s.in_place_files,'already in place')}${tile(s.identical,'identical copies (kept once)')}${tile(s.clashes,'name clashes resolved')}${tile(s.merged_dirs,'folders '+w+'merged from 2+ sources')}${s.json_along?tile(s.json_along,'.json files brought along'):''}${tile(s.failed,'problems',s.failed?'bad':'')}</div>`;
@@ -3877,7 +4084,7 @@ function showConvert(s){
 
 function liveTiles(s,c,done,nj){
   if(!s.total)return '';const x=s.extra||{};const err=(x.errors?tile(x.errors,'files with errors','bad'):'');
-  if(['assess','consolidate','undo','similar','similar_apply','photos','health','formats_apply'].includes(jobKind))return '';
+  if(['assess','consolidate','undo','similar','similar_apply','photos','health','formats_apply','monitor'].includes(jobKind))return '';
   if(jobKind==='merge')return tile(s.total,'files found')+tile(x.placed||0,'brought in','ok')+tile(x.identical||0,'identical (kept once)')+tile(x.clashes||0,'name clashes')+(x.json_along?tile(x.json_along,'.json brought along'):'')+(x.errors?tile(x.errors,'problems','bad'):'');
   if(jobKind==='cleanup')return tile(x.json||0,'.json files')+tile(x.junk||0,'junk files')+tile(x.renamed||0,'renamed')+tile(x.merged||0,'folders merged')+tile(x.empty||0,'empty folders')+(x.errors?tile(x.errors,'errors','bad'):'');
   if(jobKind==='convert')return tile(s.total,'videos found')+tile(done,'checked so far')+tile(x.converted||0,'converted','ok')+(x.bytes_before?tile(fmtBytes(Math.max(0,x.bytes_before-x.bytes_after))+' ('+Math.round(100*(1-x.bytes_after/x.bytes_before))+'%)','space saved so far','ok'):'')+tile(x.skipped_live||0,'Live Photo videos skipped')+(x.errors?tile(x.errors,'could not convert','bad'):'');
@@ -3935,7 +4142,7 @@ $('hfolder').onclick=()=>post('/api/open_reports');
 $('hdiag').onclick=async()=>{const r=await post('/api/diagnostics');try{await navigator.clipboard.writeText(r.text);$('hdiag').textContent='Copied'}catch(e){const t=document.createElement('textarea');t.value=r.text;document.body.appendChild(t);t.select();try{document.execCommand('copy');$('hdiag').textContent='Copied'}catch(_){prompt('Copy this:',r.text)}t.remove()}setTimeout(()=>{$('hdiag').textContent='Copy diagnostic info'},2000)};
 let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   const s=await (await fetch('/api/status')).json();$('prog').style.display='block';
-  const run=s.state==='scanning'||s.state==='running';$('go').disabled=run;$('gst').disabled=run;$('gchk').disabled=run;$('simscan').disabled=run;$('pgo').disabled=run;$('hgo').disabled=run;$('ptest').disabled=run;
+  const run=s.state==='scanning'||s.state==='running';$('go').disabled=run;$('gst').disabled=run;$('gchk').disabled=run;$('simscan').disabled=run;$('pgo').disabled=run;$('hgo').disabled=run;$('mgo').disabled=run;$('mpastego').disabled=run;$('ptest').disabled=run;
   jobKind=s.kind||'fix';const gd=s.guided||null;curGuided=!!gd;placeResults(jobKind);
   let pct=0,indet=false;
   if(s.state==='done'){pct=100}
@@ -3944,7 +4151,7 @@ let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   else if(s.phase&&s.phase.total){pct=100*s.phase.done/s.phase.total}
   else if(s.state==='scanning'||s.state==='running'){indet=true}
   setBar('bar','fill','pct',pct,indet);
-  const LBL=(gd&&!gd.final&&gd.steps.length)?('Guided &middot; step '+gd.i+' of '+gd.steps.length+': '+esc(gd.steps[gd.i-1]||'')):gd&&jobKind==='guided'?'Guided':{health:'Library health',formats_apply:'Set aside',photos:'Apple Photos',similar:'Find similar photos',similar_apply:'Set aside',undo:'Undo',consolidate:'Merge similar folders',assess:'Check my files',fix:'Part 1 Fix',convert:'Part 4 Convert',cleanup:'Part 3 Clean up',merge:'Part 2 Merge'}[jobKind]||'';
+  const LBL=(gd&&!gd.final&&gd.steps.length)?('Guided &middot; step '+gd.i+' of '+gd.steps.length+': '+esc(gd.steps[gd.i-1]||'')):gd&&jobKind==='guided'?'Guided':{monitor:'Log check',health:'Library health',formats_apply:'Set aside',photos:'Apple Photos',similar:'Find similar photos',similar_apply:'Set aside',undo:'Undo',consolidate:'Merge similar folders',assess:'Check my files',fix:'Part 1 Fix',convert:'Part 4 Convert',cleanup:'Part 3 Clean up',merge:'Part 2 Merge'}[jobKind]||'';
   $('msg').innerHTML=(LBL?'<b>'+LBL+'</b> &middot; ':'')+(s.state==='error'?'<span class="err">'+esc(s.message)+'</span>':s.state==='done'?'<span class="ok">Finished.</span>':esc(s.message)+(s.done?` (${s.done.toLocaleString()} / ${s.total.toLocaleString()})`:''));
   const c=s.counts||{},done=s.done||0,nj=c['no-json']||0;
   $('tiles').innerHTML=liveTiles(s,c,done,nj);

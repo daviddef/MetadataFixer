@@ -3086,6 +3086,243 @@ def photos_db_health(lib):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def find_photos_libraries():
+    """Photos libraries in the usual places (read-only listing)."""
+    out = []
+    for base in (Path.home() / "Pictures", Path("/Volumes")):
+        try:
+            if base.name == "Volumes":
+                cands = [p for v in base.iterdir() if v.is_dir() for p in v.glob("*.photoslibrary")]
+            else:
+                cands = list(base.glob("*.photoslibrary"))
+        except OSError:
+            continue
+        out += [str(p) for p in cands if (p / "database" / "Photos.sqlite").exists()]
+    return out
+
+
+def photos_upload_status(lib, wanted=None):
+    """How much of a Photos library is in iCloud, read from a copy of its database (Apple does not document it, so this is
+    best effort). wanted = [(original file name, size)] checks those specific imports. Returns a dict, with "ok": False and
+    "why" when it cannot be read."""
+    import sqlite3
+    lib = Path(lib)
+    db = lib / "database" / "Photos.sqlite"
+    if not db.exists():
+        return {"ok": False, "why": "no Photos database found in %s" % lib.name}
+    tmp = tempfile.mkdtemp(prefix="backstory_upload_")
+    con = None
+    try:
+        for suf in ("", "-wal", "-shm"):
+            src = Path(str(db) + suf)
+            if src.exists():
+                shutil.copy2(src, Path(tmp) / ("Photos.sqlite" + suf))
+        con = sqlite3.connect("file:%s?mode=ro" % (Path(tmp) / "Photos.sqlite"), uri=True)
+        acols = {r[1] for r in con.execute("PRAGMA table_info(ZASSET)")}
+        if not acols:
+            return {"ok": False, "why": "this Photos version stores things differently"}
+        live = "ZTRASHEDSTATE = 0" if "ZTRASHEDSTATE" in acols else "1=1"
+        total = con.execute("SELECT COUNT(*) FROM ZASSET WHERE %s" % live).fetchone()[0]
+        out = {"ok": True, "total": total, "uploaded": None, "pending": None, "icloud_on": None, "known_state": "ZCLOUDLOCALSTATE" in acols}
+        if "ZCLOUDLOCALSTATE" in acols:
+            up = con.execute("SELECT COUNT(*) FROM ZASSET WHERE %s AND ZCLOUDLOCALSTATE = 1" % live).fetchone()[0]
+            out["uploaded"], out["pending"] = up, total - up
+        guid = 0
+        if "ZCLOUDASSETGUID" in acols:
+            guid = con.execute("SELECT COUNT(*) FROM ZASSET WHERE %s AND ZCLOUDASSETGUID IS NOT NULL" % live).fetchone()[0]
+        out["with_cloud_id"] = guid
+        out["icloud_on"] = bool((out["uploaded"] or 0) > 0 or guid > 0)
+        if wanted:
+            tcols = {r[1] for r in con.execute("PRAGMA table_info(ZADDITIONALASSETATTRIBUTES)")}
+            if "ZORIGINALFILENAME" in tcols and "ZCLOUDLOCALSTATE" in acols:
+                join = "s.ZADDITIONALATTRIBUTES = a.Z_PK" if "ZADDITIONALATTRIBUTES" in acols else ("a.ZASSET = s.Z_PK" if "ZASSET" in tcols else "")
+                if join:
+                    size_col = "a.ZORIGINALFILESIZE" if "ZORIGINALFILESIZE" in tcols else "0"
+                    state = {}
+                    for nm, sz, cs in con.execute("SELECT lower(a.ZORIGINALFILENAME), %s, s.ZCLOUDLOCALSTATE FROM ZASSET s JOIN ZADDITIONALASSETATTRIBUTES a ON %s WHERE %s" % (size_col, join, live.replace("ZTRASHEDSTATE", "s.ZTRASHEDSTATE"))):
+                        k = (nm, int(sz or 0))
+                        state[k] = max(state.get(k, 0), 1 if cs == 1 else 0)
+                    state_by_name = {}
+                    for (nm, sz), v in state.items():
+                        state_by_name[nm] = max(state_by_name.get(nm, 0), v)
+                    matched = matched_up = 0
+                    missing = []
+                    for nm, sz in wanted:
+                        k = (nm.lower(), int(sz))
+                        if k in state:
+                            matched += 1
+                            matched_up += state[k]
+                        elif nm.lower() in state_by_name:           # same name, size differs (Photos may store a different size)
+                            matched += 1
+                            matched_up += state_by_name[nm.lower()]
+                        elif len(missing) < 10:
+                            missing.append(nm)
+                    out.update({"wanted": len(wanted), "matched": matched, "matched_uploaded": matched_up, "not_found": len(wanted) - matched, "missing_examples": missing})
+                else:
+                    out["wanted_note"] = "could not link files to Photos items"
+            else:
+                out["wanted_note"] = "this Photos version does not record original file names"
+        return out
+    except Exception as ex:
+        return {"ok": False, "why": str(ex)[:140]}
+    finally:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ---- Reading the logs Photos, iCloud and Backstory write, and saying what they mean ---------------------------
+LOG_RULES = [
+    {"id": "disk_full", "sev": "bad", "title": "The disk is full",
+     "re": r"no space left on device|ENOSPC|NSPOSIXErrorDomain[^\n]{0,40}Code=28\b|insufficient (disk|storage) space|not enough (free )?(disk )?space|out of disk space",
+     "meaning": "Photos, iCloud or Backstory tried to write a file and the disk had no room.",
+     "fixes": ["Free space: empty the Trash, delete large files you no longer need, or move files to an external drive (Apple menu > System Settings > General > Storage shows what takes space).",
+               "In Photos > Settings > iCloud choose Optimize Mac Storage so originals can be replaced by small copies once they are in iCloud.",
+               "Pause sending to Photos until there is at least 20 GB free, then continue (Backstory's Photos tab can wait for room for you)."]},
+    {"id": "icloud_quota", "sev": "bad", "title": "iCloud storage is full",
+     "re": r"CKErrorQuotaExceeded|quota ?exceeded|QuotaExceeded|iCloud storage (is )?full|not enough iCloud storage|storage limit",
+     "meaning": "Your iCloud plan has no room left, so Photos cannot upload more.",
+     "fixes": ["Open System Settings > Apple ID (your name) > iCloud > Manage to see what uses the space.", "Buy a larger iCloud+ plan, or free space by deleting old backups and big files.",
+               "Uploads resume by themselves once there is room."]},
+    {"id": "network", "sev": "warn", "title": "Network trouble is slowing or stopping uploads",
+     "re": r"NSURLErrorDomain[^\n]{0,60}(-1009|-1005|-1001|-1004|-1200|-1018)|not connected to the internet|network connection was lost|request timed out|could not connect to the server|CKErrorNetwork(Unavailable|Failure)",
+     "meaning": "The connection dropped or timed out while Photos or iCloud was talking to Apple's servers.",
+     "fixes": ["Check Wi-Fi or Ethernet and try opening a web page.", "Turn off any VPN or content filter, which can break large uploads.", "Restart the router, or move closer to it. Large libraries upload best on a steady wired or strong Wi-Fi link.",
+               "If it keeps happening, in Photos > Settings > iCloud pause for a minute and resume to restart syncing."]},
+    {"id": "not_signed_in", "sev": "bad", "title": "iCloud sign-in problem",
+     "re": r"CKErrorNotAuthenticated|not authenticated|AuthenticationFailed|authentication (is )?required|account (changed|not signed in)|iCloud account is not available|CKAccountStatus(NoAccount|Restricted|CouldNotDetermine)",
+     "meaning": "iCloud does not think this Mac is signed in (or needs you to sign in again), so nothing uploads.",
+     "fixes": ["Open System Settings > Apple ID and check you are signed in; sign out and in again if it asks.", "Check iCloud > Photos is switched on.", "If a banner says 'Apple ID settings need updating', open it and follow the prompts."]},
+    {"id": "db_corrupt", "sev": "bad", "title": "The Photos database may be damaged",
+     "re": r"SQLITE_CORRUPT|database disk image is malformed|SQLite error 11|integrity[_ ]check failed|photos\.sqlite[^\n]{0,60}(corrupt|damaged|malformed)|PLPhotoLibrary[^\n]{0,60}(corrupt|damaged)|database (is )?corrupt",
+     "meaning": "Photos' own database reports damage. Photos can misbehave, lose track of items or stop syncing.",
+     "fixes": ["Back up the library first (copy the .photoslibrary file to another drive).", "Quit Photos, then hold Option and Command while opening Photos, and choose Repair.",
+               "Do not import more photos until the repair finishes. If repair fails, ask for support with the log excerpt below."]},
+    {"id": "library_repair", "sev": "warn", "title": "Photos is repairing or rebuilding the library",
+     "re": r"rebuilding (the )?(photos )?library|library (needs|is being) (repair|rebuil)|repairing (photo )?library|PLLibraryRebuild|photolibraryd[^\n]{0,60}rebuild",
+     "meaning": "Photos is rebuilding its internal index. This can take hours on a large library and uses a lot of CPU and disk.",
+     "fixes": ["Leave Photos open and the Mac plugged in until it finishes.", "Avoid importing or running Backstory's Photos tab until it is done."]},
+    {"id": "import_failed", "sev": "warn", "title": "Photos could not import some files",
+     "re": r"(import|PHAssetCreationRequest)[^\n]{0,80}(failed|error)|PHPhotosErrorDomain[^\n]{0,30}(3300|3302|3303|3305|3311|3169)|unsupported (file )?(type|format)|cannot import|could not be imported",
+     "meaning": "Specific files were rejected, usually an unsupported format (AVI, MKV, WMV...), a damaged file, or a 0-byte placeholder.",
+     "fixes": ["On Backstory's Convert tab, turn old videos into MP4 first.", "Run the Health tab to find empty (0 byte) and wrongly-named files, and fix them.",
+               "Re-run the Photos tab: files already imported are skipped, so only the missing ones are tried again."]},
+    {"id": "low_power", "sev": "warn", "title": "Uploads are paused by Low Power Mode or the battery",
+     "re": r"low power mode|LowPowerMode|battery[^\n]{0,40}(low|paus)|paus[a-z]* [^\n]{0,30}(battery|low power)|on battery",
+     "meaning": "macOS holds back background uploads to save power.",
+     "fixes": ["Plug the Mac in and turn off Low Power Mode (System Settings > Battery).", "Keep the Mac awake and the lid open while a big upload runs (Settings > Battery > Options: prevent sleep when the display is off)."]},
+    {"id": "sync_paused", "sev": "warn", "title": "iCloud Photos is paused",
+     "re": r"(sync|upload|iCloud Photos)[^\n]{0,40}paus|paus[a-z]*[^\n]{0,40}(sync|upload|iCloud Photos)|PauseCPL|CPLPaused|resume[^\n]{0,20}(in|after) [0-9]+ (hour|day)",
+     "meaning": "Syncing was paused (by you, by Photos for a day, or by the system).",
+     "fixes": ["Open Photos and scroll to the bottom of the Library view: it says 'Paused' with a Resume button.", "Press Resume. If it pauses again by itself, check Low Power Mode and available space."]},
+    {"id": "permission", "sev": "bad", "title": "macOS blocked the request (permission)",
+     "re": r"not authorized to send Apple events|errAEEventNotPermitted|\(-1743\)|-1743|kTCCService|TCC[^\n]{0,30}(denied|deny)|Operation not permitted|not permitted to access",
+     "meaning": "A privacy setting stops the app from controlling Photos or reading a folder.",
+     "fixes": ["System Settings > Privacy & Security > Automation: allow Backstory to control Photos.", "Privacy & Security > Files and Folders (or Full Disk Access): allow Backstory to read your library folder or external drive.", "Quit and reopen Backstory after changing a permission."]},
+    {"id": "thermal", "sev": "info", "title": "The Mac is hot and slowing down",
+     "re": r"thermal (pressure|state|level)[^\n]{0,20}(serious|critical|heavy)|thermalPressure|throttl",
+     "meaning": "macOS slows background work to cool down, so uploads and analysis crawl.",
+     "fixes": ["Let the Mac cool, keep vents clear, avoid soft surfaces.", "Pause large jobs until it is cooler."]},
+    {"id": "crash", "sev": "bad", "title": "Photos (or a Photos helper) crashed",
+     "re": r"EXC_BAD_ACCESS|EXC_CRASH|Termination Reason|Process (Photos|photolibraryd|cloudphotod|assetsd|mediaanalysisd)[^\n]{0,40}(crash|exited abnormally|terminated)|jetsam|Application Specific Information",
+     "meaning": "A Photos process stopped unexpectedly. If it repeats, a damaged file or a damaged library is a common cause.",
+     "fixes": ["Quit and reopen Photos. If it repeats, restart the Mac.", "Use smaller batches in Backstory's Photos tab and check the Health tab for damaged files.", "Try the Photos repair (Option + Command while opening Photos), after backing up."]},
+    {"id": "bad_asset", "sev": "warn", "title": "A photo or video could not be read",
+     "re": r"(asset|image|photo|video)[^\n]{0,60}(corrupt|damaged|unreadable|cannot be decoded|could not be decoded)|CGImageSource[^\n]{0,60}(failed|err)|AVFoundationErrorDomain[^\n]{0,20}-11800|kCGImageSourceStatus(Corrupt|ReadingHeader|UnknownType)",
+     "meaning": "One or more files are damaged or in an unreadable format, so Photos could not show, analyse or upload them.",
+     "fixes": ["Run the Health tab (deep check) to list 0-byte and wrongly-named files.", "Try opening the file in Preview or QuickTime. If it will not open, restore it from your Takeout or another backup."]},
+    {"id": "io_error", "sev": "bad", "title": "The drive could not be read or written (I/O error)",
+     "re": r"input/output error|I/O error|\bEIO\b|Errno 5|NSPOSIXErrorDomain[^\n]{0,40}Code=5\b|disk (read|write) error|device not configured|Errno 6|Code=6\b",
+     "meaning": "The drive stopped answering or has a bad sector. This is common with loose cables, drives that sleep, or failing drives.",
+     "fixes": ["Reconnect the cable, try another port, and avoid hubs.", "Run Disk Utility > First Aid on the drive.", "Copy the affected files in Finder. If it fails, the drive may be failing: back up everything else now.",
+               "Run Backstory again with the same Destination: finished files are skipped."]},
+    {"id": "volume_gone", "sev": "warn", "title": "A drive or library was not available",
+     "re": r"volume[^\n]{0,40}(ejected|not mounted|unavailable|went away|disconnected)|library[^\n]{0,40}(not found|missing|unavailable|could not be opened)|No such file or directory[^\n]{0,60}\.photoslibrary",
+     "meaning": "The drive holding the library was disconnected or asleep, or the library was moved.",
+     "fixes": ["Reconnect the drive and make sure it is mounted before opening Photos or Backstory.", "If you moved the library, open it again with Option held while opening Photos."]},
+    {"id": "analysis", "sev": "info", "title": "Photos is analysing your library (busy, not broken)",
+     "re": r"mediaanalysisd|photoanalysisd|analysis (is )?(running|in progress)|scene analysis|face (detection|clustering)",
+     "meaning": "After a big import Photos spends hours indexing faces and scenes. It is heavy on CPU and can slow uploads.",
+     "fixes": ["Leave the Mac plugged in and awake: it finishes by itself.", "Wait for it to finish before importing the next big batch."]},
+    {"id": "backstory_space", "sev": "bad", "title": "Backstory: not enough free space",
+     "re": r"Not enough free space",
+     "meaning": "Backstory checked before unpacking a zip and found too little room on the Destination drive.",
+     "fixes": ["Choose a Destination on a bigger or external drive.", "You need about twice your largest single zip while it is processed, plus room for the finished library."]},
+    {"id": "backstory_exiftool", "sev": "bad", "title": "Backstory: ExifTool is missing",
+     "re": r"exiftool not found",
+     "meaning": "The tool that writes dates and locations into photos could not be found.",
+     "fixes": ["The Mac app includes it. If you run from source: brew install exiftool, then restart Backstory."]},
+]
+
+
+def interpret_log_lines(lines, max_examples=3):
+    """Group log lines by what they mean. Returns (issues, unmatched) where issues carry a plain-language meaning and fixes."""
+    comp = [(r, re.compile(r["re"], re.I)) for r in LOG_RULES]
+    found = {}
+    unmatched = {}
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            continue
+        hit = False
+        for r, rx in comp:
+            if rx.search(line):
+                d = found.setdefault(r["id"], {"id": r["id"], "sev": r["sev"], "title": r["title"], "meaning": r["meaning"], "fixes": r["fixes"], "count": 0, "examples": [], "first": line[:19], "last": line[:19]})
+                d["count"] += 1
+                d["last"] = line[:19]
+                if len(d["examples"]) < max_examples and line[:200] not in d["examples"]:
+                    d["examples"].append(line[:240])
+                hit = True
+                break
+        if not hit and re.search(r"\b(error|fault|failed|failure|exception)\b", line, re.I):
+            key = re.sub(r"[0-9a-f]{8,}|\b\d+\b", "#", line[20:120]) if len(line) > 24 else line
+            u = unmatched.setdefault(key, {"text": line[:240], "count": 0})
+            u["count"] += 1
+    order = {"bad": 0, "warn": 1, "info": 2}
+    issues = sorted(found.values(), key=lambda d: (order.get(d["sev"], 3), -d["count"]))
+    other = sorted(unmatched.values(), key=lambda u: -u["count"])[:6]
+    return issues, other
+
+
+MAC_LOG_PROCS = ("photolibraryd", "Photos", "cloudphotod", "assetsd", "mediaanalysisd", "photoanalysisd", "cloudd", "bird", "PhotosReliveWidget", "photoanalysisd")
+
+
+def collect_mac_logs(hours=6, timeout=150):
+    """Recent error and key status lines from the macOS log for Photos and iCloud. Returns (lines, note)."""
+    if sys.platform != "darwin" or not shutil.which("log"):
+        return [], "The macOS log is only available on a Mac. You can paste log text below instead."
+    procs = " OR ".join('process == "%s"' % p for p in sorted(set(MAC_LOG_PROCS)))
+    key = " OR ".join('eventMessage CONTAINS[c] "%s"' % w for w in ("paused", "quota", "low power", "no space", "not authenticated", "corrupt", "rebuild", "unsupported", "timed out", "not connected"))
+    pred = "(%s) AND (messageType == error OR messageType == fault OR %s)" % (procs, key)
+    try:
+        r = subprocess.run(["log", "show", "--last", "%dh" % hours, "--style", "compact", "--predicate", pred], capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as ex:
+        return [], "Could not read the macOS log (%s). Try a shorter time range." % ex
+    out = r.stdout.splitlines()
+    note = ""
+    if r.returncode != 0 or (not out and r.stderr):
+        note = (r.stderr or "").strip()[:200]
+    return out[-20000:], note
+
+
+def collect_crash_reports(days=7):
+    """Crash and hang reports for Photos processes (file names and dates only)."""
+    base = Path.home() / "Library" / "Logs" / "DiagnosticReports"
+    out = []
+    try:
+        cutoff = time.time() - days * 86400
+        for p in base.iterdir():
+            if p.suffix.lower() in (".ips", ".crash", ".hang", ".diag") and re.match(r"(Photos|photolibraryd|cloudphotod|assetsd|mediaanalysisd|photoanalysisd|Backstory)", p.name):
+                if p.stat().st_mtime >= cutoff:
+                    out.append("%s Process %s crashed or hung (%s)" % (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(p.stat().st_mtime)), p.name.split("_")[0], p.suffix[1:]))
+    except OSError:
+        pass
+    return sorted(out)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("root", type=Path, help="folder containing all extracted 'Takeout N' folders")
