@@ -109,10 +109,12 @@ For Google Takeout sources the dates, locations and captions are restored from t
 
 ### Comparing two libraries ("how alike are they?")
 
-Open the **Merge** tab and use **Compare libraries**. Pick two libraries (folders, a Photos library or zips) and Backstory tells you, without changing anything:
+Open the **Merge** tab and use **Compare libraries** (it follows the matching and keeper rules in the duplicate settings). Pick two libraries (folders, a Photos library or zips) and Backstory tells you, without changing anything:
 - how alike they are, as a percentage;
 - which photos are in both, which are only in the first and which are only in the second;
 - photos that are **nearly the same** (the same picture saved at a different size or quality) and not just byte-for-byte copies, with small thumbnails so you can see the difference.
+
+The report also says, for every near-identical pair, **which library's copy a merge would keep and why** (for example *a favourite beats one that is not*), how many pictures would be kept from each library, how many would receive a location, caption or album name from the copy that is left out, how many burst pairs are left alone, and how many look alike but fail a matching rule you ticked (both are kept).
 
 When you then merge, tick **Also skip near-identical pictures** to keep only the best version of each. This option is off by default, because it is a judgement about pictures: look at the comparison first.
 
@@ -254,7 +256,7 @@ You can untick any rule, change the order with the arrows, or add *more keywords
 
 On the Similar tab you still review every group yourself: the best copy is marked, the others are ticked to be set aside (moved, never deleted), and each picture shows tags such as favourite, edited, in an album. During a merge, the copies that are left out stay in your source, untouched.
 
-Not covered yet: photo **bursts** (they are treated like any other similar pictures, so check burst groups before setting anything aside).
+**Bursts.** A burst is a run of photos taken a split second apart (Apple's burst photos, Google's *BURST* files, or three or more look-alike pictures taken within three seconds). By default **every frame of a burst is kept**: bursts are left out of the duplicate groups, and the Similar tab says how many were left alone. Choose *Treat burst photos like any other duplicates* in the same panel if you want only the best frame of each burst.
 
 ## Storyboard: before and after
 

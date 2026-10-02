@@ -3448,7 +3448,7 @@ MATCH_CRITERIA = {
 }
 _EDITOR_RE = re.compile(r"photoshop|lightroom|snapseed|pixelmator|affinity|gimp|capture one|darktable|luminar|picsart|vsco|facetune|canva", re.I)
 EXIF_FACT_TAGS = ["-ImageWidth", "-ImageHeight", "-DateTimeOriginal", "-GPSLatitude", "-GPSLongitude", "-Rating", "-Software",
-                  "-Title", "-ImageDescription", "-Description", "-Subject", "-Keywords"]
+                  "-Title", "-ImageDescription", "-Description", "-Subject", "-Keywords", "-BurstUUID", "-CreateDate"]
 
 
 def _as_list(v):
@@ -3470,6 +3470,10 @@ def member_facts(path, size, it):
          "edited": ("-edited" in name or "(edited)" in name or bool(_EDITOR_RE.search(str(it.get("Software") or "")))),
          "album": is_album_folder(p.parent.name) or bool(kws), "keywords": len(kws), "kw": sorted(kws)[:20],
          "title": bool(str(it.get("Title") or "").strip()), "ext": p.suffix.lower(), "year_folder": p.parent.name.startswith("Photos from")}
+    bm = re.search(r"BURST(\d{8,})", p.name, re.I)
+    f["burst"] = str(it.get("BurstUUID")) if it.get("BurstUUID") else ("g" + bm.group(1)[:14] if bm else "")
+    if not f["date"]:
+        f["date"] = str(it.get("CreateDate") or "")[:19]
     f["meta"] = int(bool(f["date"])) + int(f["gps"]) + int(has_desc) + int(f["title"]) + int(bool(kws))
     try:
         f["mtime"] = os.stat(path).st_mtime
@@ -3557,9 +3561,30 @@ def carry_over(keeper, dropped):
         c["keywords"] = add[:30]
     return c
 
+LAST_SIMILAR = {"bursts": 0}
 
 
-def find_similar_photos(roots, threshold=6, progress=None, should_stop=None, workers=6, rules=None, must=None):
+def is_burst_group(mem):
+    """A burst: every copy carries the same burst id (Apple's BurstUUID, or Google's BURST name), or three or more
+    pictures that look alike were taken within three seconds of each other."""
+    ids = {m.get("burst") for m in mem}
+    if len(ids) == 1 and "" not in ids:
+        return True
+    ts_ = [_epoch(m["date"]) for m in mem if m.get("date")]
+    return len(mem) >= 3 and len(ts_) == len(mem) and max(ts_) - min(ts_) <= 3
+
+
+def explain_keeper(fa, fb, rules=None):
+    """Which of two copies the keeper rules would keep: ("a"|"b"|"either", plain-language reason)."""
+    rules = rules if rules is not None else DEFAULT_KEEPER
+    for r in rules:
+        ka, kb = keeper_key(fa, [r])[:-1], keeper_key(fb, [r])[:-1]
+        if ka != kb:
+            return ("a" if ka < kb else "b"), KEEPER_RULES[r].split(" beats")[0].split(" wins")[0].lower()
+    return "either", "they are equal on every rule"
+
+
+def find_similar_photos(roots, threshold=6, progress=None, should_stop=None, workers=6, rules=None, must=None, bursts="keep"):
     """Groups of pictures that look the same. Reads pictures only; changes nothing.
     Returns (groups, scanned): each group is a list of {"path","size","w","h","date","gps"} with the suggested keeper first."""
     from concurrent.futures import ThreadPoolExecutor
@@ -3645,6 +3670,7 @@ def find_similar_photos(roots, threshold=6, progress=None, should_stop=None, wor
             finally:
                 Path(arg).unlink(missing_ok=True)
     groups = []
+    burst_n = [0]
     for g in raw:
         mem = []
         for p in g:
@@ -3652,9 +3678,24 @@ def find_similar_photos(roots, threshold=6, progress=None, should_stop=None, wor
             f["hash"] = hashes[p]
             mem.append(f)
         for sub in split_by_criteria(mem, must):
+            if bursts == "keep":
+                if is_burst_group(sub):
+                    burst_n[0] += 1                              # a burst: every frame is kept, so it is not offered as a duplicate
+                    continue
+                ids = {}
+                for f in sub:
+                    if f.get("burst"):
+                        ids[f["burst"]] = ids.get(f["burst"], 0) + 1
+                frames = [f for f in sub if f.get("burst") and ids[f["burst"]] > 1]
+                if frames:
+                    burst_n[0] += 1
+                    sub = [f for f in sub if f not in frames]    # burst frames stay out; the rest are judged on their own
+                    if len(sub) < 2:
+                        continue
             sub.sort(key=lambda f: keeper_key(f, rules))
             groups.append(sub)
     groups.sort(key=lambda g: (-len(g), g[0]["path"]))
+    LAST_SIMILAR["bursts"] = burst_n[0]
     return groups, total
 
 
@@ -4477,7 +4518,7 @@ def _canon_rel(parts):
     return tuple(p.casefold() for p in parts)
 
 
-def compare_libraries(entries, progress=None, should_stop=None, threshold=4, similar_cap=30000, meta_cap=200, workers=6):
+def compare_libraries(entries, progress=None, should_stop=None, threshold=4, similar_cap=30000, meta_cap=200, workers=6, rules=None, must=None, bursts="keep"):
     """Compare the first two libraries you added (folders, Photos libraries or Takeout zip files) and say how alike they are:
     identical files, the same file filed differently, same-named files that differ, the same picture at a different size,
     what only one has, and which folders differ. Read-only. A third or fourth library is only counted against the first."""
@@ -4653,7 +4694,7 @@ def compare_libraries(entries, progress=None, should_stop=None, threshold=4, sim
             os.close(fd)
             try:
                 Path(arg).write_text("\n".join(paths[k:k + 300]), encoding="utf-8", errors="surrogateescape")
-                r = subprocess.run(["exiftool", "-charset", "filename=utf8", "-j", "-n", "-ImageWidth", "-ImageHeight", "-DateTimeOriginal", "-CreateDate", "-GPSLatitude", "-GPSLongitude", "-ImageDescription", "-@", arg],
+                r = subprocess.run(["exiftool", "-charset", "filename=utf8", "-j", "-n", "-@", arg] + EXIF_FACT_TAGS,
                                    capture_output=True, text=True)
                 for it in json.loads(r.stdout or "[]"):
                     info[it["SourceFile"]] = it
@@ -4664,10 +4705,22 @@ def compare_libraries(entries, progress=None, should_stop=None, threshold=4, sim
 
     def desc(f):
         it = info.get(f[4], {})
-        date = str(it.get("DateTimeOriginal") or it.get("CreateDate") or "")[:19]
+        fc = member_facts(f[4] if not f[6] else os.path.join(*f[0], f[1]) if f[0] else f[1], f[2], it)
+        date = fc["date"]
         gps = "%.4f, %.4f" % (it["GPSLatitude"], it["GPSLongitude"]) if it.get("GPSLatitude") is not None and it.get("GPSLongitude") is not None else ""
         return {"name": f[1], "where": "/".join(f[0]) or ".", "size": f[2], "w": it.get("ImageWidth") or 0, "h": it.get("ImageHeight") or 0,
-                "date": date, "gps": gps, "desc": str(it.get("ImageDescription") or "")[:60], "path": "" if f[6] else f[4]}
+                "date": date, "gps": gps, "desc": str(it.get("ImageDescription") or "")[:60], "path": "" if f[6] else f[4],
+                "fav": fc["fav"], "edited": fc["edited"], "album": fc["album"], "kw": fc["keywords"], "burst": fc["burst"], "_f": fc}
+
+    def decide(da, db):
+        w, why = explain_keeper(da["_f"], db["_f"], rules)
+        return {"keep": w, "why": why}
+
+    def strip(d):
+        return {k: v for k, v in d.items() if k != "_f"}
+
+    def passes(da, db):
+        return bool(split_by_criteria([da["_f"], db["_f"]], must))
 
     def differences(da, db):
         out = []
@@ -4686,12 +4739,33 @@ def compare_libraries(entries, progress=None, should_stop=None, threshold=4, sim
     for f, g in conflicts[:60]:
         da, db = desc(f), desc(g)
         h1, h2 = hashes.get(f[4]), hashes.get(g[4])
-        same_pic = h1 is not None and h2 is not None and bin(h1 ^ h2).count("1") <= threshold
-        R["conflicts"].append({"a": da, "b": db, "same_picture": same_pic, "differences": differences(da, db)})
+        same_pic = h1 is not None and h2 is not None and bin(h1 ^ h2).count("1") <= threshold and passes(da, db)
+        burst = bool(da["burst"] and da["burst"] == db["burst"])
+        R["conflicts"].append({"a": strip(da), "b": strip(db), "same_picture": same_pic, "burst": burst, "differences": differences(da, db), **decide(da, db)})
     R["similar_n"] = len(sim_pairs)
-    for f, g, d in sorted(sim_pairs, key=lambda x: x[2])[:80]:
+    kept_a = kept_b = either = carried = burst_pairs = strict_dropped = 0
+    sim_ok = []
+    for f, g, d in sorted(sim_pairs, key=lambda x: x[2]):
         da, db = desc(f), desc(g)
-        R["similar"].append({"a": da, "b": db, "bits": d, "differences": differences(da, db), "bigger": "a" if da["w"] * da["h"] > db["w"] * db["h"] else ("b" if db["w"] * db["h"] > da["w"] * da["h"] else "same")})
+        if not passes(da, db):
+            strict_dropped += 1                                  # looks alike, but fails a criterion you ticked: both are kept
+            continue
+        if bursts == "keep" and da["burst"] and da["burst"] == db["burst"]:
+            burst_pairs += 1                                     # frames of one burst: all are kept
+            continue
+        dc = decide(da, db)
+        kept_a += dc["keep"] == "a"
+        kept_b += dc["keep"] == "b"
+        either += dc["keep"] == "either"
+        k_, o_ = (da, db) if dc["keep"] != "b" else (db, da)
+        carried += bool(carry_over(k_["_f"], [o_["_f"]]))
+        sim_ok.append((f, g, d, da, db, dc))
+    for f, g, d, da, db, dc in sim_ok[:80]:
+        R["similar"].append({"a": strip(da), "b": strip(db), "bits": d, "differences": differences(da, db), "bigger": "a" if da["w"] * da["h"] > db["w"] * db["h"] else ("b" if db["w"] * db["h"] > da["w"] * da["h"] else "same"), **dc})
+    R["similar_n"] = len(sim_ok)
+    R["keep_summary"] = {"first": kept_a, "second": kept_b, "either": either, "carried": carried, "bursts_kept": burst_pairs, "strict_kept_both": strict_dropped}
+    sim_pairs = [(x[0], x[1], x[2]) for x in sim_ok]
+    used_a, used_b = {id(x[0]) for x in sim_ok}, {id(x[1]) for x in sim_ok}      # pairs we kept both of still count as "only in" one library
     a_only = [f for f in a_rest if id(f) not in used_a]
     b_only = [g for g in b_rest if id(g) not in used_b]
     R["only_a"], R["only_b"] = len(a_only), len(b_only)
@@ -4710,12 +4784,13 @@ def compare_libraries(entries, progress=None, should_stop=None, threshold=4, sim
     sp_n = 0
     for f, g in conflicts:
         h1, h2 = hashes.get(f[4]), hashes.get(g[4])
-        if h1 is not None and h2 is not None and bin(h1 ^ h2).count("1") <= threshold:
+        if h1 is not None and h2 is not None and bin(h1 ^ h2).count("1") <= threshold and passes(desc(f), desc(g)):
             sp_n += 1
     R["same_picture_conflicts"] = sp_n
     R["alike_pct"] = min(100, round(100 * (R["identical"] + len(sim_pairs) + sp_n) / small))
-    R["merged_files"] = R["a_files"] + len(b_only) + len(conflicts)
+    R["merged_files"] = R["a_files"] + len(b_only) + len(sim_pairs) + len(conflicts)
     R["merged_if_near_skipped"] = R["a_files"] + len(b_only) + (len(conflicts) - sp_n)
+    R["merged_if_near_skipped"] = max(0, R["merged_if_near_skipped"])
     # a third/fourth library counted against the first
     for li in range(2, len(libs)):
         sigs_a = {sg for sg in A["sigs"] if sg[1] is not None}

@@ -812,7 +812,37 @@ def t_keeper_rules_and_matching():
     assert not list((WORK / "keep_out2").rglob("small_fav.jpg")), "the smaller copy was kept too"
     lat, desc = exif(out, "GPSLatitude", "ImageDescription")
     assert lat and abs(float(lat) - 48.85) < 0.01 and desc == "Paris trip", (lat, desc)
-    assert g.clean_dupe({"rules": ["bogus", "filesize", "filesize"], "must": ["name", "x"]}) == {"rules": ["filesize"], "must": ["name"]}
+    assert g.clean_dupe({"rules": ["bogus", "filesize", "filesize"], "must": ["name", "x"]}) == {"rules": ["filesize"], "must": ["name"], "bursts": "keep"}
+
+
+def t_bursts_and_compare_rules():
+    d = WORK / "burst"; d.mkdir()
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "mandelbrot=size=640x480", "-frames:v", "1", "-q:v", "3", str(d / "00001IMG_00001_BURST20190704123456789.jpg")], check=True)
+    for k in (2, 3):
+        shutil.copy(d / "00001IMG_00001_BURST20190704123456789.jpg", d / ("0000%dIMG_0000%d_BURST20190704123456789.jpg" % (k, k)))
+    ffmpeg("-i", str(d / "00001IMG_00001_BURST20190704123456789.jpg"), "-vf", "scale=320:240", "-q:v", "6", str(d / "plain_small.jpg"))
+    shutil.copy(d / "plain_small.jpg", d / "plain_small2.jpg")
+    subprocess.run(["exiftool", "-q", "-overwrite_original", "-DateTimeOriginal=2020:01:01 10:00:00", str(d / "plain_small.jpg")], check=True)
+    subprocess.run(["exiftool", "-q", "-overwrite_original", "-DateTimeOriginal=2020:03:05 10:00:00", str(d / "plain_small2.jpg")], check=True)
+    gr, _ = fx.find_similar_photos([str(d)], 6)                   # default: bursts are left alone
+    flat = [os.path.basename(m["path"]) for g in gr for m in g]
+    assert not any("BURST" in n for n in flat), flat
+    assert fx.LAST_SIMILAR["bursts"] >= 1
+    gr, _ = fx.find_similar_photos([str(d)], 6, bursts="best")
+    assert any("BURST" in os.path.basename(m["path"]) for g in gr for m in g), "bursts=best should treat them as duplicates"
+    # compare two libraries with your rules
+    A = WORK / "burstcmpA"; B = WORK / "burstcmpB"
+    ffmpeg("-f", "lavfi", "-i", "mandelbrot=size=640x480", "-frames:v", "1", "-q:v", "3", str(A / "t" / "pic.jpg")) if (A / "t").mkdir(parents=True) is None else None
+    (B / "t").mkdir(parents=True)
+    ffmpeg("-i", str(A / "t" / "pic.jpg"), "-vf", "scale=320:240", "-q:v", "6", str(B / "t" / "holiday.jpg"))
+    subprocess.run(["exiftool", "-q", "-overwrite_original", "-Rating=5", str(B / "t" / "holiday.jpg")], check=True)
+    r = fx.compare_libraries([str(A), str(B)], threshold=6)
+    assert r["similar_n"] == 1 and r["similar"][0]["keep"] == "b" and "favourite" in r["similar"][0]["why"], r["similar"]
+    assert r["keep_summary"]["second"] == 1 and r["keep_summary"]["first"] == 0, r["keep_summary"]
+    r = fx.compare_libraries([str(A), str(B)], threshold=6, rules=["resolution"])
+    assert r["similar"][0]["keep"] == "a" and r["keep_summary"]["first"] == 1
+    r = fx.compare_libraries([str(A), str(B)], threshold=6, must=["name"])
+    assert r["similar_n"] == 0 and r["keep_summary"]["strict_kept_both"] == 1 and r["merged_files"] == 2, (r["similar_n"], r["keep_summary"], r["merged_files"])
 
 
 ORDER = ["t_fix_copy", "t_fix_namedate", "t_fix_inplace", "t_fix_move", "t_fix_dryrun_changes_nothing", "t_fix_zip", "t_zip_resume", "t_zip_needs_dest", "t_zip_corrupt",
@@ -820,7 +850,7 @@ ORDER = ["t_fix_copy", "t_fix_namedate", "t_fix_inplace", "t_fix_move", "t_fix_d
          "t_assess_multi_and_photoslib", "t_guided_end_to_end", "t_guided_no_dest", "t_merge_variants", "t_merge_refuses_unsafe", "t_merge_move_in_place", "t_cleanup_all",
          "t_cleanup_refuses_broad", "t_consolidate", "t_convert", "t_convert_stop", "t_similar_apply_undo", "t_health_and_formats", "t_undo_copy_run", "t_photos_plan_and_run",
          "t_photos_applescript_injection_safe", "t_photos_errors", "t_monitor_rules", "t_monitor_job_paste", "t_compare_and_near", "t_diagnostics", "t_history_report",
-         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs", "t_audit_regressions", "t_dates_and_places", "t_resilient_copy", "t_rerun_over_http", "t_keeper_rules_and_matching"]
+         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs", "t_audit_regressions", "t_dates_and_places", "t_resilient_copy", "t_rerun_over_http", "t_keeper_rules_and_matching", "t_bursts_and_compare_rules"]
 if __name__ == "__main__":
     only = sys.argv[1:]
     for n in ORDER:

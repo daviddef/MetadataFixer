@@ -30,7 +30,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.03-e"
+VERSION = "2026.10.03-f"
 class Cancelled(Exception):
     pass
 
@@ -308,7 +308,7 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
             if near and not zips:
                 dp_ = clean_dupe(dupe)
                 try:
-                    ngroups, _n = fx.find_similar_photos([str(p) for p in resolved], 3, lambda m_, a_, b_: check_cancel(), check_cancel, rules=dp_["rules"], must=dp_["must"])
+                    ngroups, _n = fx.find_similar_photos([str(p) for p in resolved], 3, lambda m_, a_, b_: check_cancel(), check_cancel, rules=dp_["rules"], must=dp_["must"], bursts=dp_["bursts"])
                 except OSError:
                     ngroups = []
                 mset_ = {str(m_) for m_ in media}
@@ -2131,7 +2131,7 @@ def clean_dupe(d):
     d = d if isinstance(d, dict) else {}
     rules = [r for r in (d.get("rules") if isinstance(d.get("rules"), list) else fx.DEFAULT_KEEPER) if r in fx.KEEPER_RULES]
     must = [m for m in (d.get("must") if isinstance(d.get("must"), list) else []) if m in fx.MATCH_CRITERIA]
-    return {"rules": list(dict.fromkeys(rules)), "must": list(dict.fromkeys(must))}
+    return {"rules": list(dict.fromkeys(rules)), "must": list(dict.fromkeys(must)), "bursts": "best" if d.get("bursts") == "best" else "keep"}
 
 
 def run_similar_scan(roots, threshold, dupe=None):
@@ -2148,7 +2148,7 @@ def run_similar_scan(roots, threshold, dupe=None):
             with LOCK:
                 STATE.update(state="running", total=total, done=done, message="%s (%s of %s)" % (msg, f"{done:,}", f"{total:,}"))
         dp = clean_dupe(dupe)
-        groups, scanned = fx.find_similar_photos([str(f) for f in folders], threshold, prog, check_cancel, rules=dp["rules"], must=dp["must"])
+        groups, scanned = fx.find_similar_photos([str(f) for f in folders], threshold, prog, check_cancel, rules=dp["rules"], must=dp["must"], bursts=dp["bursts"])
         view, allowed = [], set()
         for gi, g in enumerate(groups[:300]):
             mem = []
@@ -2169,7 +2169,7 @@ def run_similar_scan(roots, threshold, dupe=None):
         with LOCK:
             SIMILAR.update(roots=[str(f) for f in folders], groups=view, allowed=allowed)
         sm = {"kind": "similar", "dry_run": True, "scanned": scanned, "groups": view, "total_groups": len(groups),
-              "extra": sum(len(g) - 1 for g in groups), "reclaim": fmt_bytes(reclaim), "threshold": threshold, "dupe": dp, "tips": []}
+              "extra": sum(len(g) - 1 for g in groups), "reclaim": fmt_bytes(reclaim), "threshold": threshold, "dupe": dp, "bursts_kept": fx.LAST_SIMILAR.get("bursts", 0), "tips": ([("%d bursts were left alone: every frame is kept. Change this in the duplicate settings if you want only the best frame of each burst." % fx.LAST_SIMILAR["bursts"])] if fx.LAST_SIMILAR.get("bursts") else [])}
         with LOCK:
             STATE.update(state="done", message="Finished", summary=sm, phase=None)
     except Cancelled:
@@ -2690,7 +2690,7 @@ def run_health(roots, deep):
 COMPARE = {"allowed": set()}
 
 
-def run_compare(roots):
+def run_compare(roots, dupe=None):
     with LOCK:
         STATE.update(state="scanning", cancel=False, total=0, done=0, counts={}, message="Comparing your libraries...", report="",
                      summary=None, scan=None, extra={}, recent=[], phase=None, kind="compare", cv=None, guided=None)
@@ -2700,7 +2700,9 @@ def run_compare(roots):
             with LOCK:
                 STATE.update(state="running", total=total, done=done, message=msg + (" (%s of %s)" % (f"{done:,}", f"{total:,}") if total else ""))
                 STATE["phase"] = {"stage": "pct", "done": done, "total": total} if total else None
-        R = fx.compare_libraries(roots, prog, check_cancel)
+        dp = clean_dupe(dupe)
+        R = fx.compare_libraries(roots, prog, check_cancel, rules=dp["rules"], must=dp["must"], bursts=dp["bursts"])
+        R["dupe"] = dp
         allowed = set()
         for lst in (R["conflicts"], R["similar"]):
             for c in lst:
@@ -3248,7 +3250,8 @@ class Handler(BaseHTTPRequestHandler):
             roots = [str(x) for x in body.get("roots", [])]
             if len(roots) < 2:
                 return self._send(200, json.dumps({"error": "Add at least two libraries in the Source list to compare them"}))
-            start_tracked("compare", {"roots": roots, "dry_run": True, "opts": {}}, run_compare, (roots,))
+            dp = clean_dupe(body.get("dupe"))
+            start_tracked("compare", {"roots": roots, "dry_run": True, "opts": {"match": ",".join(dp["must"]) or "visual only", "bursts": dp["bursts"]}}, run_compare, (roots, dp))
             self._send(200, "{}")
         elif path == "/api/diagnostics_start":
             with LOCK:
@@ -4558,11 +4561,12 @@ function showCompare(s){
   let h=`<div class="hscore"><div class="ring" style="--p:${s.alike_pct};--c:${col}"><b>${s.alike_pct}%</b><span>alike</span></div><div style="flex:1;min-width:0"><div style="font-size:20px;font-weight:700">${esc(la)} and ${esc(lb)}</div><div class="mutes">${s.a_files.toLocaleString()} files (${esc(fmtB(s.a_bytes))}) against ${s.b_files.toLocaleString()} files (${esc(fmtB(s.b_bytes))})</div></div></div>`;
   h+=s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
   h+=`<div class="tiles">${tile(s.identical,'identical files','ok')}${tile(s.refiled,'same file, filed differently')}${tile(s.conflict_n,'same name, different file',s.conflict_n?'bad':'')}${tile(s.similar_n,'same picture, different size')}${tile(s.only_a,'only in '+la)}${tile(s.only_b,'only in '+lb)}</div>`;
+  const ks=s.keep_summary;if(ks&&(ks.first||ks.second||ks.either||ks.bursts_kept||ks.strict_kept_both))h+=`<div class="tip" style="border-color:var(--acc)"><b>With your keeper rules</b>, skipping near-identical pictures would keep <b>${ks.first.toLocaleString()}</b> from ${esc(la)} and <b>${ks.second.toLocaleString()}</b> from ${esc(lb)}${ks.either?' ('+ks.either.toLocaleString()+' are equal, either would do)':''}.${ks.carried?' '+ks.carried.toLocaleString()+' of the kept pictures would also receive a location, caption or album name from the one left out.':''}${ks.bursts_kept?' '+ks.bursts_kept.toLocaleString()+' burst pairs are left alone (every frame kept).':''}${ks.strict_kept_both?' '+ks.strict_kept_both.toLocaleString()+' look alike but fail a matching rule you ticked, so both are kept.':''}</div>`;
   h+=`<div class="tip" style="border-color:var(--acc)"><b>If you merge them</b> the library would hold about <b>${s.merged_files.toLocaleString()}</b> files. ${s.same_picture_conflicts?'If you also skip near-identical pictures it would hold about <b>'+s.merged_if_near_skipped.toLocaleString()+'</b>. ':''}Identical files are kept once; files with the same name that differ are both kept (the second becomes <i>name_1</i>).</div>`;
   const pic=(x)=>x.path?`<img src="/thumb?p=${encodeURIComponent(x.path)}" loading="lazy" alt="">`:'<div class="stnoimg">&#128247;</div>';
   const side=(x,lab)=>`<div class="cmpside">${pic(x)}<div class="simcap"><b>${esc(lab)}</b><span>${esc(x.name)}</span><span>${esc(x.where)}</span><span>${x.w&&x.h?x.w+' &times; '+x.h+' &middot; ':''}${esc(fmtB(x.size))}${x.date?' &middot; '+esc(x.date.slice(0,10)):''}${x.gps?' &middot; has location':''}</span></div></div>`;
   if((s.conflicts||[]).length)h+=`<h2>Same name, but not the same file (${s.conflict_n.toLocaleString()})</h2><small style="margin-top:0">${s.same_picture_conflicts?s.same_picture_conflicts.toLocaleString()+' of these look like the same picture saved differently. ':''}A merge keeps both.</small>`+s.conflicts.map(c=>`<div class="card cmppair"><div class="cmpsides">${side(c.a,la)}${side(c.b,lb)}</div><div class="why">${c.same_picture?'<span class="badge okb">Same picture</span> ':'<span class="badge badb">Different pictures</span> '}${c.differences.length?esc(c.differences.join('; ')):'No difference in size, date, location or caption that Backstory can see.'}</div></div>`).join('');
-  if((s.similar||[]).length)h+=`<h2>Same picture, different size (${s.similar_n.toLocaleString()})</h2><small style="margin-top:0">Not identical files, but they look the same. Tick <i>Also skip near-identical pictures</i> in Guided to keep only the larger one when you merge.</small>`+s.similar.map(c=>`<div class="card cmppair"><div class="cmpsides">${side(c.a,la)}${side(c.b,lb)}</div><div class="why">${c.bigger==='same'?'Same size. ':esc((c.bigger==='a'?la:lb))+' has the larger picture. '}${esc(c.differences.join('; '))}</div></div>`).join('');
+  if((s.similar||[]).length)h+=`<h2>Same picture, different size (${s.similar_n.toLocaleString()})</h2><small style="margin-top:0">Not identical files, but they look the same. Tick <i>Also skip near-identical pictures</i> in Guided to keep only the larger one when you merge.</small>`+s.similar.map(c=>`<div class="card cmppair"><div class="cmpsides">${side(c.a,la)}${side(c.b,lb)}</div><div class="why">${c.keep?'<b>Merge would keep '+(c.keep==='a'?esc(la):c.keep==='b'?esc(lb):'either one')+'</b> ('+esc(c.why)+'). ':''}${c.bigger==='same'?'Same size. ':esc((c.bigger==='a'?la:lb))+' has the larger picture. '}${esc(c.differences.join('; '))}</div></div>`).join('');
   if((s.refiled_examples||[]).length)h+='<h2>Same file, filed in a different folder ('+s.refiled.toLocaleString()+')</h2>'+tbl(['File',esc(la),esc(lb)],s.refiled_examples.map(r=>[esc(r.name),esc(r.a),esc(r.b)+(r.b_name!==r.name?' ('+esc(r.b_name)+')':'')]));
   const fl=(L,t)=>L.length?'<h2>'+t+'</h2>'+tbl(['Folder','Files'],L.map(r=>[esc(r.folder),r.files.toLocaleString()])):'';
   h+=fl(s.folders_only_a||[],'Folders only in '+esc(la))+fl(s.folders_only_b||[],'Folders only in '+esc(lb));
@@ -4574,7 +4578,7 @@ function showCompare(s){
 $('cmpgo').onclick=async()=>{
   if(roots().length<2){alert('Add at least two libraries in the Source list first');return}
   $('sum').style.display='none';curGuided=false;
-  const r=await post('/api/compare_start',{roots:roots()});
+  const r=await post('/api/compare_start',{roots:roots(),dupe:getDupe()});
   if(r.error)alert(r.error);else{placeResults('compare');$('prog').style.display='block';poll()}};
 
 function issuesHTML(issues,other){
@@ -4783,20 +4787,24 @@ let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
 const DP_RULES={favorite:'A favourite (5 stars) beats one that is not',edited:'An edited version beats an untouched one',resolution:'More pixels (higher resolution) wins',filesize:'A bigger file wins (less compressed)',metadata:'More complete information inside (date, location, caption, title, keywords) wins',album:'A photo already sorted into an album wins',keywords:'More keywords wins',format:'Modern format (HEIC) beats JPEG beats the rest',yearfolder:"A copy in a 'Photos from YYYY' folder wins",oldest:'The older file wins',newest:'The newer file wins'};
 const DP_DEFAULT=['favorite','edited','resolution','filesize','metadata','album','yearfolder'];
 const DP_MUST={name:'The file name must match',datetime:'The date and time taken must match',dimensions:'The width and height must match',format:'The file format must match',size:'The file size must match'};
-let DP=(function(){try{const j=JSON.parse(localStorage.getItem('dupeprefs')||'null');if(j&&Array.isArray(j.order))return j}catch(e){}return {order:DP_DEFAULT.concat(Object.keys(DP_RULES).filter(k=>DP_DEFAULT.indexOf(k)<0)),on:DP_DEFAULT.slice(),must:[]}})();
-function getDupe(){return {rules:DP.order.filter(k=>DP.on.indexOf(k)>=0&&DP_RULES[k]),must:DP.must.filter(k=>DP_MUST[k])}}
+let DP=(function(){try{const j=JSON.parse(localStorage.getItem('dupeprefs')||'null');if(j&&Array.isArray(j.order)){j.bursts=j.bursts||'keep';return j}}catch(e){}return {bursts:'keep',order:DP_DEFAULT.concat(Object.keys(DP_RULES).filter(k=>DP_DEFAULT.indexOf(k)<0)),on:DP_DEFAULT.slice(),must:[]}})();
+function getDupe(){return {bursts:DP.bursts||'keep',rules:DP.order.filter(k=>DP.on.indexOf(k)>=0&&DP_RULES[k]),must:DP.must.filter(k=>DP_MUST[k])}}
 function saveDP(){try{localStorage.setItem('dupeprefs',JSON.stringify(DP))}catch(e){}renderDP()}
-function renderDP(){document.querySelectorAll('.dpbox').forEach(box=>{const open=box.querySelector('details')&&box.querySelector('details').open;
+function renderDP(){document.querySelectorAll('.dpbox').forEach(box=>{const rn='dpb'+Math.random().toString(36).slice(2,6);const open=box.querySelector('details')&&box.querySelector('details').open;
   box.innerHTML=`<details ${open?'open':''}><summary>&#9881;&#65039; How duplicates are matched, and which copy is kept</summary>
   <small style="margin-top:0">Pictures are first matched by how they <b>look</b>. Tick any of these to be stricter (leave them all unticked to match by looks only):</small>
   <div class="dpmust">${Object.entries(DP_MUST).map(([k,l])=>`<label class="sub"><input type="checkbox" data-must="${k}" ${DP.must.indexOf(k)>=0?'checked':''}> ${l}</label>`).join('')}</div>
+  <small style="margin-top:10px"><b>Bursts</b> (a run of photos taken a split second apart):</small>
+  <label class="sub"><input type="radio" name="${rn}" data-burst="keep" ${DP.bursts!=='best'?'checked':''}> Keep every photo in a burst (recommended)</label>
+  <label class="sub"><input type="radio" name="${rn}" data-burst="best" ${DP.bursts==='best'?'checked':''}> Treat burst photos like any other duplicates and keep only the best</label>
   <small>When a group of duplicates is found, <b>one copy is kept</b>. Backstory goes down this list: the first rule that tells two copies apart decides. Untick a rule to ignore it; use the arrows to change the order. Whatever the kept copy is missing (a location, a caption, album names) is copied onto it from the others, never replacing anything.</small>
   ${DP.order.map((k,i)=>`<div class="dprow ${DP.on.indexOf(k)>=0?'':'off'}"><span class="n">${i+1}</span><input type="checkbox" data-rule="${k}" ${DP.on.indexOf(k)>=0?'checked':''}><label>${DP_RULES[k]}</label><button class="sm" data-up="${k}" ${i?'':'disabled'} aria-label="Move up">&#9650;</button><button class="sm" data-down="${k}" ${i<DP.order.length-1?'':'disabled'} aria-label="Move down">&#9660;</button></div>`).join('')}
   <div class="hbtns"><button class="sm" data-dpreset="1">Reset to the recommended order</button></div></details>`;
   box.querySelectorAll('[data-must]').forEach(c=>c.onchange=()=>{DP.must=c.checked?DP.must.concat(c.dataset.must):DP.must.filter(x=>x!==c.dataset.must);saveDP()});
   box.querySelectorAll('[data-rule]').forEach(c=>c.onchange=()=>{DP.on=c.checked?DP.on.concat(c.dataset.rule):DP.on.filter(x=>x!==c.dataset.rule);saveDP()});
   box.querySelectorAll('[data-up],[data-down]').forEach(b=>b.onclick=()=>{const k=b.dataset.up||b.dataset.down,i=DP.order.indexOf(k),j=b.dataset.up?i-1:i+1;if(j<0||j>=DP.order.length)return;[DP.order[i],DP.order[j]]=[DP.order[j],DP.order[i]];saveDP()});
-  box.querySelectorAll('[data-dpreset]').forEach(b=>b.onclick=()=>{DP={order:DP_DEFAULT.concat(Object.keys(DP_RULES).filter(k=>DP_DEFAULT.indexOf(k)<0)),on:DP_DEFAULT.slice(),must:[]};saveDP()})})}
+  box.querySelectorAll('[data-dpreset]').forEach(b=>b.onclick=()=>{DP={order:DP_DEFAULT.concat(Object.keys(DP_RULES).filter(k=>DP_DEFAULT.indexOf(k)<0)),on:DP_DEFAULT.slice(),must:[],bursts:'keep'};saveDP()})
+  box.querySelectorAll('[data-burst]').forEach(r=>r.onchange=()=>{DP.bursts=r.dataset.burst;saveDP()})})}
 renderDP();
 </script></main></body></html>"""
 
