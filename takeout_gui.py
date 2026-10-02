@@ -29,7 +29,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.02-j"
+VERSION = "2026.10.02-k"
 class Cancelled(Exception):
     pass
 
@@ -1620,94 +1620,154 @@ def read_doc(name):
 
 
 def build_recommendations(F, dest):
-    """Turn the facts about the user's files into a plain-language plan. Each recommendation says why, with real numbers."""
+    """Turn the facts about the user's files into a plain-language plan. Every option and workflow Backstory has gets an
+    answer here: recommended (with the numbers behind it), optional, or not needed."""
     def n(x):
         return f"{int(x):,}"
+
     def pl(x, one, many):
         return f"{int(x):,} " + (one if int(x) == 1 else many)
-    recs, extras, warns = [], [], []
+    recs, extras, warns, flow = [], [], [], []
     media = F["media"]
     S = F.get("sample") or {}
-    # --- warnings first
+    multi = len(F.get("sources", [])) > 1
+    free = F.get("free")
+    pre = F.get("photos_pre") or {}
+    # ---------------------------------------------------------------- warnings
     for name, err in F.get("bad_zips", []):
         warns.append("%s could not be read (%s). It may be incomplete: download it again from Google Takeout." % (name, err))
     if F.get("zip_gaps"):
         warns.append("Your Takeout zip numbering skips %s. If you meant to include them, add the missing zip file%s." % (
             ", ".join("%03d" % g for g in F["zip_gaps"][:8]), "s" if len(F["zip_gaps"]) > 1 else ""))
-    if F["zips"] and dest and F.get("free") is not None:
-        need = F["biggest_zip"] * 2 + F["media_bytes"]
-        if F["free"] < need:
-            warns.append("The Destination may be too small: the finished library needs about %s plus room to unpack your largest zip (%s), and only %s is free." % (
-                fmt_bytes(F["media_bytes"]), fmt_bytes(F["biggest_zip"] * 2), fmt_bytes(F["free"])))
-    elif not F["zips"] and dest and F.get("free") is not None and F["free"] < F["media_bytes"] * 1.05:
-        warns.append("The Destination may be too small: the copy needs about %s and %s is free." % (fmt_bytes(F["media_bytes"]), fmt_bytes(F["free"])))
+    copy_need = F["media_bytes"] * 1.05 + (F["biggest_zip"] * 2 if F["zips"] else 0)
+    if dest and free is not None and free < copy_need:
+        warns.append("The Destination may be too small: building the library needs about %s and only %s is free there. Choose a bigger drive (an external drive is fine) as the Destination." % (fmt_bytes(copy_need), fmt_bytes(free)))
     if not dest:
-        warns.append("You have not chosen a Destination yet. Choose where the finished library should go (a new, empty folder) before running the plan.")
+        warns.append("You have not chosen a Destination yet. Choose where the finished library should go (a new, empty folder, ideally on a drive with room) before running the plan.")
     if F["zero_media"]:
         warns.append("%s photos or videos are empty (0 bytes) and will be skipped." % n(F["zero_media"]))
     if media == 0:
         warns.append("No photos or videos were found in what you added. Check that you chose your Takeout zip files or the folders that hold them.")
-    plan = {"dedupe": True, "live": False, "name_dates": False, "fix_ext": False, "replace": True, "convert": False}
-    # --- restore metadata
+    if F.get("photos_libs"):
+        warns.append("%s of your sources is a Photos library. Backstory only reads it: its photos are copied out, and its albums and edits are not carried over." % pl(F["photos_libs"], "library", "libraries"))
+    plan = {"dedupe": True, "live": False, "name_dates": False, "fix_ext": False, "replace": True, "convert": False, "albums": False}
+    # ---------------------------------------------------------------- the library build (Guided options)
     if media:
-        pct = round(100 * F["matched"] / media) if media else 0
-        why = "%s of your %s photos and videos (%s%%) have a Google info file (.json) that holds the real date, location and caption." % (n(F["matched"]), n(media), pct)
-        if S.get("n"):
-            k = S["n"]
-            est = lambda key: round(S[key] / max(1, S["with_json"]) * F["matched"]) if S.get("with_json") else 0
-            why += " In a sample of %d of your files, %d%% had no date inside them and %d%% had no location; Google's info would add roughly %s dates, %s locations and %s captions across everything." % (
-                k, round(100 * (k - S["has_date"]) / k), round(100 * (k - S["has_gps"]) / k), n(est("add_date")), n(est("add_gps")), n(est("add_desc")))
-        recs.append({"id": "restore", "title": "Put the real dates, locations and captions back", "why": why, "risk": "safe", "on": True, "fixed": True})
-        if pct < 60 and F["matched"] < media:
-            warns.append("Only %s%% of your files found an info file. Their info files may be in Takeout zips you have not added yet. Add them and check again." % pct)
-    # --- dates from file names
+        pct = round(100 * F["matched"] / media)
+        if F["json"]:
+            why = "%s of your %s photos and videos (%s%%) have a Google info file (.json) that holds the real date, location and caption." % (n(F["matched"]), n(media), pct)
+            if S.get("n"):
+                k = S["n"]
+                est = lambda key: round(S[key] / max(1, S["with_json"]) * F["matched"]) if S.get("with_json") else 0
+                why += " In a sample of %d of your files, %d%% had no date inside them and %d%% had no location; Google's info would add roughly %s dates, %s locations and %s captions across everything." % (
+                    k, round(100 * (k - S["has_date"]) / k), round(100 * (k - S["has_gps"]) / k), n(est("add_date")), n(est("add_gps")), n(est("add_desc")))
+            recs.append({"id": "restore", "title": "Put the real dates, locations and captions back", "why": why, "risk": "safe", "on": True, "fixed": True})
+            if pct < 60 and F["matched"] < media:
+                warns.append("Only %s%% of your files found an info file. Their info files may be in Takeout zips you have not added yet. Add them and check again." % pct)
+        else:
+            recs.append({"id": "restore", "title": "Put dates, locations and captions back", "risk": "safe", "on": True, "fixed": True,
+                         "why": "No Google info files (.json) were found, so there is nothing to restore from. Dates will only come from the file names where possible. If this is a Takeout export, add the zip files that hold the .json files."})
+        if S.get("n") and S.get("diff_date"):
+            recs.append({"id": "datepol", "title": "Dates: the earlier date wins", "risk": "safe", "on": True, "fixed": True,
+                         "why": "In your sample, %d of %d files with an info file already have a date that differs from Google's. Backstory keeps the earlier of the two, because Google often records the upload day. You can change this rule on the Fix tab." % (S["diff_date"], max(1, S["with_json"]))})
     if F["name_date_candidates"]:
         plan["name_dates"] = True
         recs.append({"id": "name_dates", "title": "Use the date in the file name where there is no info file", "risk": "safe", "on": True,
                      "why": "%s photos and videos have no info file but have a date in their name (like IMG_20190704_123456). Only a missing date is filled in; an existing date is never changed." % n(F["name_date_candidates"])})
-    # --- duplicates
-    if F["dup_n"]:
-        recs.append({"id": "dedupe", "title": "Merge folders and copy duplicates once", "risk": "safe", "on": True,
-                     "why": "%s of the same photo %s found, taking %s. They will be copied once. Same-named folders from different zips merge into one." % (
-                         pl(F["dup_n"], "extra copy" if F["dup_exact"] else "likely extra copy", "extra copies" if F["dup_exact"] else "likely extra copies"), "was" if F["dup_n"] == 1 else "were", fmt_bytes(F["dup_bytes"]))})
+    if multi or F["dup_n"] or F["wrapper"]:
+        if F["dup_n"]:
+            recs.append({"id": "dedupe", "title": "Merge folders and copy duplicates once", "risk": "safe", "on": True,
+                         "why": "%s of the same photo %s found, taking %s. They will be copied once. Same-named folders from different sources merge into one." % (
+                             pl(F["dup_n"], "extra copy" if F["dup_exact"] else "likely extra copy", "extra copies" if F["dup_exact"] else "likely extra copies"),
+                             "was" if F["dup_n"] == 1 else "were", fmt_bytes(F["dup_bytes"]))})
+        else:
+            recs.append({"id": "dedupe", "title": "Merge same-named folders", "risk": "safe", "on": True,
+                         "why": "No exact duplicates were found, but every folder with the same name (like Photos from 2012) across your sources will still become one folder."})
     else:
-        recs.append({"id": "dedupe", "title": "Merge same-named folders", "risk": "safe", "on": True,
-                     "why": "No exact duplicates were found, but every folder with the same name (like Photos from 2012) across your zips will still become one folder." if F["wrapper"] or F["zips"] > 1 else
-                            "No exact duplicates were found. Same-named folders will still be merged into one."})
-    if F["dup_n"]:
+        recs.append({"id": "dedupe", "title": "Skip exact duplicates", "risk": "safe", "on": True, "why": "No duplicates were found. This stays on in case the run finds some."})
+    if F["dup_n"] and (F["wrapper"] or F["zips"]):
         plan["albums"] = True
         recs.append({"id": "albums", "title": "Keep your album names", "risk": "safe", "on": True,
                      "why": "Photos that appear in an album and in a year folder are copied once. Their album names are saved as keywords on the kept copy, so you do not lose your albums, and a list of albums is saved with the reports."})
     if F.get("edited_pairs"):
         recs.append({"id": "edited", "title": "Google-edited copies", "risk": "safe", "on": True, "fixed": True,
-                     "why": "%s photos have a Google-edited copy next to the original (IMG_1-edited.jpg). Both are kept by default. If you only want one, choose it in the options above." % n(F["edited_pairs"])})
-    # --- live photos
+                     "why": "%s have a Google-edited copy next to the original (IMG_1-edited.jpg). Both are kept by default. If you only want one, choose it in the options above." % pl(F["edited_pairs"], "photo", "photos")})
     if F["live_pairs"]:
         plan["live"] = True
         recs.append({"id": "live", "title": "Re-pair Live Photos", "risk": "safe", "on": True,
-                     "why": "%s photos have a matching video with the same name, the signature of an iPhone Live Photo. Re-pairing lets Apple Photos show them together." % n(F["live_pairs"])})
-    # --- missing file types
+                     "why": "%s have a matching video with the same name, the signature of an iPhone Live Photo. Re-pairing lets Apple Photos show them together." % pl(F["live_pairs"], "photo", "photos")})
     if F["extless"]:
         plan["fix_ext"] = True
         recs.append({"id": "fix_ext", "title": "Repair files with a missing file type", "risk": "caution" if F["folders"] else "safe", "on": True,
                      "why": "%s no .jpg/.heic/.mp4 ending, so %s skipped. " % (pl(F["extless"], "file has", "files have"), "it would be" if F["extless"] == 1 else "they would be") + (
                          "Inside zip files they are repaired in the copy automatically." if not F["folders"] else
                          "For the folders you added this renames those files in your source folders (a warning, because it changes the originals' names).")})
-    # --- replace
     if media:
         recs.append({"id": "replace", "title": "Let Google's location and caption replace existing ones", "risk": "caution", "on": True,
-                     "why": "When a photo already has a different location or caption, Google's wins. Dates keep the earlier of the two. Untick this to only fill in what is missing."})
-    # --- extras (other tabs, not part of the plan)
+                     "why": ("In your sample, %d files with an info file already have a location that differs from Google's. " % S["diff_gps"] if S.get("diff_gps") else "") +
+                            "When a photo already has a different location or caption, Google's wins. Dates keep the earlier of the two. Untick this to only fill in what is missing."})
+        recs.append({"id": "copy", "title": "Copy, do not move", "risk": "safe", "on": True, "fixed": True,
+                     "why": "Guided always copies, so your originals stay untouched. " + (
+                         "You have enough free space for that." if (free is None or free >= copy_need) else
+                         "You do not have enough free space for a full copy here, so choose a bigger or external drive as the Destination. (On the Fix tab, Move saves space but empties your sources.)")})
+    # ---------------------------------------------------------------- merging several libraries
+    if multi:
+        ov = F.get("overlap") or []
+        lines = "; ".join("%s and %s share %s (%s)" % (o["a"], o["b"], pl(o["n"], "photo", "photos"), fmt_bytes(o["bytes"])) for o in sorted(ov, key=lambda o: -o["n"])[:4])
+        recs.append({"id": "merge", "title": "Merge your %d libraries into one" % len(F["sources"]), "risk": "safe", "on": True, "fixed": True,
+                     "why": "You added %d sources. Guided merges them into one library: same-named folders combine, identical photos are kept once, and different photos with the same name are both kept. %s The order of your Source list matters: when two sources hold the same folder name, the first one's name is used." % (
+                         len(F["sources"]), ("Overlap found: " + lines + ".") if lines else "No photos appear in more than one of them.")})
+    # ---------------------------------------------------------------- other workflows
     if F["legacy_n"]:
         extras.append({"id": "convert", "title": "Convert old videos to MP4", "tab": "convert", "risk": "caution",
-                       "why": "%s old-format videos (%s) were found: %s. They play badly on phones and TVs. Convert them afterwards on the Convert tab; the originals can be kept in a separate folder." % (
+                       "why": "%s old-format videos (%s) were found: %s. They play badly on phones and TVs, and Apple Photos cannot import most of them. Convert them after the library is built; the originals can be kept in a separate folder." % (
                            n(F["legacy_n"]), fmt_bytes(F["legacy_bytes"]), ", ".join("%s %s" % (n(v[0]), k) for k, v in sorted(F["legacy"].items(), key=lambda kv: -kv[1][0])[:5]))})
+    if F.get("sim_groups"):
+        extras.append({"id": "consolidate", "title": "Merge folders that are the same trip", "tab": "clean", "risk": "caution",
+                       "why": "Found %s of folders with near-identical names (for example %s). Review them on the Clean up tab and merge the ones that are the same." % (
+                           pl(F["sim_groups"], "group", "groups"), F.get("sim_example", ""))})
     if F["folders"] and (F["junk"] or F["empty_dirs"] or F["tidy_dirs"] or F["zero_other"]):
         bits = [x for x in (("%s junk or cache files" % n(F["junk"])) if F["junk"] else "", ("%s empty folders" % n(F["empty_dirs"])) if F["empty_dirs"] else "",
                             ("%s folders named like 'Folder (1)'" % n(F["tidy_dirs"])) if F["tidy_dirs"] else "", ("%s empty files" % n(F["zero_other"])) if F["zero_other"] else "") if x]
         extras.append({"id": "cleanup", "title": "Tidy your source folders", "tab": "clean", "risk": "caution",
                        "why": "Found " + ", ".join(bits) + ". The new library will not contain junk, so this is optional. If you want your source folders tidier, preview it on the Clean up tab."})
-    return {"recs": recs, "extras": extras, "warnings": warns, "plan": plan}
+    if F["json"]:
+        extras.append({"id": "rmjson", "title": "Later: remove the .json files", "tab": "clean", "risk": "caution",
+                       "why": "%s Google info files (%s). Once your library is built and you have checked it, they are no longer needed in the library. Do not remove them from your Takeout until you are sure: they hold the only copy of the original dates." % (
+                           n(F["json"]), fmt_bytes(F.get("json_bytes", 0)))})
+    if media >= 50:
+        extras.append({"id": "similar", "title": "Review similar photos", "tab": "similar", "risk": "safe",
+                       "why": "Exact duplicates are handled for you, but the same picture saved at different sizes or re-saved is not an exact copy. After the library is built, the Similar tab finds those and lets you set aside the extras. Nothing is deleted."})
+    if pre.get("mac") and pre.get("photos_app") and media:
+        not_ok = sum(v for k, v in (F.get("by_ext_all") or {}).items() if k not in fx.PHOTOS_OK_EXT)
+        low = free is not None and free < F["media_bytes"] * 1.1
+        extras.append({"id": "photos", "title": "Send the finished library to Apple Photos", "tab": "photos", "risk": "caution",
+                       "why": "Your library is about %s and this Mac has %s free. " % (fmt_bytes(F["media_bytes"]), fmt_bytes(pre["free"]) if pre.get("free") else "unknown space") + (
+                           "That is not enough to import it all at once, so use the Photos tab: it sends oldest-first in batches and waits for iCloud to upload and macOS to free space between them. " if (pre.get("free") and pre["free"] < F["media_bytes"] * 1.2) else
+                           "The Photos tab can send it in batches, oldest first, with album folders becoming albums. ") +
+                           ("%s are in formats Photos cannot import; convert them first. " % pl(not_ok, "file", "files") if not_ok else "") +
+                           "Photos has no undo for imports, so preview and send a small test first."})
+    # ---------------------------------------------------------------- the suggested route
+    step = 0
+
+    def add(title, tab, why, kind="do"):
+        nonlocal step
+        step += 1
+        flow.append({"n": step, "title": title, "tab": tab, "why": why, "kind": kind})
+    add("Check my files", "guided", "Done: this is what you are reading.", "done")
+    add("Build one clean library" if not multi else "Merge and build one clean library", "guided",
+        "Restores dates, locations and captions, merges folders, removes duplicates, keeps albums. Preview first, then run it for real. Your originals stay untouched.")
+    if F.get("sim_groups") or (F["folders"] and (F["tidy_dirs"] or F["empty_dirs"] or F["junk"])):
+        add("Tidy folders", "clean", "Merge look-alike folders and clear junk, once the library exists.", "optional")
+    if media >= 50:
+        add("Review similar photos", "similar", "Set aside the same picture saved twice. Nothing is deleted.", "optional")
+    if F["legacy_n"]:
+        add("Convert old videos", "convert", "Turn %s into MP4 so they play everywhere and can go into Photos." % pl(F["legacy_n"], "old video", "old videos"), "optional")
+    if pre.get("mac") and pre.get("photos_app") and media:
+        add("Send to Apple Photos", "photos", "In batches, with time for iCloud to catch up if space is tight.", "optional")
+    if F["json"]:
+        add("Remove the .json files from the finished library", "clean", "Only after you have checked everything. Optional.", "optional")
+    return {"recs": recs, "extras": extras, "warnings": warns, "plan": plan, "flow": flow}
 
 
 def run_assess(roots, dest):
@@ -1725,11 +1785,24 @@ def run_assess(roots, dest):
                 STATE.update(state="running", message=msg + (" (%s of %s)" % (f"{done:,}", f"{total:,}") if total else ""))
                 STATE["phase"] = {"stage": "pct", "done": done, "total": total} if total else None
         F = fx.assess(roots, dest, prog, check_cancel)
+        F["by_ext_all"] = dict(F.get("by_ext", {}))
+        F["photos_pre"] = photos_preflight()
+        F["sim_groups"], F["sim_example"] = 0, ""
+        if folders and not any(fx.inside_photos_library(f) for f in folders):
+            try:
+                with LOCK:
+                    STATE["message"] = "Looking for look-alike folder names..."
+                sg = fx.find_similar_folders([str(f) for f in folders], False)
+                F["sim_groups"] = len(sg)
+                if sg:
+                    F["sim_example"] = ", ".join(m["name"] for m in sg[0]["members"][:3])
+            except OSError:
+                pass
         rec = build_recommendations(F, dest)
         tiles = [[F["media"], "photos and videos", ""], [F["matched"], "have an info file", "ok" if F["media"] and F["matched"] >= 0.6 * F["media"] else "bad"],
                  [F["dup_n"], "exact duplicates", ""], [F["legacy_n"], "old-format videos", ""], [F["extless"], "missing a file type", "bad" if F["extless"] else ""]]
         sm = {"kind": "assess", "dry_run": True, "facts": {k: v for k, v in F.items() if k not in ("by_ext",)}, "tiles": tiles, "size": fmt_bytes(F["media_bytes"]),
-              "by_ext": sorted(F["by_ext"].items(), key=lambda kv: -kv[1])[:12], "dest": dest, **rec, "tips": []}
+              "by_ext": sorted(F["by_ext"].items(), key=lambda kv: -kv[1])[:12], "dest": dest, "sources": F.get("sources", []), "overlap": F.get("overlap", []), **rec, "tips": []}
         with LOCK:
             STATE.update(state="done", message="Finished", summary=sm, phase=None)
     except Cancelled:
@@ -2860,6 +2933,12 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
 .simitem img{width:170px;height:130px;object-fit:cover;border-radius:10px;background:var(--line);display:block}
 .simcap{display:flex;flex-direction:column;font-size:12px;color:var(--mute);line-height:1.35;overflow:hidden}.simcap b{color:var(--ink);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .simsel{font-size:13px;display:flex;align-items:center;gap:6px}
+
+.flow{display:grid;gap:8px;margin:8px 0}
+.flowstep{display:flex;gap:12px;align-items:flex-start;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--card)}
+.flowstep .fn{display:inline-grid;place-items:center;width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;font-weight:700;font-size:14px;flex:none}
+.flowstep.done{opacity:.65}.flowstep.optional .fn{background:var(--line);color:var(--ink)}
+.flowstep .why{color:var(--mute);font-size:13.5px;margin-top:2px}
 </style></head><body><div id="ack" style="display:none"><div class="ackbox" role="dialog" aria-modal="true" aria-labelledby="acktitle">
 <h2 id="acktitle">Before you start</h2>
 <p>Backstory changes, copies, moves and (if you choose) deletes files. Please read this once:</p>
@@ -3410,9 +3489,12 @@ function showAssess(s){
   const f=s.facts||{};
   let h='<div class="tiles">'+s.tiles.map(t=>tile(t[0],t[1],t[2])).join('')+'</div><small>Total size of photos and videos: <b>'+esc(s.size)+'</b>'+(f.zips?' &middot; '+f.zips+' zip file'+(f.zips===1?'':'s'):'')+(f.folders?' &middot; '+f.folders+' folder'+(f.folders===1?'':'s'):'')+'</small>';
   h+=(s.warnings||[]).map(w=>`<div class="tip">${esc(w)}</div>`).join('');
-  h+='<h2>Recommended plan</h2><small style="margin-top:0">Each step has the reason and the numbers from your files. Untick anything you do not want.</small>';
+  const TL={guided:'Guided',fix:'Fix',merge:'Merge',clean:'Clean up',convert:'Convert',photos:'Photos',similar:'Similar',history:'History'};
+  if((s.sources||[]).length>1)h+='<h2>Your '+s.sources.length+' sources</h2>'+tbl(['Source','Type','Photos and videos','Size'],s.sources.map(x=>[esc(x.label),esc(x.kind),x.media.toLocaleString(),esc(fmtB(x.bytes))]))+((s.overlap||[]).length?'<small>Shared between sources: '+s.overlap.map(o=>esc(o.a)+' and '+esc(o.b)+': <b>'+o.n.toLocaleString()+'</b> identical files ('+esc(fmtB(o.bytes))+')').join('; ')+'</small>':'');
+  if((s.flow||[]).length)h+='<h2>Your suggested route</h2><div class="flow">'+s.flow.map(f=>`<div class="flowstep ${f.kind}"><span class="fn">${f.n}</span><div style="flex:1;min-width:0"><b>${esc(f.title)}</b> <span class="badge ${f.kind==='do'?'okb':''}">${f.kind==='done'?'Done':f.kind==='do'?'Recommended':'Optional'}</span><div class="why">${esc(f.why)}</div></div>${f.kind==='done'?'':`<button class="sm" data-tab="${f.tab}">Open ${esc(TL[f.tab]||f.tab)}</button>`}</div>`).join('')+'</div>';
+  h+='<h2>Settings for the library build</h2><small style="margin-top:0">Each option has the reason and the numbers from your files. Untick anything you do not want.</small>';
   h+=(s.recs||[]).map(r=>`<label class="rec"><input type="checkbox" id="rc_${r.id}" checked ${r.fixed?'disabled':''}><div><b>${esc(r.title)}</b> <span class="badge ${r.risk==='safe'?'okb':'warnb'}">${r.risk==='safe'?'Safe':'Check this'}</span><div class="why">${esc(r.why)}</div></div></label>`).join('');
-  if((s.extras||[]).length)h+='<h2>Also worth doing later</h2>'+s.extras.map(r=>`<div class="rec"><div style="flex:1"><b>${esc(r.title)}</b> <span class="badge warnb">Check this</span><div class="why">${esc(r.why)}</div></div><button class="sm" data-tab="${r.tab}">Open ${esc(r.tab==='clean'?'Clean up':'Convert')} tab</button></div>`).join('');
+  if((s.extras||[]).length)h+='<h2>Other tools that could help</h2>'+s.extras.map(r=>`<div class="rec"><div style="flex:1"><b>${esc(r.title)}</b> <span class="badge warnb">Check this</span><div class="why">${esc(r.why)}</div></div><button class="sm" data-tab="${r.tab}">Open ${esc(TL[r.tab]||r.tab)} tab</button></div>`).join('');
   h+='<div class="hbtns" style="margin-top:14px"><button class="p" id="rprev">Preview the recommended plan</button><button id="rapply">Apply these settings</button></div><small>A preview changes nothing. These are suggestions from a quick look: always read the preview before a real run.</small>';
   if((s.by_ext||[]).length)h+='<h2>What is in your files</h2>'+tbl(['Type','Files'],s.by_ext.map(r=>[esc(r[0]),r[1].toLocaleString()]));
   $('sumbody').innerHTML=h;$('sum').style.display='block';

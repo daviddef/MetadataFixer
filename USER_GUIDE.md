@@ -57,7 +57,7 @@ A page opens at `http://127.0.0.1:8765`. It is served only on your own computer.
 
 The longer explanations sit behind small **i** buttons: hover over one (or tap it on a phone) to read it. Each tab has a one-line description under its title. Warnings that matter, such as "(empties the source folders)", stay visible.
 
-The app has eight tabs: **Guided** (the easy way), **Fix** (metadata), **Merge** (folders), **Clean up** (`.json` files, junk, names, empty folders, similar folders), **Convert** (videos), **Similar** (the same photo saved twice), **History** (past runs, reports and undo) and **Help** (this guide, support and the disclaimer).
+The app has nine tabs: **Guided** (the easy way), **Fix** (metadata), **Merge** (folders), **Clean up** (`.json` files, junk, names, empty folders, similar folders), **Convert** (videos), **Photos** (send to Apple Photos), **Similar** (the same photo saved twice), **History** (past runs, reports and undo) and **Help** (this guide, support and the disclaimer).
 
 ## The warning sign
 
@@ -79,15 +79,35 @@ The title block at the top holds two rows that every tab uses, so you only choos
 
 ## Check my files (recommendations)
 
-On the **Guided** tab, **Check my files** reads your Source (zip files or folders) and tells you what it found and what it suggests, based on your real data:
+On the **Guided** tab, **Check my files** reads your Source (zip files, folders, Photos libraries, or a mix) and tells you what it found and what to do, based on your real data. Zip files are read without unpacking them, so even a large Takeout is checked quickly.
 
+It reports:
 - how many photos and videos you have, and how many have a Google `.json` (so how much can be restored);
-- a sample of your files, to estimate how many lack a date or location;
-- exact duplicates and the space they take;
-- Live Photo pairs, files with no or a wrong file extension, old video formats, junk files and empty folders;
-- whether your Destination has enough free space, and any zip files that look incomplete.
+- a sample of your files, to estimate how many lack a date or location, and how many already hold a different date or location than Google's;
+- exact duplicates and the space they take, and (when you added several sources) which sources share the same photos;
+- Live Photo pairs, Google-edited copies, files with no or a wrong file extension, old video formats, junk files, empty folders and look-alike folder names;
+- whether your Destination has enough free space, and zip files that look incomplete or numbered with gaps;
+- on a Mac with Photos, whether your library will fit and which files Photos cannot import.
 
-It then lists recommendations, each with the numbers behind it and a risk level, and offers **Apply recommended settings** or **Preview the recommended plan**. Checking changes nothing and takes a short time even for large libraries because it reads zip tables of contents instead of unpacking them. The recommendations are suggestions, not guarantees: always read the preview.
+You get three things:
+1. **Your suggested route:** the steps in a sensible order (build the library, tidy, review similar photos, convert old videos, send to Apple Photos, remove `.json`), each marked Done, Recommended or Optional, with a button that opens the right tab.
+2. **Settings for the library build:** every Guided option with the reason and the numbers behind it and a Safe or Check-this label. Untick anything, then **Apply these settings** or **Preview the recommended plan**.
+3. **Other tools that could help:** the tabs outside the build (Convert, Clean up, Similar, Photos).
+
+It changes nothing. The recommendations are suggestions, not guarantees: always read the preview.
+
+## Merging several libraries into one
+
+Add every library to the Source list: Takeout zip files, folders, and even a Photos library (`.photoslibrary`, read-only) in any mix. Then use **Guided** (or **Fix**). Backstory builds one library in the Destination:
+- folders with the same name combine, and identical photos are kept once, even across libraries;
+- different photos that happen to share a name are both kept (the second becomes `name_1`);
+- your folder structures are kept; nothing is flattened;
+- the **order of your Source list matters**: when two sources hold the same folder name, the first one's spelling is used. Use **Edit list** to reorder;
+- **Check my files** shows how many photos each source holds and how many are shared between them, before you run anything.
+
+For Google Takeout sources the dates, locations and captions are restored from the `.json` files; for other libraries the files are copied as they are (with dates from file names where a date is missing). A **Photos library** is only ever read: its photos are copied out, but its albums, edits and Photos-only metadata are not carried over. To keep those, export from Photos first (File > Export).
+
+To merge two **folders** without any metadata work, the **Merge** tab does that, with control over name clashes.
 
 ## Guided: Fix my Takeout (the easy way)
 
@@ -129,6 +149,26 @@ Reports and logs are saved in `Documents/Backstory Reports`, one folder per run.
 
 On the Guided tab, a short **checklist** shows whether your Takeout and Destination are set, whether the Destination has enough free space for your zip files, and whether ExifTool and ffmpeg are installed.
 
+
+## Sending your library to Apple Photos (Photos tab)
+
+The **Photos** tab sends a finished library to the Photos app, **in batches**, so that a Mac with limited space can take a large library over time.
+
+How it works:
+- It plans batches of about 2, 5, 10, 25 or 50 GB, **oldest first**, so your timeline fills in order. A Live Photo's still and video always travel together. Folders that are albums (not `Photos from 2012`) become Photos albums.
+- Photos skips photos it already has, so running it again never duplicates.
+- Between batches it waits, so Photos can upload to iCloud and macOS can free the space: **Wait until my Mac has enough free space** (you choose how many GB to keep free), **Pause and let me press Continue**, or **Do not wait**. A **Continue** button appears in the status bar while it waits. Stop works at any time, and finished files are remembered.
+- Always **preview** first (it shows every batch), then **send a small test (20 photos)** and look at the result in Photos before sending everything.
+- Files Photos cannot import (such as AVI, MKV, WMV) are listed and left out: convert them on the Convert tab first.
+
+Before you start, in **Photos > Settings > iCloud**, turn on **iCloud Photos** and choose **Optimize Mac Storage**. With that setting, once an original is safely in iCloud macOS can replace it on your Mac with a small copy when it needs room; that is what makes the waiting step work. macOS decides when it frees space, so with a very full disk the wait can take hours. Leave Photos open and the Mac awake.
+
+**If your Mac really has no room:**
+1. Build the library on an **external drive** (choose it as the Destination on the Guided tab). The library does not need to live on your Mac.
+2. Either send it to Photos in batches as above, or move your **Photos library itself to the external drive** (quit Photos, copy the library there, hold Option while opening Photos and choose it, then Photos > Settings > General > Use as System Photo Library). With iCloud Photos on, the library on the drive is kept in sync.
+3. Keep the external drive and your Takeout zips until you have checked everything in Photos and iCloud.
+
+**Important:** Photos has no undo for imports and Backstory cannot take photos back out of Photos. Sending to Photos needs permission: the first time, macOS asks if Backstory may control Photos (allow it in System Settings > Privacy & Security > Automation).
 
 ## Albums and Google-edited copies
 
@@ -385,6 +425,7 @@ If you are stuck, open **History**, press **Copy diagnostic info**, and email it
 - Times from Google are UTC; the tool cannot know your local time zone for a photo.
 - Video conversion that re-encodes is lossy by nature. Quick re-wraps are not. Estimates of sizes and times are rough.
 - Date-from-filename is a guess based on the name, used only when there is no other date.
+- Importing into Apple Photos uses Apple's scripting interface and has not been tested on every macOS version or library; always preview and test with a few photos first.
 - It has been tested mainly on macOS with typical Takeout exports. Unusual drives, network shares, very old or very new OS versions, damaged files, and very large libraries may behave differently.
 - It does not guarantee that your photo app (Apple Photos, Lightroom, etc.) will display or import the results the way you expect.
 

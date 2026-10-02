@@ -2083,6 +2083,7 @@ def assess(entries, dest="", progress=None, should_stop=None, sample_n=120):
             F["wrapper"] = True
         if low.endswith(".json"):
             F["json"] += 1
+            F["json_bytes"] = F.get("json_bytes", 0) + sz
             jsons.append((vp, src, mem))
             continue
         if n.startswith("._") or low in JUNK_NAMES or ext in (".ithmb", ".thm") or low in ("picasa.ini", ".picasa.ini"):
@@ -2226,7 +2227,7 @@ def assess(entries, dest="", progress=None, should_stop=None, sample_n=120):
     pick = random.sample(cand, min(sample_n, len(cand))) if cand else []
     if pick and shutil.which("exiftool"):
         tmp = tempfile.mkdtemp(prefix="metadatafixer_assess_")
-        S = {"n": 0, "has_date": 0, "has_gps": 0, "has_desc": 0, "with_json": 0, "add_date": 0, "add_gps": 0, "add_desc": 0}
+        S = {"n": 0, "has_date": 0, "has_gps": 0, "has_desc": 0, "with_json": 0, "add_date": 0, "add_gps": 0, "add_desc": 0, "diff_date": 0, "diff_gps": 0}
         try:
             zfs = {}
             for k, (vp, sz, crc, src, mem) in enumerate(pick, 1):
@@ -2269,6 +2270,8 @@ def assess(entries, dest="", progress=None, should_stop=None, sample_n=120):
                         S["add_date"] += cl.get("date") in ("added", "replaced")
                         S["add_gps"] += cl.get("gps") in ("added", "replaced")
                         S["add_desc"] += cl.get("desc") in ("added", "replaced")
+                        S["diff_date"] += cl.get("date") in ("kept", "replaced")
+                        S["diff_gps"] += cl.get("gps") in ("kept", "replaced")
             F["sample"] = S
         finally:
             for zf in zfs.values():

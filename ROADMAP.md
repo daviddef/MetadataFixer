@@ -69,3 +69,12 @@ Most Takeout tools are one-shot scripts: they fix dates and stop, with no previe
 - Percent of runs that finish without an error.
 - Support questions per 100 users (should fall as guided mode lands).
 - Reviews that say "it just worked".
+
+
+## Ideas under consideration
+- **Verify uploads to iCloud** before sending the next Photos batch, instead of waiting on free space (needs reading Photos' own database, which Apple does not document).
+- **Set up a Photos library on an external drive** with a guided checklist.
+- **Merge Photos libraries with albums and edits** (via an export step) rather than originals only.
+- **Storyboard preview:** before/after thumbnails with dates and locations for a few real photos.
+- **Date and structure options for merged libraries:** keep folders (default), or reorganise by year/month when merging very different libraries.
+- **Scheduled "keep tidy"** for a watched folder.
