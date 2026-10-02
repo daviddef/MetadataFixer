@@ -29,7 +29,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.02-g"
+VERSION = "2026.10.02-h"
 class Cancelled(Exception):
     pass
 
@@ -1777,12 +1777,124 @@ def run_consolidate(groups, roots, dry_run, dupes_action):
             STATE.update(state="error", message=str(e))
 
 
+def _load_entry(rid):
+    if not re.fullmatch(r"[0-9]{8}-[0-9]{6}x*", rid or ""):
+        raise ValueError("bad id")
+    return json.loads((HIST_DIR / (rid + ".json")).read_text(encoding="utf-8"))
+
+
+def _read_undo(entry):
+    u = entry.get("undo") or {}
+    meta, pairs = {}, []
+    with open(u["file"], encoding="utf-8") as fh:
+        for k, line in enumerate(fh):
+            d = json.loads(line)
+            if k == 0:
+                meta = d
+            else:
+                pairs.append(d)
+    return meta, pairs
+
+
+def undo_info(rid):
+    try:
+        e = _load_entry(rid)
+        if not e.get("undo") or e["undo"].get("done"):
+            return {"error": "This run cannot be undone (or already was)."}
+        meta, pairs = _read_undo(e)
+    except (OSError, ValueError, KeyError) as ex:
+        return {"error": "Could not read the undo record: %s" % ex}
+    exist = sum(1 for p in pairs if Path(p["dest"]).exists())
+    return {"mode": meta.get("mode", "copy"), "total": len(pairs), "exist": exist, "dest": meta.get("dest", ""), "title": e["title"],
+            "when": e["started"]}
+
+
+def run_undo(rid):
+    with LOCK:
+        STATE.update(state="scanning", cancel=False, total=0, done=0, counts={}, message="Preparing to undo...", report="",
+                     summary=None, scan=None, extra={}, recent=[], phase=None, kind="undo", cv=None, guided=None)
+    try:
+        e = _load_entry(rid)
+        if not e.get("undo") or e["undo"].get("done"):
+            raise ValueError("This run cannot be undone (or already was).")
+        meta, pairs = _read_undo(e)
+        dest = Path(meta["dest"]).resolve()
+        mode = meta.get("mode", "copy")
+        res = {"removed": 0, "restored": 0, "missing": 0, "failed": 0, "skipped": 0}
+        fails = []
+        total = len(pairs)
+        with LOCK:
+            STATE.update(state="running", total=total)
+        for k, p in enumerate(pairs, 1):
+            check_cancel()
+            dp = Path(p["dest"])
+            try:
+                rd = dp.resolve()
+                if dest != rd and dest not in rd.parents:
+                    res["skipped"] += 1                      # never touch anything outside the destination
+                    continue
+                if not dp.exists():
+                    res["missing"] += 1
+                elif mode == "move":
+                    sp = Path(p["src"])
+                    if sp.exists():
+                        res["skipped"] += 1
+                        fails.append("%s: the original place is occupied" % sp.name)
+                    else:
+                        sp.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.move(str(dp), str(sp))
+                        res["restored"] += 1
+                else:
+                    dp.unlink()
+                    res["removed"] += 1
+                    if p.get("json"):
+                        j = Path(str(dp) + ".json")
+                        if j.exists():
+                            j.unlink()
+            except OSError as ex:
+                res["failed"] += 1
+                fails.append("%s: %s" % (dp.name, ex))
+            if k % 25 == 0 or k == total:
+                with LOCK:
+                    STATE.update(done=k, message="Undoing: %s of %s files" % (f"{k:,}", f"{total:,}"))
+        # tidy: folders left empty by the undo (never the destination itself)
+        pruned = 0
+        for dp_, dns, fns in os.walk(dest, topdown=False):
+            if Path(dp_) != dest and not dns and not fns:
+                try:
+                    os.rmdir(dp_)
+                    pruned += 1
+                except OSError:
+                    pass
+        # forget the zips this run finished, so running again processes them
+        zl = dest / fx.ZIPS_LOG
+        if zl.exists():
+            try:
+                data = zl.read_bytes()[:meta.get("zips_before", 0)]
+                zl.write_bytes(data)
+            except OSError:
+                pass
+        e["undo"]["done"] = True
+        e["undone_at"] = time.time()
+        (HIST_DIR / (rid + ".json")).write_text(json.dumps(e, ensure_ascii=False), encoding="utf-8")
+        sm = {"kind": "undo", "dry_run": False, "mode": mode, "title": e["title"], "total": total, **res, "pruned": pruned, "fails": fails[:50],
+              "tips": ["Your original photos and Takeout zip files were not touched." if mode == "copy" else
+                       "Files were moved back to where they came from. Their metadata fixes were kept."]}
+        with LOCK:
+            STATE.update(state="done", message="Finished", summary=sm, phase=None)
+    except Cancelled:
+        stopped_state("Run it again to finish undoing.")
+    except Exception as ex:
+        with LOCK:
+            STATE.update(state="error", message=str(ex))
+
+
 # ---- Reports, run logs and history -------------------------------------------------------------------------
 APP_HOME = Path(os.environ.get("METADATAFIXER_HOME") or (
     Path.home() / "Library" / "Application Support" / "MetadataFixer" if sys.platform == "darwin" else Path.home() / ".metadatafixer"))
 HIST_DIR = APP_HOME / "history"
 REPORTS_DIR = Path(os.environ.get("METADATAFIXER_REPORTS") or (Path.home() / "Documents" / "Backstory Reports"))
-KIND_TITLE = {"assess": "Check my files", "consolidate": "Merge similar folders", "fix": "Fix metadata", "merge": "Merge folders", "cleanup": "Clean up", "convert": "Convert videos", "guided": "Guided: Fix my Takeout"}
+KIND_TITLE = {"undo": "Undo a run", "assess": "Check my files", "consolidate": "Merge similar folders", "fix": "Fix metadata", "merge": "Merge folders", "cleanup": "Clean up", "convert": "Convert videos", "guided": "Guided: Fix my Takeout"}
 
 
 def _headline(sm):
@@ -1791,6 +1903,8 @@ def _headline(sm):
         return ""
     k = sm.get("kind")
     try:
+        if k == "undo":
+            return "%s files %s" % (f"{sm.get('removed', 0) + sm.get('restored', 0):,}", "moved back" if sm.get("mode") == "move" else "removed")
         if k == "consolidate":
             return "%s folder groups merged, %s files moved, %s duplicates" % (sm.get("merged", 0), f"{sm.get('moved', 0):,}", f"{sm.get('dupes', 0):,}")
         if k == "assess":
@@ -1836,6 +1950,43 @@ def _problems(sm):
         return [p for x in sm.get("steps", []) for p in _problems(x.get("summary"))]
     return [("%s: %s" % (p.get("file", ""), p.get("detail") or p.get("status", ""))) for p in (sm.get("problems") or sm.get("failures") or sm.get("clash_rows") or [])
             if p.get("status") in ("failed", "unreadable", "copy-error", "error", "exiftool-error")][:200]
+
+
+UNDO_LOGS = (fx.MANIFEST, fx.MANIFEST_MERGE, fx.MANIFEST_SORT)
+
+
+def _manifest_sizes(dest):
+    out = {}
+    for name in UNDO_LOGS + (fx.ZIPS_LOG,):
+        try:
+            out[name] = (Path(dest) / name).stat().st_size
+        except OSError:
+            out[name] = 0
+    return out
+
+
+def _collect_undo(dest, before, meta):
+    """What this run placed in the destination (read from the progress logs the engine keeps), so it can be undone."""
+    pairs = []
+    opts = meta.get("options", {})
+    moved = bool(opts.get("move"))
+    for name in UNDO_LOGS:
+        try:
+            with open(Path(dest) / name, "rb") as fh:
+                fh.seek(before.get(name, 0))
+                data = fh.read().decode("utf-8", "replace")
+        except OSError:
+            continue
+        for line in data.splitlines():
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            src = d["src"].split("::", 1)[-1]
+            pairs.append({"src": src, "dest": d["dest"], "json": 1 if (name == fx.MANIFEST_MERGE and opts.get("takeout")) else 0})
+    if not pairs:
+        return None
+    return {"mode": "move" if moved else "copy", "pairs": pairs, "zips_before": before.get(fx.ZIPS_LOG, 0), "dest": str(dest)}
 
 
 def write_run_record(run, timeline):
@@ -1884,6 +2035,16 @@ def write_run_record(run, timeline):
         entry["folder"], entry["log"] = str(folder), str(folder / "run.log")
     except OSError:
         pass
+    und = run.get("undo")
+    if und and entry["folder"]:
+        try:
+            with open(folder / "undo.jsonl", "w", encoding="utf-8") as fh:
+                fh.write(json.dumps({k: v for k, v in und.items() if k != "pairs"}) + "\n")
+                for p in und["pairs"]:
+                    fh.write(json.dumps(p, ensure_ascii=False) + "\n")
+            entry["undo"] = {"mode": und["mode"], "count": len(und["pairs"]), "file": str(folder / "undo.jsonl"), "done": False}
+        except OSError:
+            pass
     try:
         HIST_DIR.mkdir(parents=True, exist_ok=True)
         (HIST_DIR / (run["id"] + ".json")).write_text(json.dumps(entry, ensure_ascii=False), encoding="utf-8")
@@ -1901,6 +2062,8 @@ def tracked(kind, meta, fn, *args):
     run = {"id": rid, "kind": kind, "started": time.time(), "meta": meta}
     with LOCK:
         STATE["run"] = dict(run, saved=False)
+    undo_dest = Path(meta["dest"]).expanduser() if (kind in ("fix", "guided", "merge") and meta.get("dest") and not meta.get("dry_run")) else None
+    before = _manifest_sizes(undo_dest) if undo_dest else {}
     stop, timeline = threading.Event(), []
 
     def sampler():
@@ -1921,6 +2084,8 @@ def tracked(kind, meta, fn, *args):
     finally:
         stop.set()
         try:
+            if undo_dest:
+                run["undo"] = _collect_undo(undo_dest, before, meta)
             write_run_record(run, timeline)
         except Exception:
             pass
@@ -2059,6 +2224,15 @@ class Handler(BaseHTTPRequestHandler):
                 bool(body.get("dry_run")), bool(body.get("overwrite")), bool(body.get("pair_live")),
                 bool(body.get("dedupe")), bool(body.get("move")), body.get("date_policy", "earlier"), bool(body.get("name_dates")), bool(body.get("albums")),
                 body.get("edited") if body.get("edited") in ("both", "edited", "original") else "both"))
+            self._send(200, "{}")
+        elif self.path == "/api/undo_info":
+            self._send(200, json.dumps(undo_info(body.get("id", ""))))
+        elif self.path == "/api/undo_start":
+            with LOCK:
+                busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
+            if busy:
+                return self._send(409, json.dumps({"error": "A job is already running"}))
+            start_tracked("undo", {"roots": [], "dry_run": False, "opts": {"run": body.get("id", "")}}, run_undo, (body.get("id", ""),))
             self._send(200, "{}")
         elif self.path == "/api/similar_folders":
             try:
@@ -2653,6 +2827,7 @@ function showSummary(s){
   if(s.kind==='guided'){showGuided(s);return}
   if(s.kind==='assess'){showAssess(s);return}
   if(s.kind==='consolidate'){showConsolidate(s);return}
+  if(s.kind==='undo'){showUndo(s);return}
   let h=`<div class="tiles">${tile(s.total,'media files')}${tile(s.duplicates,'exact duplicates skipped')}${tile(s.matched,'unique files matched ('+s.pct_matched+'%)','ok')}${tile(s.no_json,'no JSON found',s.no_json?'bad':'ok')}${tile(s.orphans,'JSON with no photo')}${s.name_dates?tile(s.name_dates,'dates from file names','ok'):''}</div>`;
   h+=s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
   h+=`<div class="tiles">${tile(s.replaced_files,'files with a value replaced')}${tile((s.live||{}).paired||0,'Live Photos paired')}</div>`;
@@ -2708,7 +2883,7 @@ function setBar(barId,fillId,pctId,pct,indet){
     for(let i=0;i<30;i++){await new Promise(x=>setTimeout(x,1000));const s=await st();if(s&&s.boot!==boot){location.reload();return}}
     $('updmsg').textContent='Updated. If the page does not reload, restart the app in Terminal.'}
 })();
-const TABS=['guided','fix','merge','clean','convert','history','help'];const tabOf=k=>({consolidate:'clean',cleanup:'clean',sort:'merge',assess:'guided'}[k]||k);let curGuided=false;const paneKind=()=>curGuided?'guided':tabOf(jobKind);let jobKind='fix';
+const TABS=['guided','fix','merge','clean','convert','history','help'];const tabOf=k=>({undo:'history',consolidate:'clean',cleanup:'clean',sort:'merge',assess:'guided'}[k]||k);let curGuided=false;const paneKind=()=>curGuided?'guided':tabOf(jobKind);let jobKind='fix';
 function showTab(t){if(!TABS.includes(t))t='fix';
   TABS.forEach(x=>{$('pane-'+x).style.display=x===t?'block':'none';document.querySelector('.tab[data-tab="'+x+'"]').classList.toggle('on',x===t)});
   try{localStorage.setItem('tab',t)}catch(e){}
@@ -2910,6 +3085,21 @@ $('simfind').onclick=async()=>{
   const r=await post('/api/similar_folders',{roots:croots(),maybe:$('simmaybe').checked});
   $('simfind').disabled=false;$('simfind').textContent='Find similar folders';
   if(r.error){alert(r.error);return}SIM=r.groups||[];renderSim()};
+function showUndo(s){
+  let h=`<div class="tiles">${tile(s.total,'files in the run')}${s.mode==='move'?tile(s.restored,'moved back','ok'):tile(s.removed,'removed','ok')}${tile(s.missing,'already gone')}${s.failed||s.skipped?tile(s.failed+s.skipped,'not undone','bad'):''}</div>`;
+  h+=s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
+  if((s.fails||[]).length)h+='<h2>Not undone</h2><ul>'+s.fails.map(f=>'<li>'+esc(f)+'</li>').join('')+'</ul>';
+  $('sumbody').innerHTML=h;$('sum').style.display='block'}
+async function undoRun(id){
+  const i=await post('/api/undo_info',{id});
+  if(i.error){alert(i.error);return}
+  const msg=i.mode==='move'
+    ?'Undo "'+i.title+'"?\n\n'+i.exist.toLocaleString()+' files will be moved back to where they came from. Metadata fixes already written to them stay.\n\nContinue?'
+    :'Undo "'+i.title+'"?\n\nThis removes the '+i.exist.toLocaleString()+' files that run created in:\n'+i.dest+'\n\nYour originals and zip files are not touched. Files you added to that folder yourself are not removed. Continue?';
+  if(!confirm(msg))return;
+  $('sum').style.display='none';curGuided=false;
+  const r=await post('/api/undo_start',{id});
+  if(r.error)alert(r.error);else{showTab('history');placeResults('undo');$('prog').style.display='block';poll()}}
 function showConsolidate(s){
   const w=s.dry_run?'would be ':'';
   let h=`<div class="tiles">${tile(s.merged,'folder groups '+w+'merged','ok')}${tile(s.moved,'files '+w+'moved')}${tile(s.dupes,'identical copies')}${tile(s.conflicts,'name clashes')}${s.failed?tile(s.failed,'problems','bad'):''}</div>`;
@@ -2991,7 +3181,7 @@ function showConvert(s){
 
 function liveTiles(s,c,done,nj){
   if(!s.total)return '';const x=s.extra||{};const err=(x.errors?tile(x.errors,'files with errors','bad'):'');
-  if(jobKind==='assess'||jobKind==='consolidate')return '';
+  if(jobKind==='assess'||jobKind==='consolidate'||jobKind==='undo')return '';
   if(jobKind==='merge')return tile(s.total,'files found')+tile(x.placed||0,'brought in','ok')+tile(x.identical||0,'identical (kept once)')+tile(x.clashes||0,'name clashes')+(x.json_along?tile(x.json_along,'.json brought along'):'')+(x.errors?tile(x.errors,'problems','bad'):'');
   if(jobKind==='cleanup')return tile(x.json||0,'.json files')+tile(x.junk||0,'junk files')+tile(x.renamed||0,'renamed')+tile(x.merged||0,'folders merged')+tile(x.empty||0,'empty folders')+(x.errors?tile(x.errors,'errors','bad'):'');
   if(jobKind==='convert')return tile(s.total,'videos found')+tile(done,'checked so far')+tile(x.converted||0,'converted','ok')+(x.bytes_before?tile(fmtBytes(Math.max(0,x.bytes_before-x.bytes_after))+' ('+Math.round(100*(1-x.bytes_after/x.bytes_before))+'%)','space saved so far','ok'):'')+tile(x.skipped_live||0,'Live Photo videos skipped')+(x.errors?tile(x.errors,'could not convert','bad'):'');
@@ -3042,7 +3232,8 @@ async function loadHistory(){
   $('hlist').innerHTML=L.length?L.map(e=>`<div class="card hrun"><div class="hhead"><b>${esc(e.title)}</b>${e.dry_run?'<span class="badge">Preview</span>':''}<span class="badge ${e.state==='finished'?'okb':e.state==='failed'?'badb':''}">${esc(e.state)}</span><span class="hwhen">${esc(fmtWhen(e.started))}</span></div>
   <div class="hline">${esc(e.headline||e.message||'')}</div>
   <small>${esc((e.source||[]).map(p=>p.split('/').filter(Boolean).pop()||p).join(', '))}${e.dest?' &rarr; '+esc(e.dest.split('/').filter(Boolean).pop()||e.dest):''} &middot; took ${esc(String(Math.round(e.duration)))}s &middot; version ${esc(e.version)}</small>
-  <div class="hbtns">${e.html?`<button class="sm" data-id="${e.id}" data-w="report">Open report</button>`:''}${e.log?`<button class="sm" data-id="${e.id}" data-w="log">Open log</button>`:''}${e.folder?`<button class="sm" data-id="${e.id}" data-w="folder">Show in Finder</button>`:''}</div></div>`).join(''):'<div class="card"><small style="margin:0">Nothing here yet. Your runs will appear here with their reports.</small></div>';
+  <div class="hbtns">${e.html?`<button class="sm" data-id="${e.id}" data-w="report">Open report</button>`:''}${e.log?`<button class="sm" data-id="${e.id}" data-w="log">Open log</button>`:''}${e.folder?`<button class="sm" data-id="${e.id}" data-w="folder">Show in Finder</button>`:''}${e.undo&&!e.undo.done?`<button class="sm" data-undo="${e.id}">Undo this run...</button>`:''}${e.undo&&e.undo.done?'<span class="badge">Undone</span>':''}</div></div>`).join(''):'<div class="card"><small style="margin:0">Nothing here yet. Your runs will appear here with their reports.</small></div>';
+  document.querySelectorAll('#hlist button[data-undo]').forEach(b=>b.onclick=()=>undoRun(b.dataset.undo));
   document.querySelectorAll('#hlist button[data-id]').forEach(b=>b.onclick=async()=>{const x=await post('/api/open_run',{id:b.dataset.id,what:b.dataset.w});if(x.error)alert(x.error)})}
 $('hfolder').onclick=()=>post('/api/open_reports');
 $('hdiag').onclick=async()=>{const r=await post('/api/diagnostics');try{await navigator.clipboard.writeText(r.text);$('hdiag').textContent='Copied'}catch(e){const t=document.createElement('textarea');t.value=r.text;document.body.appendChild(t);t.select();try{document.execCommand('copy');$('hdiag').textContent='Copied'}catch(_){prompt('Copy this:',r.text)}t.remove()}setTimeout(()=>{$('hdiag').textContent='Copy diagnostic info'},2000)};
@@ -3057,7 +3248,7 @@ let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   else if(s.phase&&s.phase.total){pct=100*s.phase.done/s.phase.total}
   else if(s.state==='scanning'||s.state==='running'){indet=true}
   setBar('bar','fill','pct',pct,indet);
-  const LBL=(gd&&!gd.final&&gd.steps.length)?('Guided &middot; step '+gd.i+' of '+gd.steps.length+': '+esc(gd.steps[gd.i-1]||'')):gd&&jobKind==='guided'?'Guided':{consolidate:'Merge similar folders',assess:'Check my files',fix:'Part 1 Fix',convert:'Part 4 Convert',cleanup:'Part 3 Clean up',merge:'Part 2 Merge'}[jobKind]||'';
+  const LBL=(gd&&!gd.final&&gd.steps.length)?('Guided &middot; step '+gd.i+' of '+gd.steps.length+': '+esc(gd.steps[gd.i-1]||'')):gd&&jobKind==='guided'?'Guided':{undo:'Undo',consolidate:'Merge similar folders',assess:'Check my files',fix:'Part 1 Fix',convert:'Part 4 Convert',cleanup:'Part 3 Clean up',merge:'Part 2 Merge'}[jobKind]||'';
   $('msg').innerHTML=(LBL?'<b>'+LBL+'</b> &middot; ':'')+(s.state==='error'?'<span class="err">'+esc(s.message)+'</span>':s.state==='done'?'<span class="ok">Finished.</span>':esc(s.message)+(s.done?` (${s.done.toLocaleString()} / ${s.total.toLocaleString()})`:''));
   const c=s.counts||{},done=s.done||0,nj=c['no-json']||0;
   $('tiles').innerHTML=liveTiles(s,c,done,nj);
