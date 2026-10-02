@@ -1260,7 +1260,7 @@ def run_cleanup(roots, dry_run, opts):
                 eo = opts["empty"]
                 found, scanned, skipped = [], 0, 0
                 for f in folders:
-                    e, _, nscan, k = fx.find_empty_dirs(f, bool(eo.get("junk")), deleted if dry_run else None)
+                    e, _, nscan, k = fx.find_empty_dirs(f, bool(eo.get("junk")), deleted if dry_run else None, bool(eo.get("top")))
                     found += [p for p in e if eo.get("top") or p != str(f)]
                     scanned += nscan
                     skipped += k
@@ -1988,6 +1988,12 @@ def run_undo(rid):
                 except OSError:
                     break
                 q = q.parent
+        if mode == "move" and dest.name.startswith("_"):
+            try:
+                dest.rmdir()                                  # the set-aside folder itself, now empty
+                pruned += 1
+            except OSError:
+                pass
         # forget the zips this run finished, so running again processes them
         zl = dest / fx.ZIPS_LOG
         if zl.exists():

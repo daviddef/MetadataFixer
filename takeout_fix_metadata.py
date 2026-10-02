@@ -28,6 +28,7 @@ import argparse
 import atexit
 import csv
 import json
+import unicodedata
 import os
 import re
 import shutil
@@ -73,6 +74,9 @@ def json_key(json_path):
         if base.endswith(SUPP[:k]):
             base = base[:-k]
             break
+    else:
+        if base.endswith(".") and os.path.splitext(base[:-1])[1].lower() in MEDIA_EXT | {".json"}:
+            base = base[:-1]                      # Google cut the name right after the extension, leaving a lone dot
     # a duplicate marker can also sit before the suffix: "img(1).jpg.json" is not
     # used by Google, but "img.jpg(1).json" is, and is handled above.
     return norm(base + dup)
@@ -82,19 +86,24 @@ def media_candidates(name):
     """Sidecar keys that could describe this media filename, best match first."""
     stem, ext = os.path.splitext(name)
     names = [name]
-    if stem.endswith("-edited"):  # edited copy shares the original's json
-        names.append(stem[: -len("-edited")] + ext)
+    low = stem.lower()
+    for suf in EDIT_SUFFIXES:                      # an edited copy shares the original's json (in any of Google's languages)
+        if low.endswith(suf):
+            names.append(stem[: -len(suf)] + ext)
+            break
     out = []
     for n in names:
-        s, e = os.path.splitext(n)
+        s, ext2 = os.path.splitext(n)
         m = DUP_RE.search(s)
         variants = [n]
         if m:  # IMG(1).jpg  ->  IMG.jpg(1)
-            variants.append(s[:m.start()] + e + m.group(0))
+            plain = s[:m.start()] + ext2
+            variants.append(plain + m.group(0))
+            variants.append(plain[:NAME_LIMIT] + m.group(0))      # truncated name, marker kept
         for v in variants:
             out.append(v)
-            if len(v) > NAME_LIMIT:
-                out.append(v[:NAME_LIMIT])
+        if len(n) > NAME_LIMIT:
+            out.append(n[:NAME_LIMIT])
     seen, res = set(), []
     for v in out:
         if norm(v) not in seen:
@@ -103,10 +112,14 @@ def media_candidates(name):
     return res
 
 
+SCAN_SKIP_DIRS = {"_original_videos", "_duplicates", "_merge_conflicts", "_unrecognised", "_older_formats", "_similar_set_aside", ".metadatafixer_stage"}
+
+
 def scan(root):
     media, sidecars = [], []
     scan.noext = 0
-    for dirpath, _, files in os.walk(root):
+    for dirpath, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in SCAN_SKIP_DIRS]
         for f in files:
             p = Path(dirpath) / f
             ext = p.suffix.lower()
@@ -128,7 +141,8 @@ def build_index(sidecars):
         folder = p.parent.name
         by_folder[(folder, key)].append(p)
         by_key[key].append(p)
-        by_stem[(folder, os.path.splitext(key)[0])].append(p)
+        if not DUP_RE.search(key):
+            by_stem[(folder, os.path.splitext(key)[0])].append(p)
     return by_folder, by_key, by_stem
 
 
@@ -188,6 +202,8 @@ def build_args(d, ext, overwrite, skip=()):
     if not (geo.get("latitude") or geo.get("longitude")):
         geo = d.get("geoDataExif") or {}
     lat, lon = geo.get("latitude"), geo.get("longitude")
+    if (lat is None) != (lon is None):
+        lat = lon = None
     if "gps" in skip:
         lat = lon = None
     if (lat or lon) and is_video:
@@ -227,7 +243,7 @@ class ExifTool:
         """Run one exiftool command. Returns (exit_status, output_lines)."""
         a = ["-charset", "utf8", "-charset", "filename=utf8", "-echo4", "STATUS=${status}"]
         a += [str(x) for x in args] + ["-execute"]
-        self.p.stdin.write(("\n".join(a) + "\n").encode("utf-8"))
+        self.p.stdin.write(("\n".join(a) + "\n").encode("utf-8", "surrogateescape"))
         self.p.stdin.flush()
         lines, status = [], 1
         while True:
@@ -346,18 +362,19 @@ def unique_dest(dest):
 
 
 def read_existing(path, is_video=False):
-    """Existing date / GPS / description in a file, for before-and-after counting."""
+    """Existing date / GPS / description / rating in a file, for before-and-after counting. When the file cannot be
+    read at all the result carries "_failed": True, so callers never mistake "unreadable" for "empty"."""
     try:
-        _, lines = tool().run(["-j", "-n", "-api", "QuickTimeUTC=1", "-DateTimeOriginal",
-                               "-QuickTime:CreateDate", "-GPSLatitude", "-GPSLongitude", "-Keys:GPSCoordinates",
-                               "-ImageDescription", "-XMP-dc:Description", str(path)])
-    except (OSError, RuntimeError):
-        return {}
+        _, lines = tool().run(["-j", "-n", "-api", "QuickTimeUTC=1", "-DateTimeOriginal", "-CreateDate",
+                               "-QuickTime:CreateDate", "-XMP:DateCreated", "-GPSLatitude", "-GPSLongitude", "-Keys:GPSCoordinates",
+                               "-ImageDescription", "-XMP-dc:Description", "-XMP:Rating", str(path)])
+    except (OSError, RuntimeError, UnicodeError):
+        return {"_failed": True}
     try:
         start = next(i for i, l in enumerate(lines) if l.startswith("["))
         d = json.loads("\n".join(lines[start:]))[0]
     except (StopIteration, ValueError, IndexError):
-        return {}
+        return {"_failed": True}
     lat, lon = d.get("GPSLatitude"), d.get("GPSLongitude")
     kc = d.get("Keys:GPSCoordinates") or d.get("GPSCoordinates")
     if isinstance(kc, str):
@@ -367,10 +384,11 @@ def read_existing(path, is_video=False):
                 lat, lon = float(parts[0]), float(parts[1])
             except ValueError:
                 pass
-    first, second = ("CreateDate", "DateTimeOriginal") if is_video else ("DateTimeOriginal", "CreateDate")
-    date = str(d.get(first) or d.get(second) or "")
+    cands = ((d.get("QuickTime:CreateDate"), d.get("CreateDate"), d.get("DateTimeOriginal"), d.get("DateCreated")) if is_video
+             else (d.get("DateTimeOriginal"), d.get("CreateDate"), d.get("DateCreated")))
+    date = str(next((c for c in cands if c and not str(c).startswith("0000")), "") or "")
     desc = str(d.get("ImageDescription") or d.get("Description") or "").strip()
-    return {"date": date, "lat": lat, "lon": lon, "desc": desc}
+    return {"date": date, "lat": lat, "lon": lon, "desc": desc, "rating": d.get("Rating")}
 
 
 def _epoch(date_str):
@@ -415,6 +433,8 @@ def classify(d, ext, ex, overwrite, date_policy="earlier"):
     if not (geo.get("latitude") or geo.get("longitude")):
         geo = d.get("geoDataExif") or {}
     lat, lon = geo.get("latitude"), geo.get("longitude")
+    if (lat is None) != (lon is None):
+        lat = lon = None
     if not (lat or lon):
         out["gps"] = "none"
     elif ex.get("lat") is None or ex.get("lon") is None:
@@ -489,7 +509,7 @@ def pair_live(target, cid):
 
 
 def file_hash(path):
-    h = hashlib.sha1()
+    h = hashlib.sha256()
     with open(path, "rb") as fh:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
             h.update(chunk)
@@ -500,6 +520,18 @@ def keep_rank(p):
     """Which copy of an exact duplicate to keep: year folders before albums, then lowest Takeout number."""
     m = re.search(r"Takeout (\d+)", str(p))
     return (0 if p.parent.name.startswith("Photos from") else 1, int(m.group(1)) if m else 0, str(p))
+
+
+def _quick_sig(path):
+    """Size plus the first and last 64 KB: cheap, and rules out almost every non-duplicate before a full hash."""
+    sz = os.path.getsize(path)
+    h = hashlib.sha1()
+    with open(path, "rb") as fh:
+        h.update(fh.read(65536))
+        if sz > 131072:
+            fh.seek(sz - 65536)
+            h.update(fh.read(65536))
+    return (sz, h.hexdigest())
 
 
 def plan_duplicates(media, progress=None):
@@ -514,18 +546,33 @@ def plan_duplicates(media, progress=None):
     todo, done = sum(len(g) for g in candidates), 0
     dupes, saved = {}, 0
     for g in candidates:
-        by_hash = defaultdict(list)
+        by_quick = defaultdict(list)
         for m in g:
-            by_hash[file_hash(m)].append(m)
+            try:
+                by_quick[_quick_sig(m)].append(m)
+            except OSError:
+                pass                                   # vanished or unreadable: leave it alone
             done += 1
             if progress:
                 progress(done, todo)
-        for same in by_hash.values():
-            if len(same) > 1:
-                same.sort(key=keep_rank)
-                for other in same[1:]:
-                    dupes[str(other)] = str(same[0])
-                    saved += other.stat().st_size
+        for q in by_quick.values():
+            if len(q) < 2:
+                continue
+            by_hash = defaultdict(list)
+            for m in q:
+                try:
+                    by_hash[file_hash(m)].append(m)
+                except OSError:
+                    pass
+            for same in by_hash.values():
+                if len(same) > 1:
+                    same.sort(key=keep_rank)
+                    for other in same[1:]:
+                        dupes[str(other)] = str(same[0])
+                        try:
+                            saved += other.stat().st_size
+                        except OSError:
+                            pass
     return dupes, saved
 
 
@@ -537,9 +584,11 @@ def read_content_ids(paths, progress=None, chunk=400):
     ids, done = {}, 0
     for i in range(0, len(paths), chunk):
         part = paths[i:i + chunk]
-        arg = Path(tempfile.mkstemp(suffix=".args")[1])
+        fd_, arg_ = tempfile.mkstemp(suffix=".args")
+        os.close(fd_)
+        arg = Path(arg_)
         try:
-            arg.write_text("\n".join(str(p) for p in part), encoding="utf-8")
+            arg.write_text("\n".join(str(p) for p in part), encoding="utf-8", errors="surrogateescape")
             r = subprocess.run(["exiftool", "-charset", "filename=utf8", "-j", "-ContentIdentifier",
                                 "-@", str(arg)], capture_output=True, text=True)
             try:
@@ -581,20 +630,23 @@ def plan_live(media, progress=None):
 
 
 def place_file(src, dest, move):
-    """Copy or move one file, retrying once and cleaning up a partial copy if it fails."""
+    """Copy or move one file through a temporary .part name, retrying once. The real name only ever holds a complete file."""
+    part = dest.with_name(dest.name + ".part")
     for attempt in (1, 2):
         try:
             if move:
-                shutil.move(str(src), str(dest))
+                shutil.move(str(src), str(part))
             else:
-                shutil.copy2(src, dest)
+                shutil.copy2(src, part)
+            os.replace(part, dest)
             return
         except OSError:
-            try:
-                if dest.exists():
-                    dest.unlink()
-            except OSError:
-                pass
+            for p in (part,):
+                try:
+                    if p.exists():
+                        p.unlink()
+                except OSError:
+                    pass
             if attempt == 2:
                 raise
             time.sleep(1)
@@ -662,14 +714,19 @@ def prepare(args, media, progress=None):
     args.live_plan = plan_live(media, progress) if getattr(args, "pair_live", False) else {}
 
 
+def _ckey(p):
+    """Names that a Mac sees as the same file (IMG.JPG and img.jpg, composed and decomposed accents)."""
+    return unicodedata.normalize("NFC", str(p)).casefold()
+
+
 def claim_dest(dest, args):
     """Reserve a unique output path (thread-safe, also avoids clashes between files in a dry run)."""
     with args.lock:
         cand, i = dest, 0
-        while str(cand) in args.claimed or cand.exists():
+        while _ckey(cand) in args.claimed or cand.exists():
             i += 1
             cand = dest.with_name(f"{dest.stem}_{i}{dest.suffix}")
-        args.claimed.add(str(cand))
+        args.claimed.add(_ckey(cand))
         return cand
 
 
@@ -772,23 +829,41 @@ def process(m, idx, args, out_root):
     if getattr(args, "pair_live", False) and ext in (".mp4", ".mov"):
         cid, why = (args.live_plan.get(str(m)) or live_id(m))
         row["live"] = "paired" if cid else why
+    if sc and how == "tree":                 # a match found only by file name, in another folder: sanity-check it against the photo's own date
+        dj = load_json(sc)
+        tj = (ts(dj, "photoTakenTime") or ts(dj, "creationTime")) if dj else None
+        have_ = read_existing(m, ext in VIDEO_EXT).get("date", "")
+        ee = _epoch(have_) if have_ else None
+        if tj and ee and abs(tj - ee) > 3 * 86400:
+            sc, row["sidecar"], row["match"] = None, "", "tree-rejected"
+            row["detail"] = "a same-named info file in another folder was ignored: its date is far from this photo's own date"
     d = load_json(sc) if sc else None
     status0 = "no-json" if not sc else "bad-json"
+    read_failed = False
     if d is None and getattr(args, "name_dates", False) and ext not in NO_WRITE_EXT:
         nt = date_from_name(m.name)
         if nt:
-            have = read_existing(m, ext in VIDEO_EXT).get("date", "")
-            if not have or have.startswith("0000"):          # only fills a missing date, never changes one
+            ex0 = read_existing(m, ext in VIDEO_EXT)
+            have = ex0.get("date", "")
+            if not ex0.get("_failed") and (not have or have.startswith("0000")):          # only fills a missing date, never changes one
                 d = {"photoTakenTime": {"timestamp": str(nt)}}
                 row["match"] = "filename-date"
                 row["detail"] = "date taken from the file name"
     skip, final_taken = set(), None
+    ex_now = {}
     if d and ext not in NO_WRITE_EXT:
-        cl = classify(d, ext, read_existing(m, ext in VIDEO_EXT), args.overwrite, getattr(args, "date_policy", "earlier"))
-        final_taken = cl.pop("_taken_final", None)
-        row.update(cl)
-        skip = {k for k in ("date", "gps", "desc") if row.get(k) in ("same", "kept", "none")}
+        ex_now = read_existing(m, ext in VIDEO_EXT)
+        if ex_now.get("_failed"):          # never write over something we could not read
+            d, read_failed = None, True
+            row["detail"] = "could not read the file's existing information, so it was left untouched"
+        else:
+            cl = classify(d, ext, ex_now, args.overwrite, getattr(args, "date_policy", "earlier"))
+            final_taken = cl.pop("_taken_final", None)
+            row.update(cl)
+            skip = {k for k in ("date", "gps", "desc") if row.get(k) in ("same", "kept", "none")}
     exif_args, taken = build_args(d, ext, args.overwrite, skip) if d else ([], None)
+    if ex_now.get("rating") and "-XMP:Rating=5" in exif_args:
+        exif_args.remove("-XMP:Rating=5")          # a rating you gave yourself is not replaced
     if final_taken:
         taken = final_taken  # file times follow the date that actually won
     dest, at_dest = None, False
@@ -803,12 +878,18 @@ def process(m, idx, args, out_root):
         if str(first) == str(m):  # already where it belongs (output folder is one of the sources): fix it in place
             dest, at_dest = m, True
             with args.lock:
-                args.claimed.add(str(m))
+                args.claimed.add(_ckey(m))
         elif adopt:
-            dest, at_dest = first, True
-            with args.lock:
-                args.claimed.add(str(first))
-            row["detail"] = "identical copy already in the destination: fixed there"
+            with args.lock:                           # only adopt a copy nobody else is working on right now
+                if _ckey(first) in args.claimed:
+                    adopt = False
+                else:
+                    args.claimed.add(_ckey(first))
+            if adopt:
+                dest, at_dest = first, True
+                row["detail"] = "identical copy already in the destination: fixed there"
+            else:
+                dest = claim_dest(first, args)
         else:
             dest = claim_dest(first, args)
         row["output"] = str(dest)
@@ -828,7 +909,7 @@ def process(m, idx, args, out_root):
     elif d:
         row["status"] = "mtime-only"
     else:
-        row["status"] = status0
+        row["status"] = "exiftool-error" if read_failed else status0
     if cid:
         before_pair = target
         target, err = pair_live(target, cid)
@@ -953,7 +1034,7 @@ def convert_mode(info):
 
 
 def _dur_ok(a, b):
-    return a <= 0 or abs(a - b) <= max(1.0, 0.02 * a)
+    return b > 0 and (a <= 0 or abs(a - b) <= max(1.0, 0.02 * a))
 
 
 def scan_legacy(roots, exts):
@@ -1087,7 +1168,11 @@ def convert_file(src, root, opts, progress=None):
     final, resumed = src.with_suffix(".mp4"), False
     if final.exists():
         oi = probe_video(final)
-        if oi and oi["has_video"] and _dur_ok(info["duration"], oi["duration"]):
+        try:
+            same_stamp = abs(final.stat().st_mtime - src.stat().st_mtime) < 2.5       # a conversion copies the original's time
+        except OSError:
+            same_stamp = False
+        if oi and oi["has_video"] and same_stamp and _dur_ok(info["duration"], oi["duration"]):
             resumed = True
         else:
             final = unique_dest(src.with_name(src.stem + "_converted.mp4"))
@@ -1155,7 +1240,7 @@ def is_bundle(name):
     return name.lower().endswith(BUNDLE_SUFFIXES)
 
 
-def find_empty_dirs(root, ignore_junk=True, extra_ignored=None):
+def find_empty_dirs(root, ignore_junk=True, extra_ignored=None, include_root=False):
     """Folders below root that hold no files at all, however deep (a folder is empty only if everything in it is).
 
     Symbolic links, app/library bundles and unreadable folders count as content and are never entered.
@@ -1182,6 +1267,9 @@ def find_empty_dirs(root, ignore_junk=True, extra_ignored=None):
         if all(os.path.join(dirpath, d) in empty for d in all_dirs):
             empty.add(dirpath)
             junk += [os.path.join(dirpath, f) for f in files]
+    if not include_root:
+        empty.discard(str(root))
+        empty.discard(os.fspath(root))
     ordered = sorted(empty, key=lambda p: -len(Path(p).parts))
     return ordered, junk, len(order), len(content) + len([b for b in blocked if b])
 
@@ -1215,7 +1303,7 @@ def detect_types(paths, progress=None, chunk=400):
         fd, arg = tempfile.mkstemp(suffix=".args")
         os.close(fd)
         try:
-            Path(arg).write_text("\n".join(str(p) for p in part), encoding="utf-8")
+            Path(arg).write_text("\n".join(str(p) for p in part), encoding="utf-8", errors="surrogateescape")
             r = subprocess.run(["exiftool", "-charset", "filename=utf8", "-j", "-FileTypeExtension", "-Warning", "-@", arg],
                                capture_output=True, text=True)
             try:
@@ -1308,6 +1396,8 @@ def fix_extensions(folders, dry_run, progress=None, rename_json=True, aside=Fals
         bogus = bogus_ext(p.name)
         if not ext and bogus and row["size"] > 0:
             continue                               # an odd name we cannot identify: leave it where it is
+        if ext and ("." + EXT_MAP.get(ext, ext)) not in MEDIA_EXT:
+            ext = None                                    # a document, text file...: not ours to rename
         if not ext:
             row["action"] = "empty" if row["size"] == 0 else "unrecognised"
             row["detail"] = diagnose_unknown(p)
@@ -1441,6 +1531,13 @@ def _sha256(path):
         for chunk in iter(lambda: fh.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _same_file(a, b):
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return False
 
 
 def _same_content(a, b):
@@ -1580,11 +1677,13 @@ def tidy_names(roots, opts, dry_run, progress=None):
                     row["action"] = "would-rename"
                     claimed.add(new)
                 else:
+                    comps = _companions(Path(old))            # its Google info files, whatever suffix they carry
                     os.rename(old, new)
                     row["action"] = "renamed"
-                    oj, nj = old + ".json", new + ".json"
-                    if os.path.exists(oj) and not os.path.exists(nj):
-                        os.rename(oj, nj)
+                    for fname, rest in comps:
+                        oj, nj = os.path.join(os.path.dirname(old), fname), new + rest
+                        if os.path.exists(oj) and not os.path.exists(nj):
+                            os.rename(oj, nj)
             except OSError as e:
                 row["action"], row["detail"] = "failed", str(e)
             rows.append(row)
@@ -1627,8 +1726,8 @@ def merge_trees(roots, dest, opts, dry_run=False, on_progress=None, on_item=None
     opts['takeout']: ignore 'Takeout N / Google Photos' wrapper folders and carry each photo's .json along.
     opts['global_dedupe']: skip exact duplicates anywhere, not only inside the same folder.
     Returns (rows, per_root, merged_dirs)."""
-    roots = [Path(r) for r in roots]
-    dest = Path(dest) if dest else roots[0]
+    roots = [Path(r).resolve() for r in roots]
+    dest = Path(dest).resolve() if dest else roots[0]
     move = bool(opts.get("move"))
     tidy, nocase = bool(opts.get("tidy")), bool(opts.get("nocase", True))
     conflict, dupes = opts.get("conflict", "both"), opts.get("dupes", "delete")
@@ -1740,7 +1839,7 @@ def merge_trees(roots, dest, opts, dry_run=False, on_progress=None, on_item=None
                 dir_sources[dir_key].add(ri)
                 row["status"], row["detail"] = "identical", "identical to " + os.path.basename(dupe_of[src]) + " kept elsewhere"
                 json_mark(src)
-                if move and not dry_run:
+                if move and not dry_run and not _same_file(src, dupe_of[src]):
                     if dupes == "delete":
                         os.remove(src)
                     else:
@@ -1755,6 +1854,11 @@ def merge_trees(roots, dest, opts, dry_run=False, on_progress=None, on_item=None
                 dir_sources[dir_key].add(ri)
                 return row
             existing = str(target) if target.exists() else claimed.get(str(target))
+            if existing and os.path.exists(existing) and _same_file(src, existing):
+                row["status"] = "in-place"                  # the very same file reached by another path: nothing to do, never delete it
+                per_root[ri]["placed"] += 1
+                dir_sources[dir_key].add(ri)
+                return row
             if existing and not is_b and _same_content(src, existing):
                 per_root[ri]["identical"] += 1
                 dir_sources[dir_key].add(ri)
@@ -2604,7 +2708,7 @@ def find_similar_photos(roots, threshold=6, progress=None, should_stop=None, wor
             fd, arg = tempfile.mkstemp(suffix=".args")
             os.close(fd)
             try:
-                Path(arg).write_text("\n".join(need[k:k + 300]), encoding="utf-8")
+                Path(arg).write_text("\n".join(need[k:k + 300]), encoding="utf-8", errors="surrogateescape")
                 r = subprocess.run(["exiftool", "-charset", "filename=utf8", "-j", "-n", "-ImageWidth", "-ImageHeight", "-DateTimeOriginal", "-GPSLatitude", "-@", arg],
                                    capture_output=True, text=True)
                 for it in json.loads(r.stdout or "[]"):
@@ -2965,7 +3069,7 @@ def health_scan(roots, deep=False, progress=None, should_stop=None, exif_cap=400
             fd, arg = tempfile.mkstemp(suffix=".args")
             os.close(fd)
             try:
-                Path(arg).write_text("\n".join(f[0] for f in pick[k:k + 300]), encoding="utf-8")
+                Path(arg).write_text("\n".join(f[0] for f in pick[k:k + 300]), encoding="utf-8", errors="surrogateescape")
                 r = subprocess.run(["exiftool", "-charset", "filename=utf8", "-j", "-n", "-FileTypeExtension", "-DateTimeOriginal", "-CreateDate", "-GPSLatitude", "-Model", "-@", arg],
                                    capture_output=True, text=True)
                 for it in json.loads(r.stdout or "[]"):
@@ -3573,7 +3677,7 @@ def compare_libraries(entries, progress=None, should_stop=None, threshold=4, sim
             fd, arg = tempfile.mkstemp(suffix=".args")
             os.close(fd)
             try:
-                Path(arg).write_text("\n".join(paths[k:k + 300]), encoding="utf-8")
+                Path(arg).write_text("\n".join(paths[k:k + 300]), encoding="utf-8", errors="surrogateescape")
                 r = subprocess.run(["exiftool", "-charset", "filename=utf8", "-j", "-n", "-ImageWidth", "-ImageHeight", "-DateTimeOriginal", "-CreateDate", "-GPSLatitude", "-GPSLongitude", "-ImageDescription", "-@", arg],
                                    capture_output=True, text=True)
                 for it in json.loads(r.stdout or "[]"):

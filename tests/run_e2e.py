@@ -144,6 +144,8 @@ def t_cancel_mid_run():
     for i in range(60):
         jpeg(src / ("a%d.jpg" % i), seed=100 + i, size=(64, 48))
     out = WORK / "cancel_out"
+    real_process = fx.process
+    fx.process = lambda *a, **k: (time.sleep(0.04), real_process(*a, **k))[1]       # slow it down so Stop lands mid-run
     def stopper():
         for _ in range(200):
             time.sleep(0.05)
@@ -152,7 +154,10 @@ def t_cancel_mid_run():
                     g.STATE["cancel"] = True
                     return
     threading.Thread(target=stopper, daemon=True).start()
-    g.run_job([str(src)], str(out), False, True)
+    try:
+        g.run_job([str(src)], str(out), False, True)
+    finally:
+        fx.process = real_process
     assert g.STATE["state"] == "idle" and "Stopped" in g.STATE["message"], (g.STATE["state"], g.STATE["message"])
     n1 = len(list(out.rglob("*.jpg")))
     g.run_job([str(src)], str(out), False, True)       # resume
