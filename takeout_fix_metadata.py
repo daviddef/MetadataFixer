@@ -1944,6 +1944,7 @@ def merge_trees(roots, dest, opts, dry_run=False, on_progress=None, on_item=None
 
 # ---- Zip support: read Google Takeout .zip files without unzipping everything first --------------------------
 import zipfile
+import zlib
 
 ZIP_STAGE = ".metadatafixer_stage"
 ZIPS_LOG = ".metadatafixer_zips.jsonl"
@@ -1973,11 +1974,13 @@ def split_sources(entries):
             continue
         elif p.is_dir():
             found = sorted(q for q in p.iterdir() if q.is_file() and q.suffix.lower() == ".zip" and not q.name.startswith("._"))
-            if not found:
+            other = any(q.is_dir() or (q.is_file() and q.suffix.lower() in MEDIA_EXT) for q in p.iterdir())
+            if not found or other:                    # a folder with zips AND photos/subfolders: use both, never drop one
                 if p.resolve() not in seen:
                     seen.add(p.resolve())
                     folders.append(p)
-                continue
+                if not found:
+                    continue
         else:
             raise ValueError(f"Not a folder or zip file: {p}")
         for q in found:
@@ -2029,9 +2032,19 @@ def zip_plan(zips):
 
 def _extract_member(zf, info, parts, tree):
     target = Path(tree).joinpath(*parts)
+    root = os.path.realpath(tree)
+    if os.path.commonpath([root, os.path.realpath(target.parent)]) != root:
+        raise OSError("unsafe path in zip")
     target.parent.mkdir(parents=True, exist_ok=True)
-    with zf.open(info) as src, open(target, "wb") as dst:
-        shutil.copyfileobj(src, dst, 1 << 20)
+    try:
+        with zf.open(info) as src, open(target, "wb") as dst:
+            shutil.copyfileobj(src, dst, 1 << 20)
+    except BaseException:
+        try:
+            os.unlink(target)                               # never leave a half-written file behind
+        except OSError:
+            pass
+        raise
     try:
         t = time.mktime(info.date_time + (0, 0, -1))
         os.utime(target, (t, t))
@@ -2052,12 +2065,18 @@ def stage_json(zips, tree, should_stop=None):
                 if parts and parts[-1].lower().endswith(".json"):
                     if should_stop:
                         should_stop()
-                    _extract_member(zf, i, parts, tree)
-                    n += 1
+                    try:
+                        _extract_member(zf, i, parts, tree)
+                        n += 1
+                    except ZIP_MEMBER_ERRORS:
+                        pass                                # one odd member must not stop the whole job
     return n
 
 
-def stage_media(zpath, tree, should_stop=None):
+ZIP_MEMBER_ERRORS = (OSError, zipfile.BadZipFile, RuntimeError, zlib.error, NotImplementedError, EOFError)
+
+
+def stage_media(zpath, tree, should_stop=None, bad=None):
     """Extract the photos and videos of one zip into the same tree. Returns the extracted paths."""
     out = []
     with zipfile.ZipFile(zpath) as zf:
@@ -2068,7 +2087,11 @@ def stage_media(zpath, tree, should_stop=None):
             if parts and not parts[-1].lower().endswith(".json") and _wanted_media(parts):
                 if should_stop:
                     should_stop()
-                out.append(_extract_member(zf, i, parts, tree))
+                try:
+                    out.append(_extract_member(zf, i, parts, tree))
+                except ZIP_MEMBER_ERRORS as ex:
+                    if bad is not None:
+                        bad.append("%s: %s" % (i.filename, ex))
     return out
 
 
@@ -2183,7 +2206,7 @@ def assess(entries, dest="", progress=None, should_stop=None, sample_n=120):
         n = vp.name
         low = n.lower()
         ext = vp.suffix.lower()
-        if any(x.lower() in ("takeout", "google photos") for x in vp.parts[:2]):
+        if any(x.lower() in ("takeout", "google photos") for x in vp.parts):
             F["wrapper"] = True
         if low.endswith(".json"):
             F["json"] += 1
@@ -2338,8 +2361,8 @@ def assess(entries, dest="", progress=None, should_stop=None, sample_n=120):
         F["sources"].append({"label": labels[oi] if oi < len(labels) else "?", "kind": kind, "media": src_stat[oi]["media"], "bytes": src_stat[oi]["bytes"]})
     # A small sample of real files: how many already have a date and a location, and what Google's info would add
     cand = [m for m in media if m[0].suffix.lower() in MEDIA_EXT and m[0].suffix.lower() not in NO_WRITE_EXT and 0 < m[1] <= 60 * 1024 * 1024]
-    random.seed(7)
-    pick = random.sample(cand, min(sample_n, len(cand))) if cand else []
+    rnd = random.Random(7)
+    pick = rnd.sample(cand, min(sample_n, len(cand))) if cand else []
     if pick and shutil.which("exiftool"):
         tmp = tempfile.mkdtemp(prefix="metadatafixer_assess_")
         story = []
@@ -2358,7 +2381,7 @@ def assess(entries, dest="", progress=None, should_stop=None, sample_n=120):
                     else:
                         real = src
                     ex = read_existing(real, vp.suffix.lower() in VIDEO_EXT)
-                except (OSError, KeyError, zipfile.BadZipFile):
+                except Exception:
                     continue
                 S["n"] += 1
                 has_d = bool(ex.get("date")) and not str(ex.get("date")).startswith("0000")
@@ -2432,7 +2455,9 @@ import difflib
 
 AFFIX_WORDS = {"delete", "deleted", "del", "todelete", "old", "older", "oldest", "copy", "copies", "backup", "backups", "bak", "bkp",
                "dup", "dupe", "dupes", "duplicate", "duplicates", "temp", "tmp", "new", "newer", "final", "orig", "original", "originals",
-               "archive", "archived", "unused", "trash", "donotuse", "extra", "extras", "v1", "v2", "v3"}
+               "archive", "archived", "unused", "trash", "donotuse", "extra", "extras"}
+# words that are also ordinary name parts ("Old Town", "New York", "Final Fantasy"): only ever removed from the END of a name
+TRAIL_ONLY = {"old", "older", "oldest", "new", "newer", "final", "orig", "original", "originals", "extra", "extras", "archive", "archived"}
 
 
 def _fold(s):
@@ -2447,7 +2472,7 @@ def name_key(name):
     base = re.sub(r"[()\[\]{}]", " ", base)
     toks = [t for t in re.split(r"[\s_.\-]+", base) if t]
     removed = False
-    while toks and _fold(toks[0]) in AFFIX_WORDS and len(toks) > 1:
+    while toks and _fold(toks[0]) in AFFIX_WORDS and _fold(toks[0]) not in TRAIL_ONLY and len(toks) > 1:
         toks.pop(0)
         removed = True
     while toks and _fold(toks[-1]) in AFFIX_WORDS and len(toks) > 1:
@@ -2490,19 +2515,26 @@ def find_similar_folders(roots, maybe=True):
             if maybe:
                 rest = [k for k in kids if k["name"] not in used]
                 seen = set()
-                for i, a in enumerate(rest):
-                    if a["name"] in seen:
+                bydig = {}
+                for k in rest:
+                    if len(k["squash"]) >= 6:
+                        bydig.setdefault(re.sub(r"\D", "", k["squash"]), []).append(k)     # only names with the same numbers can match
+                for lst in bydig.values():
+                    if len(lst) < 2 or len(lst) > 400:
                         continue
-                    cluster = [a]
-                    for b in rest[i + 1:]:
-                        if b["name"] in seen or len(a["squash"]) < 6:
+                    for i, a in enumerate(lst):
+                        if a["name"] in seen:
                             continue
-                        da, db = re.sub(r"\D", "", a["squash"]), re.sub(r"\D", "", b["squash"])
-                        if da == db and difflib.SequenceMatcher(None, a["squash"], b["squash"]).ratio() >= 0.88:
-                            cluster.append(b)
-                    if len(cluster) > 1:
-                        seen.update(x["name"] for x in cluster)
-                        groups.append((dp, "maybe", cluster))
+                        cluster = [a]
+                        for b in lst[i + 1:]:
+                            if b["name"] in seen or abs(len(a["squash"]) - len(b["squash"])) > 3:
+                                continue
+                            sm = difflib.SequenceMatcher(None, a["squash"], b["squash"])
+                            if sm.real_quick_ratio() >= 0.88 and sm.quick_ratio() >= 0.88 and sm.ratio() >= 0.88:
+                                cluster.append(b)
+                        if len(cluster) > 1:
+                            seen.update(x["name"] for x in cluster)
+                            groups.append((dp, "maybe", cluster))
     out = []
     for dp, conf, lst in groups:
         for m in lst:
@@ -2534,7 +2566,14 @@ def consolidate_groups(groups, dupes_action="delete", dry_run=True, progress=Non
             row["action"], row["detail"] = "skipped", "that is not a valid folder name"
             rows.append(row)
             continue
-        names = [m for m in g["members"] if os.path.isdir(os.path.join(parent, m))]
+        mem = [m["name"] if isinstance(m, dict) else m for m in g["members"]]
+        # a member must be a plain folder name directly inside the parent (never a path, never a link)
+        names = [m for m in mem if isinstance(m, str) and m and m == os.path.basename(m) and m not in (".", "..")
+                 and os.path.isdir(os.path.join(parent, m)) and not os.path.islink(os.path.join(parent, m))]
+        if os.path.isdir(os.path.join(parent, target)) and target not in names:
+            row["action"], row["detail"] = "skipped", "a different folder already has that name"
+            rows.append(row)
+            continue
         row["members"] = names
         if len(names) < 2 and not (names and names[0] != target):
             row["action"], row["detail"] = "skipped", "nothing to merge"
@@ -2612,7 +2651,24 @@ def dhash_image(path):
         except (OSError, subprocess.TimeoutExpired):
             return b""
     vf = "scale=9:8:flags=area,format=gray"
-    raw = run(["ffmpeg", "-nostdin", "-v", "error", "-i", str(path), "-frames:v", "1", "-vf", vf, "-f", "rawvideo", "-"])
+    link = None
+    if "%" in str(path):                                   # ffmpeg would read "100%d.jpg" as a numbered sequence
+        try:
+            fd, link = tempfile.mkstemp(suffix=Path(path).suffix.lower(), prefix="mf_hash_")
+            os.close(fd)
+            os.unlink(link)
+            os.symlink(os.path.abspath(path), link)
+            path = link
+        except OSError:
+            link = None
+    try:
+        raw = run(["ffmpeg", "-nostdin", "-v", "error", "-i", str(path), "-frames:v", "1", "-vf", vf, "-f", "rawvideo", "-"])
+    finally:
+        if link:
+            try:
+                os.unlink(link)
+            except OSError:
+                pass
     if len(raw) != 72 and shutil.which("exiftool"):
         thumb = run(["exiftool", "-b", "-ThumbnailImage", str(path)])
         if not thumb:
@@ -2760,11 +2816,16 @@ def plan_photos_import(root, batch_bytes, order="oldest", albums=True, done=None
                 skipped += 1
                 continue
             try:
+                str(p).encode("utf-8")                 # names that are not valid text cannot be handed to Photos
                 st = p.stat()
-            except OSError:
+            except (OSError, UnicodeError):
+                unsupported["(unreadable name)"] = unsupported.get("(unreadable name)", 0) + 1
                 continue
             rel = p.relative_to(root)
-            top = rel.parts[0] if len(rel.parts) > 1 else ""
+            rp = [x for x in rel.parts]
+            while len(rp) > 1 and rp[0].lower() in ("takeout", "google photos"):
+                rp.pop(0)                              # Takeout/Google Photos/<Album>/...: the album is the folder under that
+            top = rp[0] if len(rp) > 1 else ""
             album = top if (albums and top and is_album_folder(top)) else ""
             key = (str(p.parent), p.stem.lower())
             u = units.setdefault(key, {"files": [], "bytes": 0, "mtime": st.st_mtime, "album": album, "rel": str(rel)})
@@ -3058,8 +3119,8 @@ def health_scan(roots, deep=False, progress=None, should_stop=None, exif_cap=400
     deep_stats = None
     if files and shutil.which("exiftool"):
         pool = [f for f in files if f[2] in MEDIA_EXT]
-        random.seed(11)
-        pick = pool if (deep and len(pool) <= exif_cap) else random.sample(pool, min(len(pool), exif_cap if deep else 400))
+        rnd = random.Random(11)
+        pick = pool if (deep and len(pool) <= exif_cap) else rnd.sample(pool, min(len(pool), exif_cap if deep else 400))
         mism = no_date = no_gps = yr_mismatch = n_read = 0
         models = Counter()
         mism_list = []
@@ -3263,19 +3324,22 @@ def photos_upload_status(lib, wanted=None):
                     state_by_name = {}
                     for (nm, sz), v in state.items():
                         state_by_name[nm] = max(state_by_name.get(nm, 0), v)
-                    matched = matched_up = 0
+                    matched = matched_up = uncertain = 0
                     missing = []
+                    by_size = "ORIGINALFILESIZE" in "".join(tcols)
                     for nm, sz in wanted:
-                        k = (nm.lower(), int(sz))
+                        k = (nm.lower(), int(sz) if by_size else 0)
                         if k in state:
                             matched += 1
                             matched_up += state[k]
-                        elif nm.lower() in state_by_name:           # same name, size differs (Photos may store a different size)
-                            matched += 1
-                            matched_up += state_by_name[nm.lower()]
+                        elif nm.lower() in state_by_name:           # same name but another size: a different picture, or Photos re-encoded it
+                            uncertain += 1                           # never counted as "verified"
+                            if len(missing) < 10:
+                                missing.append(nm)
                         elif len(missing) < 10:
                             missing.append(nm)
-                    out.update({"wanted": len(wanted), "matched": matched, "matched_uploaded": matched_up, "not_found": len(wanted) - matched, "missing_examples": missing})
+                    out.update({"wanted": len(wanted), "matched": matched, "matched_uploaded": matched_up, "uncertain": uncertain,
+                                "not_found": len(wanted) - matched, "missing_examples": missing})
                 else:
                     out["wanted_note"] = "could not link files to Photos items"
             else:
@@ -3329,19 +3393,19 @@ LOG_RULES = [
      "fixes": ["On Backstory's Convert tab, turn old videos into MP4 first.", "Run the Health tab to find empty (0 byte) and wrongly-named files, and fix them.",
                "Re-run the Photos tab: files already imported are skipped, so only the missing ones are tried again."]},
     {"id": "low_power", "sev": "warn", "title": "Uploads are paused by Low Power Mode or the battery",
-     "re": r"low power mode|LowPowerMode|battery[^\n]{0,40}(low|paus)|paus[a-z]* [^\n]{0,30}(battery|low power)|on battery",
+     "re": r"low power mode|LowPowerMode|battery[^\n]{0,40}(low|paus)|paus[a-z]{0,8} [^\n]{0,30}(battery|low power)|upload[^\n]{0,40}on battery",
      "meaning": "macOS holds back background uploads to save power.",
      "fixes": ["Plug the Mac in and turn off Low Power Mode (System Settings > Battery).", "Keep the Mac awake and the lid open while a big upload runs (Settings > Battery > Options: prevent sleep when the display is off)."]},
     {"id": "sync_paused", "sev": "warn", "title": "iCloud Photos is paused",
-     "re": r"(sync|upload|iCloud Photos)[^\n]{0,40}paus|paus[a-z]*[^\n]{0,40}(sync|upload|iCloud Photos)|PauseCPL|CPLPaused|resume[^\n]{0,20}(in|after) [0-9]+ (hour|day)",
+     "re": r"(sync|upload|iCloud Photos)[^\n]{0,40}paus|paus[a-z]{0,8}[^\n]{0,40}(sync|upload|iCloud Photos)|PauseCPL|CPLPaused|resume[^\n]{0,20}(in|after) [0-9]+ (hour|day)",
      "meaning": "Syncing was paused (by you, by Photos for a day, or by the system).",
      "fixes": ["Open Photos and scroll to the bottom of the Library view: it says 'Paused' with a Resume button.", "Press Resume. If it pauses again by itself, check Low Power Mode and available space."]},
     {"id": "permission", "sev": "bad", "title": "macOS blocked the request (permission)",
-     "re": r"not authorized to send Apple events|errAEEventNotPermitted|\(-1743\)|-1743|kTCCService|TCC[^\n]{0,30}(denied|deny)|Operation not permitted|not permitted to access",
+     "re": r"not authorized to send Apple events|errAEEventNotPermitted|NSOSStatusErrorDomain[^\n]{0,20}-1743|\(-1743\)|kTCCService|TCC[^\n]{0,30}(denied|deny)|Operation not permitted[^\n]{0,80}(photos|Pictures|Volumes)|not permitted to access",
      "meaning": "A privacy setting stops the app from controlling Photos or reading a folder.",
      "fixes": ["System Settings > Privacy & Security > Automation: allow Backstory to control Photos.", "Privacy & Security > Files and Folders (or Full Disk Access): allow Backstory to read your library folder or external drive.", "Quit and reopen Backstory after changing a permission."]},
     {"id": "thermal", "sev": "info", "title": "The Mac is hot and slowing down",
-     "re": r"thermal (pressure|state|level)[^\n]{0,20}(serious|critical|heavy)|thermalPressure|throttl",
+     "re": r"thermal (pressure|state|level)[^\n]{0,20}(serious|critical|heavy)|thermalPressure|thermal[^\n]{0,20}throttl",
      "meaning": "macOS slows background work to cool down, so uploads and analysis crawl.",
      "fixes": ["Let the Mac cool, keep vents clear, avoid soft surfaces.", "Pause large jobs until it is cooler."]},
     {"id": "crash", "sev": "bad", "title": "Photos (or a Photos helper) crashed",
@@ -3353,7 +3417,7 @@ LOG_RULES = [
      "meaning": "One or more files are damaged or in an unreadable format, so Photos could not show, analyse or upload them.",
      "fixes": ["Run the Health tab (deep check) to list 0-byte and wrongly-named files.", "Try opening the file in Preview or QuickTime. If it will not open, restore it from your Takeout or another backup."]},
     {"id": "io_error", "sev": "bad", "title": "The drive could not be read or written (I/O error)",
-     "re": r"input/output error|I/O error|\bEIO\b|Errno 5|NSPOSIXErrorDomain[^\n]{0,40}Code=5\b|disk (read|write) error|device not configured|Errno 6|Code=6\b",
+     "re": r"input/output error|I/O error|\bEIO\b|Errno 5\b|NSPOSIXErrorDomain[^\n]{0,40}Code=(5|6)\b|disk (read|write) error|device not configured|Errno 6\b",
      "meaning": "The drive stopped answering or has a bad sector. This is common with loose cables, drives that sleep, or failing drives.",
      "fixes": ["Reconnect the cable, try another port, and avoid hubs.", "Run Disk Utility > First Aid on the drive.", "Copy the affected files in Finder. If it fails, the drive may be failing: back up everything else now.",
                "Run Backstory again with the same Destination: finished files are skipped."]},
@@ -3362,7 +3426,7 @@ LOG_RULES = [
      "meaning": "The drive holding the library was disconnected or asleep, or the library was moved.",
      "fixes": ["Reconnect the drive and make sure it is mounted before opening Photos or Backstory.", "If you moved the library, open it again with Option held while opening Photos."]},
     {"id": "analysis", "sev": "info", "title": "Photos is analysing your library (busy, not broken)",
-     "re": r"mediaanalysisd|photoanalysisd|analysis (is )?(running|in progress)|scene analysis|face (detection|clustering)",
+     "re": r"(mediaanalysisd|photoanalysisd)[^\n]{0,80}(analy[sz]|running|progress|started)|analysis (is )?(running|in progress)|scene analysis|face (detection|clustering)",
      "meaning": "After a big import Photos spends hours indexing faces and scenes. It is heavy on CPU and can slow uploads.",
      "fixes": ["Leave the Mac plugged in and awake: it finishes by itself.", "Wait for it to finish before importing the next big batch."]},
     {"id": "backstory_space", "sev": "bad", "title": "Backstory: not enough free space",
@@ -3382,7 +3446,7 @@ def interpret_log_lines(lines, max_examples=3):
     found = {}
     unmatched = {}
     for raw in lines:
-        line = raw.strip()
+        line = raw.strip()[:1500]                 # a pasted mega-line must never stall the checker
         if not line:
             continue
         hit = False

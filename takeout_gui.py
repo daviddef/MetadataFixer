@@ -24,6 +24,7 @@ import threading
 import webbrowser
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import secrets
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -46,10 +47,17 @@ def stopped_state(what="Nothing further was changed."):
 
 STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}, "recent": [], "clean": {"state": "idle"}, "update": {"state": "idle", "files": []}, "phase": None, "kind": "fix", "cv": None, "cancel": False, "guided": None, "photos": None, "run": None, "version": VERSION, "boot": time.time()}
 LOCK = threading.Lock()
+TOKEN = secrets.token_hex(16)        # per-run secret: only our own page knows it, so other websites cannot drive the app
+
+
+def _safe_prompt(t):
+    """Only plain text may reach AppleScript: strip quotes, backslashes and control characters."""
+    return re.sub(r'[^\w .,:;!?()/\'-]', "", str(t))[:120] or "Choose"
 
 
 def choose_folders(prompt):
     """Native macOS picker allowing several folders; returns a list of POSIX paths."""
+    prompt = _safe_prompt(prompt)
     script = ('set fs to choose folder with prompt "%s" with multiple selections allowed\n'
               'set out to {}\nrepeat with f in fs\nset end of out to POSIX path of f\nend repeat\n'
               'set AppleScript\'s text item delimiters to linefeed\nreturn out as text' % prompt)
@@ -62,6 +70,7 @@ def choose_folders(prompt):
 
 def choose_zips(prompt):
     """Native macOS picker for Takeout .zip files (several allowed)."""
+    prompt = _safe_prompt(prompt)
     script = ('set fs to choose file with prompt "%s" of type {"public.zip-archive", "zip"} with multiple selections allowed\n'
               'set out to {}\nrepeat with f in fs\nset end of out to POSIX path of f\nend repeat\n'
               'set AppleScript\'s text item delimiters to linefeed\nreturn out as text' % prompt)
@@ -420,9 +429,11 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
             shared_sizes.update(k for k, v in sz.items() if v > 1 and k)
             biggest = max((z["bytes"] for z in plan if Path(z["path"]) in todo), default=0)
             free = shutil.disk_usage(parent).free
-            if todo and free < biggest * (1 if dry_run else 2) + 200 * 1024 * 1024:
-                raise ValueError("Not enough free space on the destination drive: about %s is needed while the largest zip is unpacked "
-                                 "(%s free). Free some space or choose another Destination." % (fmt_bytes(biggest * (1 if dry_run else 2)), fmt_bytes(free)))
+            total_todo = sum(z["bytes"] for z in plan if Path(z["path"]) in todo)
+            need = biggest if dry_run else biggest + total_todo          # the unpacked zip, plus the finished library growing beside it
+            if todo and free < need + 200 * 1024 * 1024:
+                raise ValueError("Not enough free space on the destination drive: about %s is needed for the finished library plus the zip being unpacked "
+                                 "(%s free). Free some space or choose another Destination." % (fmt_bytes(need), fmt_bytes(free)))
             with LOCK:
                 STATE.update(state="running", total=len(rows) + sum(z["media"] for z in plan if Path(z["path"]) in todo),
                              message="Reading the info (.json) files from all zips...")
@@ -438,7 +449,10 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
                     STATE["message"] = STATE["zipmsg"] + "unpacking photos and videos"
                     STATE["phase"] = None
                 start = len(rows)
-                fx.stage_media(z, tree, check_cancel)
+                bad_members = []
+                fx.stage_media(z, tree, check_cancel, bad_members)
+                if bad_members:
+                    zip_info["bad"].append((z.name, "%d file(s) inside could not be unpacked (damaged or password-protected): %s" % (len(bad_members), "; ".join(bad_members[:3]))))
                 fx.fix_extensions([tree], False, rename_json=True, aside=False)
                 media, sidecars = fx.scan(tree)
                 noext += getattr(fx.scan, "noext", 0)
@@ -456,7 +470,7 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
                                 os.remove(os.path.join(dp, f))
                             except OSError:
                                 pass
-                if not dry_run and not any(r["status"] in ("copy-error", "error", "exiftool-error") for r in rows[start:]):
+                if not dry_run and not bad_members and not any(r["status"] in ("copy-error", "error", "exiftool-error") for r in rows[start:]):
                     fx.mark_zip_done(out_root, z)
             shutil.rmtree(stage_dir, ignore_errors=True)
             stage_dir = None
@@ -2193,6 +2207,12 @@ def upload_eta(lib, window_h=4.0):
     out = {"points": len(pts)}
     if len(pts) < 2:
         return out
+    for i in range(len(pts) - 1, 0, -1):               # a new import adds to "pending": only look at the time since then
+        if pts[i]["pending"] > pts[i - 1]["pending"]:
+            pts = pts[i:]
+            break
+    if len(pts) < 2:
+        return out
     first, last = pts[0], pts[-1]
     dt = (last["t"] - first["t"]) / 3600.0
     if dt >= 0.08:
@@ -2206,13 +2226,17 @@ def upload_eta(lib, window_h=4.0):
     return out
 
 
-def adapt_batch(cur, seconds, lo=1e9, hi=50e9, fast=20 * 60, slow=3 * 3600):
-    """Next batch size: bigger when iCloud kept up easily, smaller when the last batch took hours to upload."""
+def adapt_batch(cur, seconds, lo=1e9, hi=50e9, fast=20 * 60, slow=3 * 3600, room=None):
+    """Next batch size: bigger when iCloud kept up easily, smaller when the last batch took hours to upload.
+    Never larger than the free room we were told about."""
+    nxt = cur
     if seconds < fast:
-        return min(hi, cur * 1.5)
-    if seconds > slow:
-        return max(lo, cur * 0.5)
-    return cur
+        nxt = min(hi, cur * 1.5)
+    elif seconds > slow:
+        nxt = max(lo, cur * 0.5)
+    if room is not None and nxt > cur:
+        nxt = max(cur, min(nxt, room))
+    return nxt
 
 
 def _wanted_for(files):
@@ -2412,12 +2436,12 @@ def run_photos(roots, opts, dry_run):
                    "albums": ", ".join("%s (%d)" % kv for kv in list(b["albums"].items())[:4]), "status": "sent"}
             rows.append(row)
             sm["imported"] = n_done
-            remaining = bool(fx.plan_photos_import(root, cur, order, albums, done, (limit - n_done) if limit else None)["batches"])
+            remaining = len(pl["batches"]) > 1 and not (limit and n_done >= limit)       # the plan above already knows what is left
             if use_verify:
                 secs = verify_batch(sent_files, k)
                 row["status"] = "verified in iCloud (%d min)" % round(secs / 60)
                 if adaptive:
-                    nxt = adapt_batch(cur, secs) if poll_s > 5 else cur
+                    nxt = adapt_batch(cur, secs, lo=min(1e9, batch_bytes), hi=max(50e9, batch_bytes), room=(free_now() - keep_free) if pace in ('space', 'verify') else None) if poll_s > 5 else cur
                     if nxt != cur:
                         row["status"] += "; next batch %s" % ("larger" if nxt > cur else "smaller")
                     cur = nxt
@@ -3036,9 +3060,14 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _local(self):
+        return self.headers.get("Host", "").rsplit(":", 1)[0].strip("[]") in ("127.0.0.1", "localhost", "::1")
+
     def do_GET(self):
+        if not self._local():
+            return self._send(403, "{}")
         if self.path == "/":
-            self._send(200, PAGE, "text/html; charset=utf-8")
+            self._send(200, PAGE.replace("__TOKEN__", TOKEN), "text/html; charset=utf-8")
         elif self.path == "/api/status":
             with LOCK:
                 self._send(200, json.dumps(STATE))
@@ -3062,11 +3091,19 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, "{}")
 
     def do_POST(self):
-        n = int(self.headers.get("Content-Length") or 0)
-        body = json.loads(self.rfile.read(n) or b"{}")
-        # only accept requests from our own page
-        if self.headers.get("Host", "").split(":")[0] not in ("127.0.0.1", "localhost"):
+        # only accept requests from our own page: right Host, same-origin, and the per-run token
+        if not self._local() or self.headers.get("X-Backstory-Token") != TOKEN:
             return self._send(403, "{}")
+        org = self.headers.get("Origin")
+        if org and org.split("://", 1)[-1].rsplit(":", 1)[0].strip("[]") not in ("127.0.0.1", "localhost", "::1"):
+            return self._send(403, "{}")
+        try:
+            n = min(int(self.headers.get("Content-Length") or 0), 50_000_000)
+            body = json.loads(self.rfile.read(n) or b"{}")
+            if not isinstance(body, dict):
+                raise ValueError
+        except (ValueError, TypeError):
+            return self._send(400, json.dumps({"error": "Bad request"}))
         if self.path == "/api/choose":
             pick = choose_zips if body.get("kind") == "zip" else choose_folders
             self._send(200, json.dumps({"paths": pick(body.get("prompt", "Choose folders"))}))
@@ -3773,7 +3810,7 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
 <small style="margin-top:4px">Reads recent Photos, iCloud and Backstory errors that you never see in Console and explains them in plain language, with fixes. It only reads. Nothing is uploaded.</small>
 <div class="opt"><div style="flex:1"><label for="mhours" style="font-weight:600">Look back</label><select id="mhours" class="sel"><option value="1">1 hour</option><option value="6" selected>6 hours</option><option value="24">24 hours</option><option value="168">7 days</option></select></div></div>
 <div class="opt"><div style="flex:1"><label for="mauto" style="font-weight:600">Check automatically</label><select id="mauto" class="sel"><option value="0">Off</option><option value="15">Every 15 minutes</option><option value="60">Every hour</option></select><small>Only while Backstory is open (macOS asks permission before showing notifications).</small></div></div>
-<div class="hbtns"><button class="p" id="mgo">Check the logs</button></div>
+<div class="hbtns"><button class="p" id="mongo">Check the logs</button></div>
 <div class="opt"><div style="flex:1"><label for="mpaste" style="font-weight:600">Or paste log text</label><textarea id="mpaste" placeholder="Paste lines from Console or a crash report here" spellcheck="false" style="min-height:70px"></textarea></div></div>
 <div class="hbtns"><button id="mpastego">Interpret the pasted text</button></div></div>
 </section>
@@ -3786,8 +3823,8 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
 
 <script>
 var docTimer=null,DOC=null;
-const $=id=>document.getElementById(id), esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-async function post(u,b){const r=await fetch(u,{method:'POST',body:JSON.stringify(b||{})});return r.json()}
+const $=id=>document.getElementById(id), esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function post(u,b){const r=await fetch(u,{method:'POST',headers:{'X-Backstory-Token':'__TOKEN__'},body:JSON.stringify(b||{})});return r.json()}
 
 // ---- info buttons: long explanations live in hover / tap tooltips
 const tipEl=document.createElement('div');tipEl.id='tip';tipEl.setAttribute('role','tooltip');document.body.appendChild(tipEl);
@@ -4300,7 +4337,7 @@ async function startMonitor(quiet,pasted){
   const r=await post('/api/monitor_start',{hours:+$('mhours').value,pasted:pasted||''});
   try{localStorage.setItem('mon_last',String(Date.now()))}catch(e){}
   if(r.error){if(!quiet)alert(r.error)}else{placeResults('monitor');$('prog').style.display='block';poll()}}
-$('mgo').onclick=()=>startMonitor(false);
+$('mongo').onclick=()=>startMonitor(false);
 $('mpastego').onclick=()=>{const t=$('mpaste').value;if(!t.trim()){alert('Paste some log text first');return}startMonitor(false,t)};
 function showMonitor(s){
   const src=Object.entries(s.sources||{}).map(([k,v])=>({mac_log:'macOS log',crash_reports:'crash reports',backstory:'Backstory runs',pasted:'pasted text'}[k]+': '+v.toLocaleString()+' lines')).join(' &middot; ');
@@ -4515,7 +4552,7 @@ $('hfolder').onclick=()=>post('/api/open_reports');
 $('hdiag').onclick=async()=>{const r=await post('/api/diagnostics');try{await navigator.clipboard.writeText(r.text);$('hdiag').textContent='Copied'}catch(e){const t=document.createElement('textarea');t.value=r.text;document.body.appendChild(t);t.select();try{document.execCommand('copy');$('hdiag').textContent='Copied'}catch(_){prompt('Copy this:',r.text)}t.remove()}setTimeout(()=>{$('hdiag').textContent='Copy diagnostic info'},2000)};
 let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   const s=await (await fetch('/api/status')).json();$('prog').style.display='block';
-  const run=s.state==='scanning'||s.state==='running';$('go').disabled=run;$('gst').disabled=run;$('gchk').disabled=run;$('simscan').disabled=run;$('pgo').disabled=run;$('hgo').disabled=run;$('mgo').disabled=run;$('cmpgo').disabled=run;$('diaggo').disabled=run;$('mpastego').disabled=run;$('ptest').disabled=run;
+  const run=s.state==='scanning'||s.state==='running';$('go').disabled=run;$('gst').disabled=run;$('gchk').disabled=run;$('simscan').disabled=run;$('pgo').disabled=run;$('hgo').disabled=run;$('mgo').disabled=run;$('mongo').disabled=run;$('cmpgo').disabled=run;$('diaggo').disabled=run;$('mpastego').disabled=run;$('ptest').disabled=run;
   jobKind=s.kind||'fix';const gd=s.guided||null;curGuided=!!gd;placeResults(jobKind);
   let pct=0,indet=false;
   if(s.state==='done'){pct=100}

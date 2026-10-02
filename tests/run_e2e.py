@@ -563,12 +563,73 @@ def t_dos_inputs():
 
 
 TESTS = [t for n, t in sorted(globals().items()) if n.startswith("t_")]
+# ---------------------------------------------------------------- Audit regressions
+def t_audit_regressions():
+    import zipfile, urllib.request, urllib.error
+    # folder look-alikes: ordinary words are not "extra" words
+    d = WORK / "aff"
+    for n in ("Old Town", "Town", "New York", "York", "Album v1", "Album v2"):
+        (d / n).mkdir(parents=True)
+    assert fx.find_similar_folders([str(d)], False) == [], "ordinary words treated as duplicates"
+    # a group may not name a folder outside its parent
+    outside = WORK / "outside"; outside.mkdir(); (outside / "secret.jpg").write_text("x")
+    lib = WORK / "libm"; (lib / "Trip").mkdir(parents=True); (lib / "Trip" / "a.jpg").write_text("a")
+    rows = fx.consolidate_groups([{"parent": str(lib), "target": "Trip", "members": ["Trip", "../outside"]}], "delete", False)
+    assert (outside / "secret.jpg").exists(), "a member outside the parent was moved"
+    # catastrophic-backtracking line must stay fast
+    t0 = time.time(); fx.interpret_log_lines(["paused" * 4000, "sync " + "paused " * 2000]); assert time.time() - t0 < 2, "log rule too slow"
+    # a damaged / odd zip member does not stop the others
+    z = WORK / "odd.zip"
+    with zipfile.ZipFile(z, "w") as zf:
+        zf.writestr("f", "x"); zf.writestr("f/g.jpg", "y"); zf.writestr("ok/a.jpg", b"\xff\xd8\xff\xd9")
+    tree = WORK / "oddtree"; tree.mkdir(); bad = []
+    got = fx.stage_media(z, tree, None, bad)
+    assert any(str(x).endswith("a.jpg") for x in got), got
+    # a folder holding zips AND photos keeps both
+    mix = WORK / "mix"; (mix / "Photos").mkdir(parents=True); (mix / "Photos" / "a.jpg").write_text("x")
+    shutil.copy(z, mix / "t.zip")
+    zs, fs = fx.split_sources([str(mix)])
+    assert len(zs) == 1 and len(fs) == 1, (zs, fs)
+    # upload matching: same name with another size is not "verified"
+    assert g.adapt_batch(100e9, 60, lo=1e9, hi=max(50e9, 100e9)) >= 100e9, "batch shrank below the user's own size"
+    assert g.adapt_batch(10e9, 60, room=11e9) <= 15e9 and g.adapt_batch(10e9, 60, room=0) == 10e9
+    # undecodable file names never reach AppleScript
+    pdir = WORK / "surr"; pdir.mkdir()
+    try:
+        (pdir / os.fsdecode(b"bad\xff.jpg")).write_bytes(b"x")
+        fx.plan_photos_import(str(pdir), 1e9)
+    except OSError:
+        pass
+    # HTTP layer: token, Host and Origin checks; bad JSON
+    srv = g.ThreadingHTTPServer(("127.0.0.1", 0), g.Handler)
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    def call(path, data=b"{}", hdr=None, method="POST"):
+        rq = urllib.request.Request("http://127.0.0.1:%d%s" % (port, path), data=data if method == "POST" else None, method=method, headers=hdr or {})
+        try:
+            with urllib.request.urlopen(rq, timeout=10) as r:
+                return r.status, r.read()
+        except urllib.error.HTTPError as e:
+            return e.code, b""
+    code, page = call("/", method="GET")
+    tok = page.decode().split("X-Backstory-Token':'")[1].split("'")[0]
+    assert code == 200 and len(tok) == 32 and "__TOKEN__" not in page.decode()
+    assert call("/api/history")[0] == 403, "POST without token accepted"
+    assert call("/api/history", hdr={"X-Backstory-Token": tok, "Origin": "http://evil.example"})[0] == 403
+    assert call("/api/history", hdr={"X-Backstory-Token": tok, "Host": "evil.example"})[0] == 403
+    assert call("/api/history", b"not json", {"X-Backstory-Token": tok})[0] == 400
+    assert call("/api/history", hdr={"X-Backstory-Token": tok})[0] == 200
+    assert call("/thumb?p=/etc/passwd", method="GET")[0] == 404
+    srv.shutdown()
+
+
+
 ORDER = ["t_fix_copy", "t_fix_namedate", "t_fix_inplace", "t_fix_move", "t_fix_dryrun_changes_nothing", "t_fix_zip", "t_zip_resume", "t_zip_needs_dest", "t_zip_corrupt",
          "t_edited_policies", "t_cancel_mid_run", "t_unreadable_and_zero", "t_dest_not_writable", "t_exiftool_missing", "t_low_disk_zip", "t_assess_and_recommend",
          "t_assess_multi_and_photoslib", "t_guided_end_to_end", "t_guided_no_dest", "t_merge_variants", "t_merge_refuses_unsafe", "t_merge_move_in_place", "t_cleanup_all",
          "t_cleanup_refuses_broad", "t_consolidate", "t_convert", "t_convert_stop", "t_similar_apply_undo", "t_health_and_formats", "t_undo_copy_run", "t_photos_plan_and_run",
          "t_photos_applescript_injection_safe", "t_photos_errors", "t_monitor_rules", "t_monitor_job_paste", "t_compare_and_near", "t_diagnostics", "t_history_report",
-         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs"]
+         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs", "t_audit_regressions"]
 if __name__ == "__main__":
     only = sys.argv[1:]
     for n in ORDER:
