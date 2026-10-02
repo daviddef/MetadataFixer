@@ -2598,6 +2598,95 @@ def find_similar_photos(roots, threshold=6, progress=None, should_stop=None, wor
     return groups, total
 
 
+# ---- Apple Photos: import in batches, so a nearly-full Mac can take a big library over time ---------------
+PHOTOS_OK_EXT = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".gif", ".tif", ".tiff", ".bmp", ".webp",
+                 ".nef", ".cr2", ".cr3", ".arw", ".dng", ".orf", ".raf", ".rw2", ".mov", ".mp4", ".m4v"}
+PHOTOS_LOG = ".backstory_photos_import.jsonl"
+PHOTOS_SKIP_DIRS = {"_similar_set_aside", "_duplicates", ORIGINALS_DIR, "_merge_conflicts", "_unrecognised"}
+
+
+def plan_photos_import(root, batch_bytes, order="oldest", albums=True, done=None, limit=None):
+    """Split a finished library into batches for Apple Photos. A Live Photo's still and video stay together, and the files of an
+    album folder are imported into that album. Returns {"batches": [...], "unsupported": {ext: n}, "files", "bytes", "skipped_done"}."""
+    done = done or set()
+    root = Path(root)
+    units, unsupported, skipped = {}, {}, 0
+    for dp, dns, fns in os.walk(root, followlinks=False):
+        dns[:] = sorted(d for d in dns if not (os.path.islink(os.path.join(dp, d)) or is_bundle(d) or d in PHOTOS_SKIP_DIRS or d.startswith(".")))
+        for n in sorted(fns):
+            if n.startswith(".") or n.startswith("._"):
+                continue
+            ext = Path(n).suffix.lower()
+            p = Path(dp) / n
+            if ext in (".json", ".csv", ".txt", ".html", ".xmp", ".log", ".jsonl") or n.lower() in JUNK_NAMES:
+                continue
+            if ext not in PHOTOS_OK_EXT:
+                if ext in VIDEO_EXT or ext in IMAGE_EXT or ext in RAW_EXT:
+                    unsupported[ext] = unsupported.get(ext, 0) + 1
+                continue
+            if str(p) in done:
+                skipped += 1
+                continue
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            rel = p.relative_to(root)
+            top = rel.parts[0] if len(rel.parts) > 1 else ""
+            album = top if (albums and top and is_album_folder(top)) else ""
+            key = (str(p.parent), p.stem.lower())
+            u = units.setdefault(key, {"files": [], "bytes": 0, "mtime": st.st_mtime, "album": album, "rel": str(rel)})
+            u["files"].append(str(p))
+            u["bytes"] += st.st_size
+            u["mtime"] = min(u["mtime"], st.st_mtime)
+    ulist = list(units.values())
+    ulist.sort(key=(lambda u: (u["mtime"], u["rel"])) if order == "oldest" else (lambda u: u["rel"]))
+    batches, cur, cur_b, cur_n, total_f, total_b = [], [], 0, 0, 0, 0
+    for u in ulist:
+        if limit is not None and total_f >= limit:
+            break
+        cur.append(u)
+        cur_b += u["bytes"]
+        cur_n += len(u["files"])
+        total_f += len(u["files"])
+        total_b += u["bytes"]
+        if cur_b >= batch_bytes or cur_n >= 4000:
+            batches.append(cur)
+            cur, cur_b, cur_n = [], 0, 0
+    if cur:
+        batches.append(cur)
+    out = []
+    for i, b in enumerate(batches, 1):
+        alb = {}
+        for u in b:
+            alb[u["album"]] = alb.get(u["album"], 0) + len(u["files"])
+        out.append({"index": i, "files": sum(len(u["files"]) for u in b), "bytes": sum(u["bytes"] for u in b),
+                    "first": time.strftime("%Y-%m-%d", time.localtime(min(u["mtime"] for u in b))),
+                    "last": time.strftime("%Y-%m-%d", time.localtime(max(u["mtime"] for u in b))),
+                    "albums": {k: v for k, v in alb.items() if k}, "units": b})
+    return {"batches": out, "unsupported": unsupported, "files": total_f, "bytes": total_b, "skipped_done": skipped}
+
+
+def _as_quote(p):
+    return str(p).replace("\\", "\\\\").replace('"', '\\"')
+
+
+def applescript_import(files, album=""):
+    """AppleScript that imports files into Photos (and into an album, which is created if missing). Duplicates Photos already
+    has are skipped."""
+    lines = ['tell application "Photos"', '  set fl to {}']
+    for f in files:
+        lines.append('  set end of fl to POSIX file "%s"' % _as_quote(f))
+    if album:
+        a = _as_quote(album)
+        lines += ['  if not (exists album named "%s") then make new album named "%s"' % (a, a),
+                  '  import fl into album named "%s" skip check duplicates true' % a]
+    else:
+        lines.append("  import fl skip check duplicates true")
+    lines.append("end tell")
+    return "\n".join(lines)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("root", type=Path, help="folder containing all extracted 'Takeout N' folders")

@@ -29,7 +29,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.02-i"
+VERSION = "2026.10.02-j"
 class Cancelled(Exception):
     pass
 
@@ -44,7 +44,7 @@ def stopped_state(what="Nothing further was changed."):
         STATE.update(state="idle", phase=None, cv=None, message="Stopped by you. " + what)
 
 
-STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}, "recent": [], "clean": {"state": "idle"}, "update": {"state": "idle", "files": []}, "phase": None, "kind": "fix", "cv": None, "cancel": False, "guided": None, "run": None, "version": VERSION, "boot": time.time()}
+STATE = {"state": "idle", "total": 0, "done": 0, "counts": {}, "message": "", "report": "", "scan": None, "summary": None, "extra": {}, "recent": [], "clean": {"state": "idle"}, "update": {"state": "idle", "files": []}, "phase": None, "kind": "fix", "cv": None, "cancel": False, "guided": None, "photos": None, "run": None, "version": VERSION, "boot": time.time()}
 LOCK = threading.Lock()
 
 
@@ -2028,12 +2028,145 @@ def run_similar_apply(items):
             STATE.update(state="error", message=str(ex))
 
 
+OSA = os.environ.get("BACKSTORY_OSASCRIPT", "osascript")
+
+
+def photos_preflight():
+    app = next((p for p in ("/System/Applications/Photos.app", "/Applications/Photos.app") if os.path.exists(p)), "")
+    try:
+        free = shutil.disk_usage(Path.home()).free
+    except OSError:
+        free = None
+    return {"mac": sys.platform == "darwin" or bool(os.environ.get("BACKSTORY_OSASCRIPT")), "osascript": bool(shutil.which(OSA)), "photos_app": bool(app),
+            "free": free, "library": str(Path.home() / "Pictures" / "Photos Library.photoslibrary")}
+
+
+def run_photos(roots, opts, dry_run):
+    with LOCK:
+        STATE.update(state="scanning", cancel=False, total=0, done=0, counts={}, message="Planning the import...", report="",
+                     summary=None, scan=None, extra={}, recent=[], phase=None, kind="photos", cv=None, guided=None, photos=None)
+        STATE.pop("photos_continue", None)
+    try:
+        folders = check_clean_folders(roots[:1])
+        root = folders[0]
+        batch_bytes = int(max(1e-6, float(opts.get("batch_gb", 10))) * 1e9)
+        keep_free = int(max(0.0, float(opts.get("keep_free_gb", 20))) * 1e9)
+        pace = opts.get("pace") if opts.get("pace") in ("space", "ask", "none") else "space"
+        limit = int(opts["limit"]) if opts.get("limit") else None
+        log = root / fx.PHOTOS_LOG
+        done = set()
+        try:
+            for line in log.read_text(encoding="utf-8").splitlines():
+                try:
+                    done.add(json.loads(line)["path"])
+                except (ValueError, KeyError):
+                    pass
+        except OSError:
+            pass
+        plan = fx.plan_photos_import(root, batch_bytes, opts.get("order", "oldest"), bool(opts.get("albums", True)), done, limit)
+        batches = plan["batches"]
+        pre = photos_preflight()
+        rows = [{"n": b["index"], "files": b["files"], "bytes": fmt_bytes(b["bytes"]), "from": b["first"], "to": b["last"],
+                 "albums": ", ".join("%s (%d)" % kv for kv in list(b["albums"].items())[:4]), "status": "planned"} for b in batches]
+        sm = {"kind": "photos", "dry_run": dry_run, "files": plan["files"], "bytes": fmt_bytes(plan["bytes"]), "batches": len(batches),
+              "unsupported": sorted(plan["unsupported"].items(), key=lambda kv: -kv[1]), "already": plan["skipped_done"], "imported": 0, "failed": 0,
+              "rows": rows[:300], "tips": [], "free": fmt_bytes(pre["free"]) if pre["free"] else "", "keep_free": fmt_bytes(keep_free), "pace": pace,
+              "root": str(root), "limit": limit}
+        if not batches:
+            sm["tips"].append("Nothing left to import from this folder.")
+        if dry_run:
+            sm["tips"].append("This was a preview: nothing was sent to Photos. Each batch is about %s. Between batches Backstory %s." % (
+                fmt_bytes(batch_bytes), {"space": "waits until your Mac has at least %s free" % fmt_bytes(keep_free), "ask": "pauses until you press Continue", "none": "does not wait"}[pace]))
+            with LOCK:
+                STATE.update(state="done", message="Finished", summary=sm, phase=None)
+            return
+        if not (pre["mac"] and pre["osascript"] and pre["photos_app"] or os.environ.get("BACKSTORY_OSASCRIPT")):
+            raise ValueError("Sending to Apple Photos needs a Mac with the Photos app. Nothing was imported.")
+        total = plan["files"]
+        n_done = n_fail = 0
+        with LOCK:
+            STATE.update(state="running", total=total, done=0)
+
+        def free_now():
+            return shutil.disk_usage(Path.home()).free
+
+        def wait_for_room(i, nb):
+            need_wait = (pace == "ask" and i < nb) or (pace == "space" and free_now() < keep_free)
+            if not need_wait:
+                return
+            with LOCK:
+                STATE["photos_continue"] = False
+            while True:
+                check_cancel()
+                f = free_now()
+                with LOCK:
+                    cont = STATE.get("photos_continue")
+                    STATE["photos"] = {"waiting": True, "batch": i, "of": nb, "free": f, "need": keep_free, "pace": pace}
+                    STATE["message"] = ("Batch %d of %d finished. Paused: press Continue when Photos has finished uploading." % (i, nb)) if pace == "ask" else (
+                        "Waiting for room: %s free, %s wanted. Photos uploads to iCloud and macOS then frees space; this can take hours." % (fmt_bytes(f), fmt_bytes(keep_free)))
+                if cont or (pace == "space" and f >= keep_free):
+                    break
+                time.sleep(2 if os.environ.get("BACKSTORY_OSASCRIPT") else 20)
+            with LOCK:
+                STATE["photos"] = {"waiting": False, "batch": i, "of": nb}
+        if pace == "space" and free_now() < keep_free:
+            wait_for_room(0, len(batches))
+        for b in batches:
+            i = b["index"]
+            check_cancel()
+            by_album = {}
+            for u in b["units"]:
+                by_album.setdefault(u["album"], []).extend(u["files"])
+            for album, files in by_album.items():
+                for k in range(0, len(files), 150):
+                    check_cancel()
+                    chunk = files[k:k + 150]
+                    with LOCK:
+                        STATE["photos"] = {"waiting": False, "batch": i, "of": len(batches)}
+                        STATE["message"] = "Batch %d of %d: sending %d files to Photos%s" % (i, len(batches), len(chunk), (" (album " + album + ")") if album else "")
+                    script = fx.applescript_import(chunk, album)
+                    try:
+                        r = subprocess.run([OSA, "-"], input=script, capture_output=True, text=True, timeout=3 * 3600)
+                    except subprocess.TimeoutExpired:
+                        raise ValueError("Photos did not answer within three hours. Open Photos, check it is not stuck, and run this again: finished files are remembered.")
+                    if r.returncode != 0:
+                        err = (r.stderr or r.stdout or "").strip()[:400]
+                        hint = " Allow it in System Settings > Privacy & Security > Automation, then run again." if "1743" in err or "not authorized" in err.lower() else ""
+                        raise ValueError("Photos refused the import: %s.%s Files already imported are remembered, so running again carries on." % (err, hint))
+                    with open(log, "a", encoding="utf-8") as fh:
+                        for f in chunk:
+                            fh.write(json.dumps({"path": f, "batch": i}, ensure_ascii=False) + "\n")
+                    n_done += len(chunk)
+                    with LOCK:
+                        STATE.update(done=n_done)
+            rows[i - 1]["status"] = "sent"
+            sm["imported"] = n_done
+            if i < len(batches):
+                wait_for_room(i, len(batches))
+        sm["imported"] = n_done
+        sm["rows"] = rows[:300]
+        if n_done:
+            sm["tips"].append("%s files were sent to Photos. Open Photos: if iCloud Photos is on it uploads in the background, and with Optimize Mac Storage macOS keeps small copies once the originals are safely in iCloud. Leave Photos open until the upload finishes." % f"{n_done:,}")
+        if plan["unsupported"]:
+            sm["tips"].append("%s files in formats Photos cannot import were left out (%s). Convert them on the Convert tab, then run this again." % (
+                f"{sum(plan['unsupported'].values()):,}", ", ".join(k for k, _ in sm["unsupported"][:5])))
+        with LOCK:
+            STATE.update(state="done", message="Finished", summary=sm, phase=None, photos=None)
+    except Cancelled:
+        stopped_state("Files already sent are remembered; run it again to carry on.")
+        with LOCK:
+            STATE["photos"] = None
+    except Exception as e:
+        with LOCK:
+            STATE.update(state="error", message=str(e), photos=None)
+
+
 # ---- Reports, run logs and history -------------------------------------------------------------------------
 APP_HOME = Path(os.environ.get("METADATAFIXER_HOME") or (
     Path.home() / "Library" / "Application Support" / "MetadataFixer" if sys.platform == "darwin" else Path.home() / ".metadatafixer"))
 HIST_DIR = APP_HOME / "history"
 REPORTS_DIR = Path(os.environ.get("METADATAFIXER_REPORTS") or (Path.home() / "Documents" / "Backstory Reports"))
-KIND_TITLE = {"similar": "Find similar photos", "similar_apply": "Set similar photos aside", "undo": "Undo a run", "assess": "Check my files", "consolidate": "Merge similar folders", "fix": "Fix metadata", "merge": "Merge folders", "cleanup": "Clean up", "convert": "Convert videos", "guided": "Guided: Fix my Takeout"}
+KIND_TITLE = {"photos": "Send to Apple Photos", "similar": "Find similar photos", "similar_apply": "Set similar photos aside", "undo": "Undo a run", "assess": "Check my files", "consolidate": "Merge similar folders", "fix": "Fix metadata", "merge": "Merge folders", "cleanup": "Clean up", "convert": "Convert videos", "guided": "Guided: Fix my Takeout"}
 
 
 def _headline(sm):
@@ -2042,6 +2175,8 @@ def _headline(sm):
         return ""
     k = sm.get("kind")
     try:
+        if k == "photos":
+            return ("%s files sent to Photos in %s batches" % (f"{sm.get('imported', 0):,}", sm.get("batches", 0))) if not sm.get("dry_run") else ("%s files planned in %s batches" % (f"{sm.get('files', 0):,}", sm.get("batches", 0)))
         if k == "similar":
             return "%s pictures checked, %s similar groups" % (f"{sm.get('scanned', 0):,}", f"{sm.get('total_groups', 0):,}")
         if k == "similar_apply":
@@ -2387,6 +2522,22 @@ class Handler(BaseHTTPRequestHandler):
                 bool(body.get("dry_run")), bool(body.get("overwrite")), bool(body.get("pair_live")),
                 bool(body.get("dedupe")), bool(body.get("move")), body.get("date_policy", "earlier"), bool(body.get("name_dates")), bool(body.get("albums")),
                 body.get("edited") if body.get("edited") in ("both", "edited", "original") else "both"))
+            self._send(200, "{}")
+        elif self.path == "/api/photos_preflight":
+            self._send(200, json.dumps(photos_preflight()))
+        elif self.path == "/api/photos_continue":
+            with LOCK:
+                STATE["photos_continue"] = True
+            self._send(200, "{}")
+        elif self.path == "/api/photos_start":
+            with LOCK:
+                busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
+            if busy:
+                return self._send(409, json.dumps({"error": "A job is already running"}))
+            o = body.get("opts", {})
+            opts = {"batch_gb": o.get("batch_gb", 10), "keep_free_gb": o.get("keep_free_gb", 20), "pace": o.get("pace", "space"),
+                    "albums": bool(o.get("albums", True)), "order": o.get("order", "oldest"), "limit": o.get("limit")}
+            start_tracked("photos", dict(body, opts=opts), run_photos, (body.get("roots", []), opts, bool(body.get("dry_run"))))
             self._send(200, "{}")
         elif self.path == "/api/similar_scan":
             with LOCK:
@@ -2769,11 +2920,12 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
     <button class="tab" data-tab="merge" role="tab"><b>&#128450;&#65039;</b> Merge</button>
     <button class="tab" data-tab="clean" role="tab"><b>&#129529;</b> Clean up</button>
     <button class="tab" data-tab="convert" role="tab"><b>&#127902;&#65039;</b> Convert</button>
+    <button class="tab" data-tab="photos" role="tab"><b>&#127822;</b> Photos</button>
     <button class="tab" data-tab="similar" role="tab"><b>&#128269;</b> Similar</button>
     <button class="tab" data-tab="history" role="tab"><b>&#128196;</b> History</button>
     <button class="tab" data-tab="help" role="tab"><b>&#10067;</b> Help</button>
   </nav>
-  <div class="status"><div class="srow"><span id="msg">Ready. Choose a tab, set it up and press Start.</span><a href="#" id="goto" style="display:none">View results &rarr;</a><button id="stopall" class="sm" style="display:none;margin-left:10px">Stop</button></div>
+  <div class="status"><div class="srow"><span id="msg">Ready. Choose a tab, set it up and press Start.</span><a href="#" id="goto" style="display:none">View results &rarr;</a><button id="contbtn" class="sm p" style="display:none;margin-left:10px">Continue</button><button id="stopall" class="sm" style="display:none;margin-left:10px">Stop</button></div>
   <div class="bar" id="bar"><i id="fill"></i><span id="pct">0%</span></div></div>
 </div>
 <section class="pane" id="pane-guided">
@@ -2925,6 +3077,20 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
 <select id="simsens" class="sel"><option value="3">Very alike (fewest matches, safest)</option><option value="6" selected>Alike (recommended)</option><option value="10">Loosely alike (more matches, check carefully)</option></select></div></div>
 <button class="p" id="simscan" style="margin-top:6px">Find similar photos</button></div>
 </section>
+<section class="pane" id="pane-photos">
+<h2 class="ph">Send to Apple Photos</h2>
+<div class="card"><small style="margin-top:0">Sends your finished library to the Photos app in batches, oldest first, so a Mac that is short of space can take a big library over time: Photos uploads each batch to iCloud, macOS frees the space, and Backstory waits before sending the next one. Live Photos stay together, and album folders become Photos albums.</small>
+<div class="gcheck" id="pcheck"></div>
+<div class="usef" style="margin-top:6px"><b>Library to send:</b> <span id="proot">the first folder in the Source list</span></div>
+<div class="opt"><div style="flex:1"><label for="pbatch" style="font-weight:600">Batch size</label><select id="pbatch" class="sel"><option value="2">About 2 GB</option><option value="5">About 5 GB</option><option value="10" selected>About 10 GB</option><option value="25">About 25 GB</option><option value="50">About 50 GB</option></select></div></div>
+<div class="opt"><div style="flex:1"><label for="ppace" style="font-weight:600">Between batches</label><select id="ppace" class="sel"><option value="space" selected>Wait until my Mac has enough free space</option><option value="ask">Pause and let me press Continue</option><option value="none">Do not wait</option></select>
+<div style="margin-top:6px">Keep at least <input type="number" id="pfree" value="20" min="0" max="2000" style="width:80px;flex:none"> GB free</div></div></div>
+<div class="opt"><input type="checkbox" id="palb" checked><div>Create albums from album folders<small>Folders such as <i>Japan 2025</i> (not <i>Photos from 2012</i>) become albums in Photos.</small></div></div>
+<div class="opt"><input type="checkbox" id="pdry" checked><div>Preview only<small>Shows the batches and changes nothing. Untick to send to Photos.</small></div></div>
+<div class="tip">&#9888;&#65039; Photos has no undo for imports. Always preview, then send a small test first. Photos skips photos it already has, so running again does not duplicate them.</div>
+<div class="hbtns"><button class="p" id="pgo">Preview the batches</button><button id="ptest">Send a small test (20 photos)</button></div></div>
+</section>
+
 
 <footer class="foot">Free software provided &ldquo;as is&rdquo;, without warranty. Back up your photos first. &middot; <a href="#" data-help="safety">Safety &amp; disclaimer</a> &middot; Support: <a href="mailto:thestocksoup@gmail.com">thestocksoup@gmail.com</a></footer>
 
@@ -2945,7 +3111,7 @@ function makeIcon(html){const b=document.createElement('button');b.type='button'
   b.onfocus=()=>{if(b.matches(':focus-visible'))showTip(b)};b.onblur=hideTip;
   b.onclick=e=>{e.preventDefault();e.stopPropagation();if(b._pt==='mouse'){showTip(b);return}tipEl._owner===b?hideTip():showTip(b)};return b}
 document.addEventListener('click',hideTip);window.addEventListener('scroll',hideTip,{passive:true});
-const PANE_SUB={similar:'Find the same picture saved twice, and choose what to set aside.',help:'The user guide, safety notice and how to get support.',history:'Every run, with its full report and log.',guided:'The easy way: zips or folders in, a clean library out. Originals never change.',fix:'Put the real date, location and caption back into your photos.',merge:'Bring two or more folders together into one.',clean:'Tidy up leftovers once you are done.',convert:'Turn older video formats into MP4.'};
+const PANE_SUB={photos:'Send your finished library to Apple Photos in batches, with room for iCloud to catch up.',similar:'Find the same picture saved twice, and choose what to set aside.',help:'The user guide, safety notice and how to get support.',history:'Every run, with its full report and log.',guided:'The easy way: zips or folders in, a clean library out. Originals never change.',fix:'Put the real date, location and caption back into your photos.',merge:'Bring two or more folders together into one.',clean:'Tidy up leftovers once you are done.',convert:'Turn older video formats into MP4.'};
 function decorate(){
   document.querySelectorAll('.opt').forEach(o=>{
     const box=o.querySelector(':scope > div');if(!box)return;
@@ -3023,6 +3189,7 @@ function showSummary(s){
   if(s.kind==='consolidate'){showConsolidate(s);return}
   if(s.kind==='undo'){showUndo(s);return}
   if(s.kind==='similar'){showSimilar(s);return}
+  if(s.kind==='photos'){showPhotos(s);return}
   if(s.kind==='similar_apply'){showSimilarApply(s);return}
   let h=`<div class="tiles">${tile(s.total,'media files')}${tile(s.duplicates,'exact duplicates skipped')}${tile(s.matched,'unique files matched ('+s.pct_matched+'%)','ok')}${tile(s.no_json,'no JSON found',s.no_json?'bad':'ok')}${tile(s.orphans,'JSON with no photo')}${s.name_dates?tile(s.name_dates,'dates from file names','ok'):''}</div>`;
   h+=s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
@@ -3079,11 +3246,12 @@ function setBar(barId,fillId,pctId,pct,indet){
     for(let i=0;i<30;i++){await new Promise(x=>setTimeout(x,1000));const s=await st();if(s&&s.boot!==boot){location.reload();return}}
     $('updmsg').textContent='Updated. If the page does not reload, restart the app in Terminal.'}
 })();
-const TABS=['guided','fix','merge','clean','convert','similar','history','help'];const tabOf=k=>({similar_apply:'similar',undo:'history',consolidate:'clean',cleanup:'clean',sort:'merge',assess:'guided'}[k]||k);let curGuided=false;const paneKind=()=>curGuided?'guided':tabOf(jobKind);let jobKind='fix';
+const TABS=['guided','fix','merge','clean','convert','photos','similar','history','help'];const tabOf=k=>({similar_apply:'similar',undo:'history',consolidate:'clean',cleanup:'clean',sort:'merge',assess:'guided'}[k]||k);let curGuided=false;const paneKind=()=>curGuided?'guided':tabOf(jobKind);let jobKind='fix';
 function showTab(t){if(!TABS.includes(t))t='fix';
   TABS.forEach(x=>{$('pane-'+x).style.display=x===t?'block':'none';document.querySelector('.tab[data-tab="'+x+'"]').classList.toggle('on',x===t)});
   try{localStorage.setItem('tab',t)}catch(e){}
   if(t==='history')loadHistory();
+  if(t==='photos')renderPCheck();
   if(t==='help'&&!$('hview').dataset.loaded){$('hview').dataset.loaded='1';helpView('guide')}
   try{history.replaceState(null,'','#'+t)}catch(e){}
   updGoto()}
@@ -3091,6 +3259,7 @@ function updGoto(){const a=$('goto');const cur=TABS.find(x=>$('pane-'+x).style.d
   const has=$('prog').style.display!=='none'||$('sum').style.display!=='none';
   a.style.display=(has&&cur!==paneKind()&&jobKind!=='clean')?'inline':'none'}
 $('goto').onclick=e=>{e.preventDefault();showTab(paneKind());$('results').scrollIntoView({behavior:'smooth'})};
+$('contbtn').onclick=async()=>{await post('/api/photos_continue');$('contbtn').style.display='none'};
 $('stopall').onclick=async()=>{const b=$('stopall');b.disabled=true;b.textContent='Stopping...';await post('/api/cancel')};
 document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
 function placeResults(kind){const pane=$('pane-'+(curGuided?'guided':(kind==='clean'?'fix':tabOf(kind))));if(pane&&$('results').parentNode!==pane)pane.appendChild($('results'))}
@@ -3325,6 +3494,32 @@ $('simscan').onclick=async()=>{
   $('sum').style.display='none';curGuided=false;
   const r=await post('/api/similar_scan',{roots:roots(),threshold:+$('simsens').value});
   if(r.error)alert(r.error);else{placeResults('similar');$('prog').style.display='block';poll()}};
+
+function photosOpts(limit){return {batch_gb:+$('pbatch').value,keep_free_gb:+$('pfree').value,pace:$('ppace').value,albums:$('palb').checked,order:'oldest',limit:limit||null}}
+async function renderPCheck(){
+  $('proot').textContent=roots()[0]||'none chosen yet: add your finished library folder in the bar at the top';
+  let p={};try{p=await post('/api/photos_preflight')}catch(e){}
+  const it=[];
+  it.push(roots().length?['ok','Library chosen',(roots()[0]||'').split('/').filter(Boolean).pop()||'']:['','Add your finished library folder','top bar']);
+  it.push(p.mac&&p.osascript&&p.photos_app?['ok','Photos app found','']:['bad','Needs a Mac with the Photos app','imports are not possible here']);
+  it.push(p.free!=null?[p.free<20e9?'bad':'ok','Free space on this Mac',fmtB(p.free)]:['','Free space unknown','']);
+  $('pcheck').innerHTML=it.map(i=>`<div class="gc ${i[0]}"><i>${i[0]==='ok'?'&#10003;':i[0]==='bad'?'!':'&middot;'}</i><span>${esc(i[1])}</span><small>${esc(i[2])}</small></div>`).join('')}
+async function photosGo(limit){
+  if(!roots().length){alert('Add your finished library folder in the bar at the top first');return}
+  const real=!$('pdry').checked;
+  if(real&&!confirm('This sends photos to the Photos app'+(limit?' (a test of '+limit+' photos)':' in batches')+'.\nPhotos has no undo for imports. Photos you already have are skipped.\n\nContinue?'))return;
+  $('sum').style.display='none';curGuided=false;
+  const r=await post('/api/photos_start',{roots:roots(),dry_run:!real,opts:photosOpts(limit)});
+  if(r.error)alert(r.error);else{placeResults('photos');$('prog').style.display='block';poll()}}
+$('pgo').onclick=()=>photosGo(null);
+$('ptest').onclick=()=>{$('pdry').checked=false;photosGo(20)};
+function showPhotos(s){
+  const w=s.dry_run?'planned':'sent';
+  let h=`<div class="tiles">${tile(s.dry_run?s.files:s.imported,'files '+w,'ok')}${tile(s.batches,'batches')}${tile(s.already,'already sent earlier')}${s.unsupported&&s.unsupported.length?tile(s.unsupported.reduce((a,b)=>a+b[1],0),'not importable','bad'):''}</div>`;
+  h+=s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
+  if((s.unsupported||[]).length)h+='<small>Formats Photos cannot import: '+s.unsupported.map(u=>esc(u[0])+' ('+u[1]+')').join(', ')+'. Convert them on the Convert tab.</small>';
+  if((s.rows||[]).length)h+='<h2>Batches</h2>'+tbl(['#','Files','Size','From','To','Albums','Status'],s.rows.map(r=>[r.n,r.files.toLocaleString(),esc(r.bytes),esc(r.from),esc(r.to),esc(r.albums),esc(r.status)]));
+  $('sumbody').innerHTML=h;$('sum').style.display='block'}
 function showMerge(s){
   const w=s.dry_run?'would be ':'';
   let h=`<div class="tiles">${tile(s.total,'files found')}${tile(s.brought,'files '+w+(s.move?'moved':'copied')+' in','ok')}${tile(s.in_place_files,'already in place')}${tile(s.identical,'identical copies (kept once)')}${tile(s.clashes,'name clashes resolved')}${tile(s.merged_dirs,'folders '+w+'merged from 2+ sources')}${s.json_along?tile(s.json_along,'.json files brought along'):''}${tile(s.failed,'problems',s.failed?'bad':'')}</div>`;
@@ -3400,7 +3595,7 @@ function showConvert(s){
 
 function liveTiles(s,c,done,nj){
   if(!s.total)return '';const x=s.extra||{};const err=(x.errors?tile(x.errors,'files with errors','bad'):'');
-  if(['assess','consolidate','undo','similar','similar_apply'].includes(jobKind))return '';
+  if(['assess','consolidate','undo','similar','similar_apply','photos'].includes(jobKind))return '';
   if(jobKind==='merge')return tile(s.total,'files found')+tile(x.placed||0,'brought in','ok')+tile(x.identical||0,'identical (kept once)')+tile(x.clashes||0,'name clashes')+(x.json_along?tile(x.json_along,'.json brought along'):'')+(x.errors?tile(x.errors,'problems','bad'):'');
   if(jobKind==='cleanup')return tile(x.json||0,'.json files')+tile(x.junk||0,'junk files')+tile(x.renamed||0,'renamed')+tile(x.merged||0,'folders merged')+tile(x.empty||0,'empty folders')+(x.errors?tile(x.errors,'errors','bad'):'');
   if(jobKind==='convert')return tile(s.total,'videos found')+tile(done,'checked so far')+tile(x.converted||0,'converted','ok')+(x.bytes_before?tile(fmtBytes(Math.max(0,x.bytes_before-x.bytes_after))+' ('+Math.round(100*(1-x.bytes_after/x.bytes_before))+'%)','space saved so far','ok'):'')+tile(x.skipped_live||0,'Live Photo videos skipped')+(x.errors?tile(x.errors,'could not convert','bad'):'');
@@ -3458,7 +3653,7 @@ $('hfolder').onclick=()=>post('/api/open_reports');
 $('hdiag').onclick=async()=>{const r=await post('/api/diagnostics');try{await navigator.clipboard.writeText(r.text);$('hdiag').textContent='Copied'}catch(e){const t=document.createElement('textarea');t.value=r.text;document.body.appendChild(t);t.select();try{document.execCommand('copy');$('hdiag').textContent='Copied'}catch(_){prompt('Copy this:',r.text)}t.remove()}setTimeout(()=>{$('hdiag').textContent='Copy diagnostic info'},2000)};
 let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   const s=await (await fetch('/api/status')).json();$('prog').style.display='block';
-  const run=s.state==='scanning'||s.state==='running';$('go').disabled=run;$('gst').disabled=run;$('gchk').disabled=run;$('simscan').disabled=run;
+  const run=s.state==='scanning'||s.state==='running';$('go').disabled=run;$('gst').disabled=run;$('gchk').disabled=run;$('simscan').disabled=run;$('pgo').disabled=run;$('ptest').disabled=run;
   jobKind=s.kind||'fix';const gd=s.guided||null;curGuided=!!gd;placeResults(jobKind);
   let pct=0,indet=false;
   if(s.state==='done'){pct=100}
@@ -3467,7 +3662,7 @@ let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   else if(s.phase&&s.phase.total){pct=100*s.phase.done/s.phase.total}
   else if(s.state==='scanning'||s.state==='running'){indet=true}
   setBar('bar','fill','pct',pct,indet);
-  const LBL=(gd&&!gd.final&&gd.steps.length)?('Guided &middot; step '+gd.i+' of '+gd.steps.length+': '+esc(gd.steps[gd.i-1]||'')):gd&&jobKind==='guided'?'Guided':{similar:'Find similar photos',similar_apply:'Set aside',undo:'Undo',consolidate:'Merge similar folders',assess:'Check my files',fix:'Part 1 Fix',convert:'Part 4 Convert',cleanup:'Part 3 Clean up',merge:'Part 2 Merge'}[jobKind]||'';
+  const LBL=(gd&&!gd.final&&gd.steps.length)?('Guided &middot; step '+gd.i+' of '+gd.steps.length+': '+esc(gd.steps[gd.i-1]||'')):gd&&jobKind==='guided'?'Guided':{photos:'Apple Photos',similar:'Find similar photos',similar_apply:'Set aside',undo:'Undo',consolidate:'Merge similar folders',assess:'Check my files',fix:'Part 1 Fix',convert:'Part 4 Convert',cleanup:'Part 3 Clean up',merge:'Part 2 Merge'}[jobKind]||'';
   $('msg').innerHTML=(LBL?'<b>'+LBL+'</b> &middot; ':'')+(s.state==='error'?'<span class="err">'+esc(s.message)+'</span>':s.state==='done'?'<span class="ok">Finished.</span>':esc(s.message)+(s.done?` (${s.done.toLocaleString()} / ${s.total.toLocaleString()})`:''));
   const c=s.counts||{},done=s.done||0,nj=c['no-json']||0;
   $('tiles').innerHTML=liveTiles(s,c,done,nj);
@@ -3475,6 +3670,7 @@ let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   const gmid=gd&&!gd.final;
   if(s.state==='done'&&s.summary&&!gmid){const was=$('sum').style.display;showSummary(s.summary);if(s.run&&!savedIds.has(s.run.id)){$('repnote').textContent='Saving the report...';$('orep').disabled=true;$('olog').disabled=true;autoSave()}}
   renderCvLive(s);updGoto();
+  {const cb=$('contbtn');const w=run&&s.photos&&s.photos.waiting;cb.style.display=w?'inline-block':'none'}
   {const sb=$('stopall');const showStop=run&&!(s.kind==='convert'&&s.cv);sb.style.display=showStop?'inline-block':'none';if(!s.cancel){sb.disabled=false;sb.textContent='Stop'}else{sb.disabled=true;sb.textContent='Stopping...'}}
   if(['done','error','idle'].includes(s.state)&&!gmid)clearInterval(timer);
 },500)}
