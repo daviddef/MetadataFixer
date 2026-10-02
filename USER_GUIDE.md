@@ -57,7 +57,7 @@ A page opens at `http://127.0.0.1:8765`. It is served only on your own computer.
 ## A short, light screen
 
 Backstory keeps each screen short:
-- Only the essential options show. The rest are under **More options**; tap it to open them.
+- The five styles do the work: only **Preview only** stays on screen. Every other option is under **Customise**; tap it only if you want to change a single option.
 - Each option's explanation hides behind its small **i** button; tap the **i** to read it.
 - Results are a few tiles and tips with every section folded away. Tap a heading to open it, or use **Expand all** / **Collapse all**. Recommendations and route steps open when you tap them.
 - The ready checks (Takeout added, Destination, ExifTool, ffmpeg) are small chips.

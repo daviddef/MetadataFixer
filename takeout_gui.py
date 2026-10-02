@@ -30,7 +30,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.03-i"
+VERSION = "2026.10.03-k"
 class Cancelled(Exception):
     pass
 
@@ -3806,6 +3806,13 @@ h2{margin:12px 0 4px}small{margin-top:3px}
 .dtoggle.on{display:block}
 #actbtn{margin-left:6px}
 @media(max-width:560px){.dock{left:8px;right:8px;bottom:8px;width:auto}.dlog{max-height:110px}}
+
+.profpills{display:grid!important;grid-template-columns:repeat(5,1fr);gap:6px!important}
+.profpill{align-items:center!important;text-align:center!important;padding:6px 4px!important;min-width:0!important}
+.profpill b{display:block;font-size:12.5px!important;line-height:1.25}
+.profpill b::first-line{font-size:18px}
+.profinfo .blurb{flex:1 1 100%;color:var(--mute)}
+@media(max-width:420px){.profpill b{font-size:11px!important}}
 </style></head><body><div id="ack" style="display:none"><div class="ackbox" role="dialog" aria-modal="true" aria-labelledby="acktitle">
 <h2 id="acktitle">Before you start</h2>
 <p>Backstory changes, copies, moves and (if you choose) deletes files. Please read this once:</p>
@@ -3880,7 +3887,7 @@ h2{margin:12px 0 4px}small{margin-top:3px}
 </div>
 <section class="pane" id="pane-guided">
 <h2 class="ph">Fix my Takeout</h2>
-<div class="card profcard"><b>How do you like to play it?</b><div class="mutes" style="margin-top:2px">One tap sets every option in the app (Guided, Fix, Similar, Photos) to match how much time, risk and reward you want. You can still change any single option. <b>Preview stays on</b> in every style, so you always see what would happen first.</div>
+<div class="card profcard"><div style="display:flex;align-items:center;gap:8px"><b>How do you like to play it?</b><button type="button" class="ib" id="profib" aria-label="What are styles?" style="margin-left:0;display:grid;width:20px;height:20px;padding:0;border-radius:50%;font:700 11px/1 system-ui;color:var(--mute);border:1px solid var(--line);background:transparent;place-items:center">i</button></div><div class="mutes" id="profexp" style="margin-top:4px;display:none">One tap sets every option in the app (Guided, Fix, Similar, Photos) to match how much time, risk and reward you want. You can still change any single option. <b>Preview stays on</b> in every style, so you always see what would happen first.</div>
 <div class="profpills" id="profpills"></div><div class="profinfo" id="profinfo"></div></div>
 <div class="card"><small style="margin-top:0">The easy way. Add your Google Takeout <b>zip files</b> (or the folders you unzipped) in the bar at the top, choose where the finished library should go, and press the button. Your originals are <b>never changed</b>: a clean, merged copy is made in the Destination, with the real dates, locations and captions put back, duplicates removed and your folder structure kept.</small>
 <div class="gcheck" id="gcheck"></div>
@@ -4930,11 +4937,12 @@ function applyProfile(k,fromUser){const P=PROFILES[k];if(!P)return;PROF=k;PROF_C
   $('gdry').checked=true;$('dry').checked=true;
   DP.bursts=P.dp.bursts;DP.must=P.dp.must.slice();saveDP();renderProfile()}
 function renderProfile(){const P=PROFILES[PROF];
-  $('profpills').innerHTML=Object.entries(PROFILES).map(([k,v])=>`<button class="profpill ${k===PROF&&!PROF_CUSTOM?'on':''}" data-prof="${k}"><b>${v.icon} ${v.name}</b><span>${v.blurb}</span></button>`).join('');
-  $('profinfo').innerHTML=`<span>Time ${dots(P.time,'')}</span><span>Risk ${dots(P.risk,'risk')}</span><span>Reward ${dots(P.reward,'rew')}</span>${PROF_CUSTOM?'<span class="badge warnb">Customised: you changed some options</span>':''}`;
+  $('profpills').innerHTML=Object.entries(PROFILES).map(([k,v])=>`<button class="profpill ${k===PROF&&!PROF_CUSTOM?'on':''}" data-prof="${k}" title="${v.blurb}"><b>${v.icon}<br>${v.name}</b></button>`).join('');
+  $('profinfo').innerHTML=`<span>Time ${dots(P.time,'')}</span><span>Risk ${dots(P.risk,'risk')}</span><span>Reward ${dots(P.reward,'rew')}</span>${PROF_CUSTOM?'<span class="badge warnb">Customised: you changed some options</span>':''}<span class="blurb">${P.blurb}</span>`;
   document.querySelectorAll('#profpills button').forEach(b=>b.onclick=()=>applyProfile(b.dataset.prof,true));
   document.querySelectorAll('.profline').forEach(e=>e.innerHTML='Style: <b>'+P.icon+' '+P.name+(PROF_CUSTOM?' (customised)':'')+'</b> &middot; change it at the top of the Guided tab.')}
 document.addEventListener('change',e=>{if(e.isTrusted&&e.target&&e.target.closest&&e.target.closest('.pane')&&!e.target.closest('#profpills')&&!PROF_CUSTOM){PROF_CUSTOM=true;renderProfile()}});
+$('profib').onclick=()=>{const e=$('profexp');e.style.display=e.style.display==='none'?'block':'none'};
 renderProfile();if(PROF!=='balanced')applyProfile(PROF);
 
 // ---- compact mode: details on demand, collapsible sections, floating activity dock ----
@@ -4944,9 +4952,9 @@ renderProfile();if(PROF!=='balanced')applyProfile(PROF);
   function groupMore(paneId,keep){const pane=document.getElementById(paneId);if(!pane)return;const card=pane.querySelector('.card:has(.opt)');if(!card)return;
     const kids=[...card.children].filter(c=>c.classList.contains('opt')||c.classList.contains('dpbox'));
     const more=kids.filter(c=>{const i=c.querySelector('input[type=checkbox]');return !(i&&keep.indexOf(i.id)>=0)&&!(c.classList.contains('opt')&&!i&&false)});
-    if(!more.length)return;const d=document.createElement('details');d.className='more';d.innerHTML='<summary>More options ('+more.length+')</summary>';card.insertBefore(d,more[0]);kids.filter(c=>more.indexOf(c)<0).forEach(k=>card.insertBefore(k,d));more.forEach(m=>d.appendChild(m))}
-  groupMore('pane-guided',['gdry','gdedupe','glive','gfd']);
-  groupMore('pane-fix',['dry','dedupe','live','fdates']);
+    if(!more.length)return;const d=document.createElement('details');d.className='more';d.innerHTML='<summary>Customise ('+more.length+' options, set by your style)</summary>';card.insertBefore(d,more[0]);kids.filter(c=>more.indexOf(c)<0).forEach(k=>card.insertBefore(k,d));more.forEach(m=>d.appendChild(m))}
+  groupMore('pane-guided',['gdry']);
+  groupMore('pane-fix',['dry']);
   compactOpts();
   // click a recommendation or route step to read why
   document.addEventListener('click',e=>{const r=e.target.closest&&e.target.closest('.rec,.flowstep');if(r&&!e.target.closest('button,input,a,label'))r.classList.toggle('open')});
