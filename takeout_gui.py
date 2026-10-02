@@ -29,7 +29,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.02-k"
+VERSION = "2026.10.02-m"
 class Cancelled(Exception):
     pass
 
@@ -1722,6 +1722,12 @@ def build_recommendations(F, dest):
         extras.append({"id": "convert", "title": "Convert old videos to MP4", "tab": "convert", "risk": "caution",
                        "why": "%s old-format videos (%s) were found: %s. They play badly on phones and TVs, and Apple Photos cannot import most of them. Convert them after the library is built; the originals can be kept in a separate folder." % (
                            n(F["legacy_n"]), fmt_bytes(F["legacy_bytes"]), ", ".join("%s %s" % (n(v[0]), k) for k, v in sorted(F["legacy"].items(), key=lambda kv: -kv[1][0])[:5]))})
+    if F.get("format_groups"):
+        extras.append({"id": "formats", "title": "The same file in different formats", "tab": "health", "risk": "caution",
+                       "why": "%s of files share a name but exist in more than one format (for example IMG_1.mov and IMG_1.mp4). This usually means a video was converted and the old copy kept. After the library is built, the Health tab compares their lengths and lets you set the older formats aside." % pl(F["format_groups"], "group", "groups")})
+    if F.get("raw_pairs"):
+        extras.append({"id": "rawpairs", "title": "RAW photos that also have a JPEG", "tab": "health", "risk": "safe",
+                       "why": "%s a RAW file next to a JPEG or HEIC with the same name. Keeping both is normal if you edit RAW files. The Health tab shows how much space the RAW copies take; Backstory never deletes them for you." % pl(F["raw_pairs"], "photo has", "photos have")})
     if F.get("sim_groups"):
         extras.append({"id": "consolidate", "title": "Merge folders that are the same trip", "tab": "clean", "risk": "caution",
                        "why": "Found %s of folders with near-identical names (for example %s). Review them on the Clean up tab and merge the ones that are the same." % (
@@ -1759,6 +1765,8 @@ def build_recommendations(F, dest):
         "Restores dates, locations and captions, merges folders, removes duplicates, keeps albums. Preview first, then run it for real. Your originals stay untouched.")
     if F.get("sim_groups") or (F["folders"] and (F["tidy_dirs"] or F["empty_dirs"] or F["junk"])):
         add("Tidy folders", "clean", "Merge look-alike folders and clear junk, once the library exists.", "optional")
+    if media >= 50 or F.get("format_groups"):
+        add("Check the library's health", "health", "Space waste, duplicate formats, folder problems and ghost files, with a score you can track over time.", "optional")
     if media >= 50:
         add("Review similar photos", "similar", "Set aside the same picture saved twice. Nothing is deleted.", "optional")
     if F["legacy_n"]:
@@ -2051,25 +2059,25 @@ def run_similar_scan(roots, threshold):
             STATE.update(state="error", message=str(e))
 
 
-def run_similar_apply(items):
+def _setaside(items, store, folder, kind, nice):
     with LOCK:
-        STATE.update(state="scanning", cancel=False, total=len(items), done=0, counts={}, message="Setting photos aside...", report="",
-                     summary=None, scan=None, extra={}, recent=[], phase=None, kind="similar_apply", cv=None, guided=None)
+        STATE.update(state="scanning", cancel=False, total=len(items), done=0, counts={}, message="Setting files aside...", report="",
+                     summary=None, scan=None, extra={}, recent=[], phase=None, kind=kind, cv=None, guided=None)
     try:
         with LOCK:
-            roots, allowed = [Path(r) for r in SIMILAR["roots"]], set(SIMILAR["allowed"])
+            roots, allowed = [Path(r) for r in store["roots"]], set(store["allowed"])
         pairs, res, fails = [], {"moved": 0, "failed": 0, "skipped": 0}, []
         bases = set()
         for k, p in enumerate(items, 1):
             check_cancel()
-            if p not in allowed or not os.path.exists(p):
+            if p not in allowed or not os.path.exists(p) or fx.inside_photos_library(p):
                 res["skipped"] += 1
                 continue
             root = next((r for r in roots if r in Path(p).parents), None)
             if root is None:
                 res["skipped"] += 1
                 continue
-            base = root / "_similar_set_aside"
+            base = root / folder
             target = base / Path(p).relative_to(root)
             try:
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -2086,12 +2094,12 @@ def run_similar_apply(items):
                 res["failed"] += 1
                 fails.append("%s: %s" % (os.path.basename(p), ex))
             with LOCK:
-                STATE.update(done=k, message="Setting photos aside: %s of %s" % (k, len(items)))
+                STATE.update(done=k, message="Setting files aside: %s of %s" % (k, len(items)))
         if pairs:
             with LOCK:
                 STATE["undo_pairs"] = {"mode": "move", "pairs": pairs, "zips_before": 0, "dest": os.path.commonpath(list(bases)) if len(bases) > 1 else next(iter(bases))}
         sm = {"kind": "similar_apply", "dry_run": False, **res, "fails": fails[:30], "folders": sorted(bases),
-              "tips": ["Nothing was deleted. The photos were moved into a _similar_set_aside folder, keeping their folder structure. Review that folder, then delete it yourself when you are sure, or use Undo in History to put everything back."]}
+              "tips": ["Nothing was deleted. The files were moved into a " + folder + " folder, keeping their folder structure. Review that folder, then delete it yourself when you are sure, or use Undo in History to put everything back."]}
         with LOCK:
             STATE.update(state="done", message="Finished", summary=sm, phase=None)
     except Cancelled:
@@ -2234,12 +2242,112 @@ def run_photos(roots, opts, dry_run):
             STATE.update(state="error", message=str(e), photos=None)
 
 
+def run_similar_apply(items):
+    _setaside(items, SIMILAR, "_similar_set_aside", "similar_apply", "photos")
+
+
+FORMATS = {"roots": [], "allowed": set()}
+
+
+def run_formats_apply(items):
+    _setaside(items, FORMATS, "_older_formats", "formats_apply", "files")
+
+
+def _health_key(roots):
+    return "|".join(sorted(str(Path(r).expanduser()) for r in roots))
+
+
+def health_history(roots, limit=60):
+    out = []
+    d = APP_HOME / "health"
+    try:
+        for p in sorted(d.glob("*.json"))[-400:]:
+            try:
+                e = json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if e.get("key") == _health_key(roots):
+                out.append({"when": e["when"], "score": e["score"], "waste": e.get("waste", 0), "files": e.get("files", 0)})
+    except OSError:
+        pass
+    return out[-limit:]
+
+
+def run_health(roots, deep):
+    with LOCK:
+        STATE.update(state="scanning", cancel=False, total=0, done=0, counts={}, message="Checking your library's health...", report="",
+                     summary=None, scan=None, extra={}, recent=[], phase=None, kind="health", cv=None, guided=None)
+    try:
+        zips, folders = fx.split_sources(roots) if roots else ([], [])
+        if not folders and not zips:
+            raise ValueError("Add your library folders in the bar at the top first")
+        if not folders:
+            raise ValueError("Health checks look inside folders. Zip files are skipped: build your library first, then check it.")
+
+        def prog(msg, done, total):
+            check_cancel()
+            with LOCK:
+                STATE.update(state="running", total=total, done=done, message=msg + (" (%s of %s)" % (f"{done:,}", f"{total:,}") if total else ""))
+                STATE["phase"] = {"stage": "pct", "done": done, "total": total} if total else None
+        R = fx.health_scan([str(f) for f in folders], deep, prog, check_cancel)
+        # experimental hints from any Photos library among the sources
+        db = []
+        for r in roots:
+            p = Path(r).expanduser()
+            if p.suffix.lower() == ".photoslibrary" and p.is_dir():
+                h = fx.photos_db_health(p)
+                h["name"] = p.name
+                db.append(h)
+                if h.get("ok") and h.get("not_in_cloud"):
+                    R["findings"].insert(0, {"id": "pdb_cloud", "cat": "cloud", "sev": "warn", "title": "Photos items not yet in iCloud (experimental)", "count": h["not_in_cloud"], "bytes": 0, "tab": "", "label": "",
+                                             "detail": "Photos' own database lists %s of %s items in %s as not uploaded to iCloud. Apple does not document this, so treat it as a hint: open Photos and look at the iCloud upload status." % (f"{h['not_in_cloud']:,}", f"{h['total']:,}", p.name)})
+        formats = []
+        allowed = set()
+        inside = any(fx.inside_photos_library(f) for f in folders)
+        if not inside:
+            for g in R["formats"][:150]:
+                mem = []
+                for k, m in enumerate(g["members"]):
+                    allowed.add(m["path"])
+                    mem.append({"path": m["path"], "name": m["name"], "ext": m["ext"], "size": m["size"], "duration": round(m["duration"], 1), "w": m["w"], "h": m["h"], "best": k == 0})
+                formats.append({"kind": g["kind"], "where": os.path.basename(g["dir"]), "stem": g["stem"], "members": mem})
+        with LOCK:
+            FORMATS.update(roots=[str(f) for f in folders], allowed=allowed)
+        st = R["stats"]
+        hist = health_history(roots)
+        entry = {"when": time.time(), "key": _health_key(roots), "score": R["score"], "waste": st["waste_bytes"], "files": st["files"], "parts": R["parts"]}
+        try:
+            (APP_HOME / "health").mkdir(parents=True, exist_ok=True)
+            (APP_HOME / "health" / (time.strftime("%Y%m%d-%H%M%S") + ".json")).write_text(json.dumps(entry), encoding="utf-8")
+        except OSError:
+            pass
+        tips = []
+        if hist and hist[-1]["score"] - R["score"] >= 5:
+            tips.append("Your health score dropped from %d to %d since the last check." % (hist[-1]["score"], R["score"]))
+        elif hist and R["score"] - hist[-1]["score"] >= 5:
+            tips.append("Your health score improved from %d to %d since the last check." % (hist[-1]["score"], R["score"]))
+        if zips:
+            tips.append("%d zip file%s skipped: health checks look inside folders." % (len(zips), "" if len(zips) == 1 else "s"))
+        if not R["deep"]:
+            tips.append("This was a quick check: metadata was read from a sample of about 400 files. Tick the deep check to read up to 40,000.")
+        sm = {"kind": "health", "dry_run": True, "score": R["score"], "parts": R["parts"], "findings": R["findings"], "stats": {k: v for k, v in st.items()},
+              "formats": formats, "formats_total": len(R["formats"]), "db": db, "trend": hist + [{"when": entry["when"], "score": R["score"], "waste": entry["waste"], "files": st["files"]}],
+              "deep": R["deep"], "tips": tips}
+        with LOCK:
+            STATE.update(state="done", message="Finished", summary=sm, phase=None)
+    except Cancelled:
+        stopped_state("Nothing was changed.")
+    except Exception as e:
+        with LOCK:
+            STATE.update(state="error", message=str(e))
+
+
 # ---- Reports, run logs and history -------------------------------------------------------------------------
 APP_HOME = Path(os.environ.get("METADATAFIXER_HOME") or (
     Path.home() / "Library" / "Application Support" / "MetadataFixer" if sys.platform == "darwin" else Path.home() / ".metadatafixer"))
 HIST_DIR = APP_HOME / "history"
 REPORTS_DIR = Path(os.environ.get("METADATAFIXER_REPORTS") or (Path.home() / "Documents" / "Backstory Reports"))
-KIND_TITLE = {"photos": "Send to Apple Photos", "similar": "Find similar photos", "similar_apply": "Set similar photos aside", "undo": "Undo a run", "assess": "Check my files", "consolidate": "Merge similar folders", "fix": "Fix metadata", "merge": "Merge folders", "cleanup": "Clean up", "convert": "Convert videos", "guided": "Guided: Fix my Takeout"}
+KIND_TITLE = {"health": "Library health check", "formats_apply": "Set older formats aside", "photos": "Send to Apple Photos", "similar": "Find similar photos", "similar_apply": "Set similar photos aside", "undo": "Undo a run", "assess": "Check my files", "consolidate": "Merge similar folders", "fix": "Fix metadata", "merge": "Merge folders", "cleanup": "Clean up", "convert": "Convert videos", "guided": "Guided: Fix my Takeout"}
 
 
 def _headline(sm):
@@ -2248,6 +2356,10 @@ def _headline(sm):
         return ""
     k = sm.get("kind")
     try:
+        if k == "health":
+            return "Health score %s, %s findings" % (sm.get("score"), len(sm.get("findings", [])))
+        if k == "formats_apply":
+            return "%s older-format files set aside" % f"{sm.get('moved', 0):,}"
         if k == "photos":
             return ("%s files sent to Photos in %s batches" % (f"{sm.get('imported', 0):,}", sm.get("batches", 0))) if not sm.get("dry_run") else ("%s files planned in %s batches" % (f"{sm.get('files', 0):,}", sm.get("batches", 0)))
         if k == "similar":
@@ -2596,6 +2708,22 @@ class Handler(BaseHTTPRequestHandler):
                 bool(body.get("dedupe")), bool(body.get("move")), body.get("date_policy", "earlier"), bool(body.get("name_dates")), bool(body.get("albums")),
                 body.get("edited") if body.get("edited") in ("both", "edited", "original") else "both"))
             self._send(200, "{}")
+        elif self.path == "/api/health_start":
+            with LOCK:
+                busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
+            if busy:
+                return self._send(409, json.dumps({"error": "A job is already running"}))
+            start_tracked("health", dict(body, dry_run=True, opts={"deep": bool(body.get("deep"))}), run_health, (body.get("roots", []), bool(body.get("deep"))))
+            self._send(200, "{}")
+        elif self.path == "/api/health_history":
+            self._send(200, json.dumps({"runs": health_history(body.get("roots", []))}))
+        elif self.path == "/api/formats_apply":
+            with LOCK:
+                busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
+            if busy:
+                return self._send(409, json.dumps({"error": "A job is already running"}))
+            start_tracked("formats_apply", {"roots": [], "dry_run": False, "opts": {"files": len(body.get("items", []))}}, run_formats_apply, ([str(x) for x in body.get("items", [])],))
+            self._send(200, "{}")
         elif self.path == "/api/photos_preflight":
             self._send(200, json.dumps(photos_preflight()))
         elif self.path == "/api/photos_continue":
@@ -2939,6 +3067,16 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
 .flowstep .fn{display:inline-grid;place-items:center;width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;font-weight:700;font-size:14px;flex:none}
 .flowstep.done{opacity:.65}.flowstep.optional .fn{background:var(--line);color:var(--ink)}
 .flowstep .why{color:var(--mute);font-size:13.5px;margin-top:2px}
+
+.hscore{display:flex;gap:22px;align-items:center;flex-wrap:wrap;margin:6px 0 14px}
+.ring{--p:80;--c:var(--ok);width:130px;height:130px;border-radius:50%;background:conic-gradient(var(--c) calc(var(--p)*1%),var(--line) 0);display:grid;place-items:center;position:relative;flex:none}
+.ring::before{content:"";position:absolute;inset:12px;border-radius:50%;background:var(--card)}
+.ring b,.ring span{position:relative;display:block;text-align:center}.ring b{font-size:34px;line-height:1}.ring span{font-size:11px;color:var(--mute);margin-top:-30px}
+.ring{align-content:center}
+.parts{display:grid;gap:6px;margin-top:8px}.part{display:flex;align-items:center;gap:8px;font-size:13px}.part span{width:70px;color:var(--mute)}.part em{font-style:normal;width:28px;text-align:right}
+.pbar{flex:1;height:8px;border-radius:99px;background:var(--line);overflow:hidden}.pbar i{display:block;height:100%;border-radius:99px}
+.years{display:flex;align-items:flex-end;gap:3px;height:92px;overflow-x:auto;padding:6px 0}.yr{display:flex;flex-direction:column;align-items:center;gap:3px;font-size:10px;color:var(--mute)}.yr i{display:block;width:14px;background:linear-gradient(var(--acc),var(--acc2));border-radius:4px 4px 0 0}
+.fmtrow{display:flex;gap:12px;align-items:center;padding:4px 0;font-size:14px}.fmtrow>span:first-child{width:56px}
 </style></head><body><div id="ack" style="display:none"><div class="ackbox" role="dialog" aria-modal="true" aria-labelledby="acktitle">
 <h2 id="acktitle">Before you start</h2>
 <p>Backstory changes, copies, moves and (if you choose) deletes files. Please read this once:</p>
@@ -2999,6 +3137,7 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
     <button class="tab" data-tab="merge" role="tab"><b>&#128450;&#65039;</b> Merge</button>
     <button class="tab" data-tab="clean" role="tab"><b>&#129529;</b> Clean up</button>
     <button class="tab" data-tab="convert" role="tab"><b>&#127902;&#65039;</b> Convert</button>
+    <button class="tab" data-tab="health" role="tab"><b>&#129658;</b> Health</button>
     <button class="tab" data-tab="photos" role="tab"><b>&#127822;</b> Photos</button>
     <button class="tab" data-tab="similar" role="tab"><b>&#128269;</b> Similar</button>
     <button class="tab" data-tab="history" role="tab"><b>&#128196;</b> History</button>
@@ -3169,6 +3308,15 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
 <div class="tip">&#9888;&#65039; Photos has no undo for imports. Always preview, then send a small test first. Photos skips photos it already has, so running again does not duplicate them.</div>
 <div class="hbtns"><button class="p" id="pgo">Preview the batches</button><button id="ptest">Send a small test (20 photos)</button></div></div>
 </section>
+<section class="pane" id="pane-health">
+<h2 class="ph">Library health</h2>
+<div class="card"><small style="margin-top:0">A health check for a finished library: wasted space, the same file saved in several formats, folder problems, empty and ghost files, files that are only in iCloud, and useful statistics. It only reads, and it keeps a history so you can see whether your library is getting healthier or messier.</small>
+<div class="usef" style="margin-top:10px"><b>Library to check:</b> <span class="fnote"></span></div>
+<div class="opt"><input type="checkbox" id="hdeep"><div>Deep check<small>Reads the metadata of up to 40,000 files (instead of a sample of about 400) to find wrong extensions, missing dates and photos in the wrong year folder. Slower.</small></div></div>
+<div class="opt"><div style="flex:1"><label for="hauto" style="font-weight:600">Check again automatically</label><select id="hauto" class="sel"><option value="0">Off</option><option value="1">Every hour</option><option value="6">Every 6 hours</option><option value="24">Every day</option></select><small>Only while Backstory is open. A new check is skipped while another job is running.</small></div></div>
+<button class="p" id="hgo" style="margin-top:6px">Check library health</button></div>
+</section>
+
 
 
 <footer class="foot">Free software provided &ldquo;as is&rdquo;, without warranty. Back up your photos first. &middot; <a href="#" data-help="safety">Safety &amp; disclaimer</a> &middot; Support: <a href="mailto:thestocksoup@gmail.com">thestocksoup@gmail.com</a></footer>
@@ -3190,7 +3338,7 @@ function makeIcon(html){const b=document.createElement('button');b.type='button'
   b.onfocus=()=>{if(b.matches(':focus-visible'))showTip(b)};b.onblur=hideTip;
   b.onclick=e=>{e.preventDefault();e.stopPropagation();if(b._pt==='mouse'){showTip(b);return}tipEl._owner===b?hideTip():showTip(b)};return b}
 document.addEventListener('click',hideTip);window.addEventListener('scroll',hideTip,{passive:true});
-const PANE_SUB={photos:'Send your finished library to Apple Photos in batches, with room for iCloud to catch up.',similar:'Find the same picture saved twice, and choose what to set aside.',help:'The user guide, safety notice and how to get support.',history:'Every run, with its full report and log.',guided:'The easy way: zips or folders in, a clean library out. Originals never change.',fix:'Put the real date, location and caption back into your photos.',merge:'Bring two or more folders together into one.',clean:'Tidy up leftovers once you are done.',convert:'Turn older video formats into MP4.'};
+const PANE_SUB={health:'Space waste, folder problems, ghosts and statistics for your library, tracked over time.',photos:'Send your finished library to Apple Photos in batches, with room for iCloud to catch up.',similar:'Find the same picture saved twice, and choose what to set aside.',help:'The user guide, safety notice and how to get support.',history:'Every run, with its full report and log.',guided:'The easy way: zips or folders in, a clean library out. Originals never change.',fix:'Put the real date, location and caption back into your photos.',merge:'Bring two or more folders together into one.',clean:'Tidy up leftovers once you are done.',convert:'Turn older video formats into MP4.'};
 function decorate(){
   document.querySelectorAll('.opt').forEach(o=>{
     const box=o.querySelector(':scope > div');if(!box)return;
@@ -3269,7 +3417,8 @@ function showSummary(s){
   if(s.kind==='undo'){showUndo(s);return}
   if(s.kind==='similar'){showSimilar(s);return}
   if(s.kind==='photos'){showPhotos(s);return}
-  if(s.kind==='similar_apply'){showSimilarApply(s);return}
+  if(s.kind==='health'){showHealth(s);return}
+  if(s.kind==='similar_apply'||s.kind==='formats_apply'){showSimilarApply(s);return}
   let h=`<div class="tiles">${tile(s.total,'media files')}${tile(s.duplicates,'exact duplicates skipped')}${tile(s.matched,'unique files matched ('+s.pct_matched+'%)','ok')}${tile(s.no_json,'no JSON found',s.no_json?'bad':'ok')}${tile(s.orphans,'JSON with no photo')}${s.name_dates?tile(s.name_dates,'dates from file names','ok'):''}</div>`;
   h+=s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
   h+=`<div class="tiles">${tile(s.replaced_files,'files with a value replaced')}${tile((s.live||{}).paired||0,'Live Photos paired')}</div>`;
@@ -3325,7 +3474,7 @@ function setBar(barId,fillId,pctId,pct,indet){
     for(let i=0;i<30;i++){await new Promise(x=>setTimeout(x,1000));const s=await st();if(s&&s.boot!==boot){location.reload();return}}
     $('updmsg').textContent='Updated. If the page does not reload, restart the app in Terminal.'}
 })();
-const TABS=['guided','fix','merge','clean','convert','photos','similar','history','help'];const tabOf=k=>({similar_apply:'similar',undo:'history',consolidate:'clean',cleanup:'clean',sort:'merge',assess:'guided'}[k]||k);let curGuided=false;const paneKind=()=>curGuided?'guided':tabOf(jobKind);let jobKind='fix';
+const TABS=['guided','fix','merge','clean','convert','health','photos','similar','history','help'];const tabOf=k=>({formats_apply:'health',similar_apply:'similar',undo:'history',consolidate:'clean',cleanup:'clean',sort:'merge',assess:'guided'}[k]||k);let curGuided=false;const paneKind=()=>curGuided?'guided':tabOf(jobKind);let jobKind='fix';
 function showTab(t){if(!TABS.includes(t))t='fix';
   TABS.forEach(x=>{$('pane-'+x).style.display=x===t?'block':'none';document.querySelector('.tab[data-tab="'+x+'"]').classList.toggle('on',x===t)});
   try{localStorage.setItem('tab',t)}catch(e){}
@@ -3489,7 +3638,7 @@ function showAssess(s){
   const f=s.facts||{};
   let h='<div class="tiles">'+s.tiles.map(t=>tile(t[0],t[1],t[2])).join('')+'</div><small>Total size of photos and videos: <b>'+esc(s.size)+'</b>'+(f.zips?' &middot; '+f.zips+' zip file'+(f.zips===1?'':'s'):'')+(f.folders?' &middot; '+f.folders+' folder'+(f.folders===1?'':'s'):'')+'</small>';
   h+=(s.warnings||[]).map(w=>`<div class="tip">${esc(w)}</div>`).join('');
-  const TL={guided:'Guided',fix:'Fix',merge:'Merge',clean:'Clean up',convert:'Convert',photos:'Photos',similar:'Similar',history:'History'};
+  const TL={guided:'Guided',fix:'Fix',merge:'Merge',clean:'Clean up',convert:'Convert',photos:'Photos',similar:'Similar',health:'Health',history:'History'};
   if((s.sources||[]).length>1)h+='<h2>Your '+s.sources.length+' sources</h2>'+tbl(['Source','Type','Photos and videos','Size'],s.sources.map(x=>[esc(x.label),esc(x.kind),x.media.toLocaleString(),esc(fmtB(x.bytes))]))+((s.overlap||[]).length?'<small>Shared between sources: '+s.overlap.map(o=>esc(o.a)+' and '+esc(o.b)+': <b>'+o.n.toLocaleString()+'</b> identical files ('+esc(fmtB(o.bytes))+')').join('; ')+'</small>':'');
   if((s.flow||[]).length)h+='<h2>Your suggested route</h2><div class="flow">'+s.flow.map(f=>`<div class="flowstep ${f.kind}"><span class="fn">${f.n}</span><div style="flex:1;min-width:0"><b>${esc(f.title)}</b> <span class="badge ${f.kind==='do'?'okb':''}">${f.kind==='done'?'Done':f.kind==='do'?'Recommended':'Optional'}</span><div class="why">${esc(f.why)}</div></div>${f.kind==='done'?'':`<button class="sm" data-tab="${f.tab}">Open ${esc(TL[f.tab]||f.tab)}</button>`}</div>`).join('')+'</div>';
   h+='<h2>Settings for the library build</h2><small style="margin-top:0">Each option has the reason and the numbers from your files. Untick anything you do not want.</small>';
@@ -3568,7 +3717,7 @@ function showSimilar(s){
     if(!confirm('Move '+items.length.toLocaleString()+' photos into a _similar_set_aside folder? Nothing is deleted, and you can undo this from History.'))return;
     const r=await post('/api/similar_apply',{items});if(r.error)alert(r.error);else{placeResults('similar_apply');$('prog').style.display='block';poll()}}}
 function showSimilarApply(s){
-  let h=`<div class="tiles">${tile(s.moved,'photos set aside','ok')}${s.failed||s.skipped?tile(s.failed+s.skipped,'not moved','bad'):''}</div>`+s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
+  let h=`<div class="tiles">${tile(s.moved,'set aside','ok')}${s.failed||s.skipped?tile(s.failed+s.skipped,'not moved','bad'):''}</div>`+s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
   if((s.folders||[]).length)h+='<small>Set-aside folder: '+s.folders.map(esc).join(', ')+'</small>';
   $('sumbody').innerHTML=h;$('sum').style.display='block'}
 $('simscan').onclick=async()=>{
@@ -3602,6 +3751,57 @@ function showPhotos(s){
   if((s.unsupported||[]).length)h+='<small>Formats Photos cannot import: '+s.unsupported.map(u=>esc(u[0])+' ('+u[1]+')').join(', ')+'. Convert them on the Convert tab.</small>';
   if((s.rows||[]).length)h+='<h2>Batches</h2>'+tbl(['#','Files','Size','From','To','Albums','Status'],s.rows.map(r=>[r.n,r.files.toLocaleString(),esc(r.bytes),esc(r.from),esc(r.to),esc(r.albums),esc(r.status)]));
   $('sumbody').innerHTML=h;$('sum').style.display='block'}
+
+const HCATS={space:'Space and duplicates',folders:'Folders',files:'Files and ghosts',cloud:'iCloud and missing files',meta:'Dates and metadata'};
+const HTL={guided:'Guided',merge:'Merge',clean:'Clean up',convert:'Convert',similar:'Similar',photos:'Photos'};
+function spark(tr){
+  if(!tr||tr.length<2)return '';
+  const w=260,h=50,xs=tr.map((t,i)=>i/(tr.length-1)*w),ys=tr.map(t=>h-(t.score/100)*h);
+  return `<svg viewBox="0 0 ${w} ${h+4}" width="${w}" height="${h+4}" style="display:block"><polyline fill="none" stroke="var(--acc)" stroke-width="2.5" points="${xs.map((x,i)=>x.toFixed(1)+','+(ys[i]+2).toFixed(1)).join(' ')}"/>${xs.map((x,i)=>`<circle cx="${x.toFixed(1)}" cy="${(ys[i]+2).toFixed(1)}" r="3" fill="var(--acc)"/>`).join('')}</svg>`}
+function showHealth(s){
+  const st=s.stats,col=s.score>=80?'var(--ok)':s.score>=60?'var(--warn)':'var(--bad)';
+  const word=s.score>=85?'Healthy':s.score>=70?'Fair':s.score>=50?'Needs attention':'Needs work';
+  let h=`<div class="hscore"><div class="ring" style="--p:${s.score};--c:${col}"><b>${s.score}</b><span>out of 100</span></div><div style="flex:1;min-width:0"><div style="font-size:20px;font-weight:700">${word}</div>
+  <div class="parts">${Object.entries(s.parts).map(([k,v])=>`<div class="part"><span>${esc(({space:'Space',folders:'Folders',files:'Files',cloud:'Cloud',metadata:'Metadata'})[k]||k)}</span><div class="pbar"><i style="width:${v}%;background:${v>=80?'var(--ok)':v>=60?'var(--warn)':'var(--bad)'}"></i></div><em>${v}</em></div>`).join('')}</div></div>${s.trend&&s.trend.length>1?`<div><small style="margin:0 0 4px">Score history</small>${spark(s.trend)}</div>`:''}</div>`;
+  h+=`<div class="tiles">${tile(st.files,'photos and videos')}<div class="tile"><b>${esc(fmtB(st.bytes))}</b><span>library size</span></div><div class="tile ${st.waste_bytes>0?'bad':'ok'}"><b>${esc(fmtB(st.waste_bytes))}</b><span>possible wasted space</span></div>${tile(s.findings.length,'findings')}</div>`;
+  h+=s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
+  (s.db||[]).forEach(d=>{h+=d.ok?`<div class="tip">Photos library <b>${esc(d.name)}</b> (experimental hints): ${d.total.toLocaleString()} items${d.not_in_cloud!=null?', '+d.not_in_cloud.toLocaleString()+' not yet in iCloud':''}${d.original_not_on_disk!=null?', '+d.original_not_on_disk.toLocaleString()+' originals not stored on this Mac (normal with Optimize Mac Storage)':''}.</div>`:`<div class="tip">Could not read the database of ${esc(d.name)}: ${esc(d.why||'')}. This check is experimental.</div>`});
+  if(!s.findings.length)h+='<div class="tip" style="border-color:var(--ok)">No problems found. Your library looks healthy.</div>';
+  Object.keys(HCATS).forEach(cat=>{const L=s.findings.filter(f=>f.cat===cat);if(!L.length)return;
+    h+='<h2>'+HCATS[cat]+'</h2>'+L.map(f=>`<div class="rec"><div style="flex:1;min-width:0"><b>${esc(f.title)}</b> <span class="badge ${f.sev==='bad'?'badb':f.sev==='warn'?'warnb':''}">${f.sev==='bad'?'Fix':f.sev==='warn'?'Worth fixing':'For your information'}</span>${f.bytes?` <span class="mutes">&middot; ${esc(fmtB(f.bytes))}</span>`:''}<div class="why">${esc(f.detail)}</div>${(f.examples||[]).length?'<div class="why">'+f.examples.map(esc).join('<br>')+'</div>':''}</div>${f.tab&&HTL[f.tab]?`<button class="sm" data-tab="${f.tab}">${esc(f.label||'Open')}</button>`:''}</div>`).join('')});
+  if((s.formats||[]).length){
+    h+=`<h2>The same file in different formats</h2><small style="margin-top:0">Each group is one picture or video saved in more than one format, usually after converting and keeping the old copy. The best copy of each group is kept (ticked boxes are the older formats). They are moved to <i>_older_formats</i>, not deleted, and you can undo it from History. ${s.formats_total>s.formats.length?'Showing the first '+s.formats.length+' of '+s.formats_total+' groups.':''}</small>`;
+    h+=s.formats.map(g=>`<div class="card simgrp"><b>${esc(g.stem)}</b> <span class="mutes">in ${esc(g.where)}</span><div style="margin-top:6px">${g.members.map(m=>`<label class="fmtrow"><span>${m.best?'<span class="badge okb">Keep</span>':`<input type="checkbox" class="fmtaside" data-p="${esc(m.path)}" checked>`}</span><b>${esc(m.ext)}</b><span>${esc(fmtB(m.size))}</span><span class="mutes">${m.duration?m.duration+'s':''}${m.w?' &middot; '+m.w+'&times;'+m.h:''}</span></label>`).join('')}</div></div>`).join('');
+    h+='<div class="hbtns" style="margin-top:12px"><button class="p" id="fmtapply">Set aside the ticked older formats</button><button id="fmtnone">Untick all</button></div>'}
+  const ex=st.by_ext||[];
+  h+='<h2>Your library in numbers</h2>';
+  if(ex.length){const mx=Math.max(...ex.map(e=>e[2]));h+=tbl(['Type','Files','Size',''],ex.map(e=>[esc(e[0]),e[1].toLocaleString(),esc(fmtB(e[2])),`<span class="mini" style="width:${Math.round(120*e[2]/mx)}px;background:var(--acc)"></span>`]))}
+  if((st.years||[]).length){const my=Math.max(...st.years.map(y=>y[1]));h+='<small>Photos and videos by year (by file date)</small><div class="years">'+st.years.map(y=>`<div class="yr" title="${y[0]}: ${y[1].toLocaleString()}"><i style="height:${Math.max(3,Math.round(70*y[1]/my))}px"></i><span>${esc(y[0].slice(2))}</span></div>`).join('')+'</div>'}
+  const r=st.raw||{};
+  if(r.total)h+=`<div class="tip"><b>RAW photos:</b> ${r.total.toLocaleString()} (${esc(fmtB(r.bytes))}). ${r.paired.toLocaleString()} sit next to a JPEG or HEIC with the same name (the RAW files take ${esc(fmtB(r.paired_raw_bytes))}, the JPEGs ${esc(fmtB(r.paired_jpg_bytes))}), and ${r.raw_only.toLocaleString()} have no JPEG. Keeping both is normal for editing; if you never edit RAW files, the RAWs of those pairs are the biggest single saving. Backstory never deletes them for you.</div>`;
+  if(st.live_pairs)h+=`<div class="tip"><b>Live Photos:</b> ${st.live_pairs.toLocaleString()} photos have a matching video, kept together.</div>`;
+  if(st.deep&&st.deep.models&&st.deep.models.length)h+='<small>Most common cameras (in the files checked): '+st.deep.models.map(m=>esc(m[0])+' ('+m[1]+')').join(', ')+'</small>';
+  if((st.top_folders||[]).length)h+='<h2>Biggest folders</h2>'+tbl(['Folder','Size'],st.top_folders.map(f=>[esc(f[0]),esc(fmtB(f[1]))]));
+  if((st.biggest||[]).length)h+='<h2>Biggest files</h2>'+tbl(['File','Size'],st.biggest.map(f=>[esc(f[0]),esc(fmtB(f[2]))]));
+  $('sumbody').innerHTML=h;$('sum').style.display='block';
+  document.querySelectorAll('#sumbody button[data-tab]').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
+  const fa=$('fmtapply');if(fa){$('fmtnone').onclick=()=>document.querySelectorAll('.fmtaside').forEach(c=>c.checked=false);
+    fa.onclick=async()=>{const items=[...document.querySelectorAll('.fmtaside')].filter(c=>c.checked).map(c=>c.dataset.p);if(!items.length){alert('Nothing is ticked');return}
+      if(!confirm('Move '+items.length.toLocaleString()+' older-format files into an _older_formats folder? Nothing is deleted, and you can undo this from History.'))return;
+      const r=await post('/api/formats_apply',{items});if(r.error)alert(r.error);else{placeResults('formats_apply');$('prog').style.display='block';poll()}}}
+}
+async function startHealth(quiet){
+  if(!roots().length){if(!quiet)alert('Add your library folders in the bar at the top first');return}
+  if(!quiet){$('sum').style.display='none'}curGuided=false;
+  const r=await post('/api/health_start',{roots:roots(),deep:$('hdeep').checked});
+  try{localStorage.setItem('health_last',String(Date.now()))}catch(e){}
+  if(r.error){if(!quiet)alert(r.error)}else{placeResults('health');$('prog').style.display='block';poll()}}
+$('hgo').onclick=()=>startHealth(false);
+(function(){let a='0';try{a=localStorage.getItem('health_auto')||'0'}catch(e){}$('hauto').value=a;
+  $('hauto').onchange=()=>{try{localStorage.setItem('health_auto',$('hauto').value)}catch(e){}};
+  setInterval(async()=>{const hrs=+$('hauto').value;if(!hrs||!roots().length)return;let last=0;try{last=+localStorage.getItem('health_last')||0}catch(e){}
+    if(Date.now()-last<hrs*3600e3)return;try{const s=await (await fetch('/api/status')).json();if(s.state==='scanning'||s.state==='running')return}catch(e){return}
+    startHealth(true)},60000)})();
 function showMerge(s){
   const w=s.dry_run?'would be ':'';
   let h=`<div class="tiles">${tile(s.total,'files found')}${tile(s.brought,'files '+w+(s.move?'moved':'copied')+' in','ok')}${tile(s.in_place_files,'already in place')}${tile(s.identical,'identical copies (kept once)')}${tile(s.clashes,'name clashes resolved')}${tile(s.merged_dirs,'folders '+w+'merged from 2+ sources')}${s.json_along?tile(s.json_along,'.json files brought along'):''}${tile(s.failed,'problems',s.failed?'bad':'')}</div>`;
@@ -3677,7 +3877,7 @@ function showConvert(s){
 
 function liveTiles(s,c,done,nj){
   if(!s.total)return '';const x=s.extra||{};const err=(x.errors?tile(x.errors,'files with errors','bad'):'');
-  if(['assess','consolidate','undo','similar','similar_apply','photos'].includes(jobKind))return '';
+  if(['assess','consolidate','undo','similar','similar_apply','photos','health','formats_apply'].includes(jobKind))return '';
   if(jobKind==='merge')return tile(s.total,'files found')+tile(x.placed||0,'brought in','ok')+tile(x.identical||0,'identical (kept once)')+tile(x.clashes||0,'name clashes')+(x.json_along?tile(x.json_along,'.json brought along'):'')+(x.errors?tile(x.errors,'problems','bad'):'');
   if(jobKind==='cleanup')return tile(x.json||0,'.json files')+tile(x.junk||0,'junk files')+tile(x.renamed||0,'renamed')+tile(x.merged||0,'folders merged')+tile(x.empty||0,'empty folders')+(x.errors?tile(x.errors,'errors','bad'):'');
   if(jobKind==='convert')return tile(s.total,'videos found')+tile(done,'checked so far')+tile(x.converted||0,'converted','ok')+(x.bytes_before?tile(fmtBytes(Math.max(0,x.bytes_before-x.bytes_after))+' ('+Math.round(100*(1-x.bytes_after/x.bytes_before))+'%)','space saved so far','ok'):'')+tile(x.skipped_live||0,'Live Photo videos skipped')+(x.errors?tile(x.errors,'could not convert','bad'):'');
@@ -3735,7 +3935,7 @@ $('hfolder').onclick=()=>post('/api/open_reports');
 $('hdiag').onclick=async()=>{const r=await post('/api/diagnostics');try{await navigator.clipboard.writeText(r.text);$('hdiag').textContent='Copied'}catch(e){const t=document.createElement('textarea');t.value=r.text;document.body.appendChild(t);t.select();try{document.execCommand('copy');$('hdiag').textContent='Copied'}catch(_){prompt('Copy this:',r.text)}t.remove()}setTimeout(()=>{$('hdiag').textContent='Copy diagnostic info'},2000)};
 let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   const s=await (await fetch('/api/status')).json();$('prog').style.display='block';
-  const run=s.state==='scanning'||s.state==='running';$('go').disabled=run;$('gst').disabled=run;$('gchk').disabled=run;$('simscan').disabled=run;$('pgo').disabled=run;$('ptest').disabled=run;
+  const run=s.state==='scanning'||s.state==='running';$('go').disabled=run;$('gst').disabled=run;$('gchk').disabled=run;$('simscan').disabled=run;$('pgo').disabled=run;$('hgo').disabled=run;$('ptest').disabled=run;
   jobKind=s.kind||'fix';const gd=s.guided||null;curGuided=!!gd;placeResults(jobKind);
   let pct=0,indet=false;
   if(s.state==='done'){pct=100}
@@ -3744,7 +3944,7 @@ let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   else if(s.phase&&s.phase.total){pct=100*s.phase.done/s.phase.total}
   else if(s.state==='scanning'||s.state==='running'){indet=true}
   setBar('bar','fill','pct',pct,indet);
-  const LBL=(gd&&!gd.final&&gd.steps.length)?('Guided &middot; step '+gd.i+' of '+gd.steps.length+': '+esc(gd.steps[gd.i-1]||'')):gd&&jobKind==='guided'?'Guided':{photos:'Apple Photos',similar:'Find similar photos',similar_apply:'Set aside',undo:'Undo',consolidate:'Merge similar folders',assess:'Check my files',fix:'Part 1 Fix',convert:'Part 4 Convert',cleanup:'Part 3 Clean up',merge:'Part 2 Merge'}[jobKind]||'';
+  const LBL=(gd&&!gd.final&&gd.steps.length)?('Guided &middot; step '+gd.i+' of '+gd.steps.length+': '+esc(gd.steps[gd.i-1]||'')):gd&&jobKind==='guided'?'Guided':{health:'Library health',formats_apply:'Set aside',photos:'Apple Photos',similar:'Find similar photos',similar_apply:'Set aside',undo:'Undo',consolidate:'Merge similar folders',assess:'Check my files',fix:'Part 1 Fix',convert:'Part 4 Convert',cleanup:'Part 3 Clean up',merge:'Part 2 Merge'}[jobKind]||'';
   $('msg').innerHTML=(LBL?'<b>'+LBL+'</b> &middot; ':'')+(s.state==='error'?'<span class="err">'+esc(s.message)+'</span>':s.state==='done'?'<span class="ok">Finished.</span>':esc(s.message)+(s.done?` (${s.done.toLocaleString()} / ${s.total.toLocaleString()})`:''));
   const c=s.counts||{},done=s.done||0,nj=c['no-json']||0;
   $('tiles').innerHTML=liveTiles(s,c,done,nj);

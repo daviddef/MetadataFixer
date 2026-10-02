@@ -57,7 +57,7 @@ A page opens at `http://127.0.0.1:8765`. It is served only on your own computer.
 
 The longer explanations sit behind small **i** buttons: hover over one (or tap it on a phone) to read it. Each tab has a one-line description under its title. Warnings that matter, such as "(empties the source folders)", stay visible.
 
-The app has nine tabs: **Guided** (the easy way), **Fix** (metadata), **Merge** (folders), **Clean up** (`.json` files, junk, names, empty folders, similar folders), **Convert** (videos), **Photos** (send to Apple Photos), **Similar** (the same photo saved twice), **History** (past runs, reports and undo) and **Help** (this guide, support and the disclaimer).
+The app has ten tabs: **Guided** (the easy way), **Fix** (metadata), **Merge** (folders), **Clean up** (`.json` files, junk, names, empty folders, similar folders), **Convert** (videos), **Health** (library health, duplicate formats and statistics), **Photos** (send to Apple Photos), **Similar** (the same photo saved twice), **History** (past runs, reports and undo) and **Help** (this guide, support and the disclaimer).
 
 ## The warning sign
 
@@ -169,6 +169,23 @@ Before you start, in **Photos > Settings > iCloud**, turn on **iCloud Photos** a
 3. Keep the external drive and your Takeout zips until you have checked everything in Photos and iCloud.
 
 **Important:** Photos has no undo for imports and Backstory cannot take photos back out of Photos. Sending to Photos needs permission: the first time, macOS asks if Backstory may control Photos (allow it in System Settings > Privacy & Security > Automation).
+
+## Library health (Health tab)
+
+The **Health** tab checks a finished library (a folder, or several) and gives it a **score out of 100**, with a plain-language list of what is wrong and a button to the tab that fixes it. It only reads. Each time you run it, the result is saved, so you see a **score history** and whether the library is getting healthier or messier.
+
+What it looks for:
+- **Space and duplicates:** duplicate files (same size and content at both ends), the same file saved in several formats, temporary and partial files (`.part`, `.tmp`, `.bak`), leftover set-aside folders, `.json` files, junk and cache files, and an estimate of **possible wasted space**.
+- **Folders:** empty folders, look-alike names (`Japan 2025`, `delete-Japan 2025`), `(1)` and `copy` markers, stray spaces, folders that differ only by capital letters, and very long paths.
+- **Files and ghosts:** empty (0-byte) files, files with the wrong extension (a `.jpg` that is really a `.heic`), old-format videos, and `.json` files whose photo is gone.
+- **iCloud and missing files:** files that are only in iCloud Drive and not on this disk (placeholders), which cannot be backed up, merged or imported until downloaded. If you add a Photos library, Backstory also reads a copy of its database for **experimental hints** such as items not yet uploaded to iCloud. Apple does not document that database, so treat those numbers as hints.
+- **Dates and metadata:** photos with no date inside and photos in the wrong "Photos from YYYY" folder. A quick check reads a sample of about 400 files; tick **Deep check** to read up to 40,000.
+
+**The same file in different formats.** When a video is converted and the old copy is kept, you end up with `IMG_1.mov`, `IMG_1.mp4` and `IMG_1.avi`. Backstory finds files with the same name in the same folder that are the same video (their lengths match within about a second) or the same picture in different formats (for example HEIC and JPEG). A Live Photo (a still plus a video) is not counted. Each group shows the formats, sizes, lengths and resolutions, keeps the best one (preferring MP4, then the largest picture) and ticks the older ones. **Set aside the ticked older formats** moves them into an `_older_formats` folder. Nothing is deleted, and you can undo it from History.
+
+**Statistics.** Library size by file type, photos and videos by year, the biggest folders and files, RAW photos (how many have a JPEG or HEIC with the same name, and how much space each takes; Backstory never deletes RAW files), Live Photos and the most common cameras.
+
+**Check again automatically.** Choose every hour, 6 hours or day. This runs only while Backstory is open and never while another job is running. A health check that runs in the background all the time, even when the app is closed, is on the roadmap.
 
 ## Albums and Google-edited copies
 

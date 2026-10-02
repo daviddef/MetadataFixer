@@ -936,7 +936,7 @@ def probe_video(path):
     except ValueError:
         dur = 0.0
     return {"vcodec": v and v.get("codec_name"), "acodec": a and a.get("codec_name"),
-            "duration": dur, "has_video": v is not None}
+            "duration": dur, "has_video": v is not None, "w": (v or {}).get("width") or 0, "h": (v or {}).get("height") or 0}
 
 
 def is_live_video(path):
@@ -2126,6 +2126,17 @@ def assess(entries, dest="", progress=None, should_stop=None, sample_n=120):
             vids.add(key)
     F["live_pairs"] = len(stills & vids)
     F["edited_pairs"] = len(find_edited_pairs([m[0] for m in media]))
+    fdir = {}
+    raw_pairs = 0
+    for vp, sz, crc, src, mem in media:
+        fdir.setdefault(str(vp.parent), []).append((vp.name, sz))
+    for d_, ents in fdir.items():
+        stems = {}
+        for n_, sz_ in ents:
+            stems.setdefault(os.path.splitext(n_)[0].lower(), set()).add(os.path.splitext(n_)[1].lower())
+        raw_pairs += sum(1 for ex_ in stems.values() if ex_ & RAW_EXT and ex_ & {".jpg", ".jpeg", ".heic", ".heif"})
+    F["raw_pairs"] = raw_pairs
+    F["format_groups"] = len(find_format_duplicates({d_: e_ for d_, e_ in fdir.items() if len(e_) > 1}, False, cap=100000))
     # Matching against Google's info files (by name only)
     say("Matching photos to their info files", 0, 0)
     stop()
@@ -2688,6 +2699,391 @@ def applescript_import(files, album=""):
         lines.append("  import fl skip check duplicates true")
     lines.append("end tell")
     return "\n".join(lines)
+
+
+def _pl(n, word):
+    return f"{int(n):,} {word}" + ("" if int(n) == 1 else "s")
+
+
+def fmt_bytes(b):
+    return f"{b / 1e9:.2f} GB" if b > 1e9 else f"{b / 1e6:.1f} MB" if b > 1e6 else f"{round(b / 1e3)} KB"
+
+
+# ---- Library health: space waste, folder problems, ghosts, duplicate formats and useful statistics ---------------
+FORMAT_VIDEO_EXT = VIDEO_EXT | {".flv", ".vob", ".webm", ".ts"}
+HEALTH_LEFTOVER_DIRS = ("_original_videos", "_duplicates", "_similar_set_aside", "_merge_conflicts", "_unrecognised", "_older_formats")
+_TEMP_SUFFIX = (".part", ".tmp", ".temp", ".bak", ".crdownload", ".download")
+
+
+def find_format_duplicates(files_by_dir, probe=True, progress=None, should_stop=None, cap=600):
+    """Same picture or video saved in several formats next to each other (IMG_1.mov, IMG_1.mp4, IMG_1.avi...).
+    files_by_dir: {dir: [(name, size)]}. A Live Photo (a still plus a video) is not a duplicate. Returns groups, best first."""
+    stop = should_stop or (lambda: None)
+    cands = []
+    for d, items in files_by_dir.items():
+        by = {}
+        for n, sz in items:
+            stem, ext = os.path.splitext(n)
+            ext = ext.lower()
+            if ext in FORMAT_VIDEO_EXT:
+                by.setdefault(("video", stem.lower()), []).append((n, sz, ext))
+            elif ext in IMAGE_EXT:
+                by.setdefault(("image", stem.lower()), []).append((n, sz, ext))
+        for (fam, stem), mem in by.items():
+            if len({m[2] for m in mem} - ({".jpeg"} if {".jpg", ".jpeg"} <= {m[2] for m in mem} else set())) >= 2:
+                cands.append((d, fam, stem, mem))
+    groups = []
+    for k, (d, fam, stem, mem) in enumerate(cands[:cap * 4], 1):
+        stop()
+        if progress and k % 20 == 0:
+            progress("Comparing formats", k, len(cands))
+        members = []
+        for n, sz, ext in mem:
+            info = {"path": os.path.join(d, n), "name": n, "ext": ext, "size": sz, "duration": 0.0, "w": 0, "h": 0}
+            if fam == "video" and probe and shutil.which("ffprobe"):
+                pv = probe_video(info["path"]) or {}
+                info["duration"], info["w"], info["h"] = pv.get("duration") or 0.0, pv.get("w") or 0, pv.get("h") or 0
+            members.append(info)
+        if fam == "video" and probe:
+            durs = [m["duration"] for m in members if m["duration"]]
+            if durs and max(durs) - min(durs) > 1.5:
+                continue                                    # different lengths: not the same video
+        if fam == "video":
+            members.sort(key=lambda m: (m["ext"] not in (".mp4", ".m4v"), -(m["w"] * m["h"]), -m["size"], m["name"]))
+        else:
+            members.sort(key=lambda m: (m["ext"] not in (".heic", ".heif", ".png"), -m["size"], m["name"]))
+        groups.append({"kind": fam, "dir": d, "stem": stem, "members": members})
+        if len(groups) >= cap:
+            break
+    return groups
+
+
+def health_scan(roots, deep=False, progress=None, should_stop=None, exif_cap=40000):
+    """A read-only look at one or more library folders. Returns {"findings", "stats", "formats", "score", "parts", ...}."""
+    import random
+    from collections import Counter
+    stop = should_stop or (lambda: None)
+    say = progress or (lambda *a: None)
+    files, dirs_info = [], {}
+    by_dir = {}
+    ext_n, ext_b = Counter(), Counter()
+    year_n = Counter()
+    F = []                                           # findings
+    junk = zero = temp = ghosts_icloud = dataless = longpath = 0
+    junk_b = temp_b = 0
+    leftovers = {}
+    legacy = {"n": 0, "bytes": 0}
+    paren_dirs, space_dirs, long_paths, case_clash = [], [], [], []
+    nfiles = 0
+    biggest = []
+    folder_bytes = Counter()
+    roots = [Path(r) for r in roots]
+    for root in roots:
+        for dp, dns, fns in os.walk(root, followlinks=False):
+            stop()
+            base = os.path.basename(dp)
+            if base in HEALTH_LEFTOVER_DIRS:
+                size = 0
+                for d2, _, f2 in os.walk(dp):
+                    for n in f2:
+                        try:
+                            size += os.path.getsize(os.path.join(d2, n))
+                        except OSError:
+                            pass
+                leftovers[dp] = size
+                dns[:] = []
+                continue
+            dns[:] = [d for d in dns if not (os.path.islink(os.path.join(dp, d)) or is_bundle(d))]
+            low = [d.casefold() for d in dns]
+            if len(set(low)) != len(low):
+                case_clash.append(dp)
+            for d in dns:
+                if PAREN_RE.search(d) or COPY_RE.search(d):
+                    paren_dirs.append(os.path.join(dp, d))
+                if d != d.strip() or "  " in d:
+                    space_dirs.append(os.path.join(dp, d))
+            entries = []
+            for n in fns:
+                p = os.path.join(dp, n)
+                try:
+                    st = os.stat(p, follow_symlinks=False)
+                except OSError:
+                    continue
+                nfiles += 1
+                if nfiles % 3000 == 0:
+                    say("Reading your library", nfiles, 0)
+                sz = st.st_size
+                ext = os.path.splitext(n)[1].lower()
+                entries.append((n, sz))
+                folder_bytes[dp] += sz
+                if len(p) > 230:
+                    long_paths.append(p)
+                if n.startswith(".") and n.endswith(".icloud"):
+                    ghosts_icloud += 1
+                    continue
+                if n.startswith("._") or n.lower() in JUNK_NAMES or ext in (".ithmb", ".thm") or n.lower() in ("picasa.ini", ".picasa.ini"):
+                    junk += 1
+                    junk_b += sz
+                    continue
+                if n.lower().endswith(_TEMP_SUFFIX) or n.endswith("~"):
+                    temp += 1
+                    temp_b += sz
+                    continue
+                if sz == 0:
+                    zero += 1
+                    continue
+                if getattr(st, "st_flags", 0) & 0x40000000 or (sz > 0 and getattr(st, "st_blocks", 1) == 0 and sys.platform == "darwin"):
+                    dataless += 1                       # iCloud Drive / File Provider file that is not on this disk
+                if ext in MEDIA_EXT or ext in FORMAT_VIDEO_EXT:
+                    ext_n[ext] += 1
+                    ext_b[ext] += sz
+                    year_n[time.strftime("%Y", time.localtime(st.st_mtime))] += 1
+                    biggest.append((sz, p))
+                    if len(biggest) > 400:
+                        biggest.sort(reverse=True)
+                        del biggest[20:]
+                    files.append((p, sz, ext, st.st_mtime))
+                    if ext in (".avi", ".mpg", ".mpeg", ".wmv", ".3gp", ".flv", ".mkv", ".mts", ".m2ts", ".vob"):
+                        legacy["n"] += 1
+                        legacy["bytes"] += sz
+            by_dir[dp] = entries
+    biggest.sort(reverse=True)
+    total_media = len(files)
+    total_bytes = sum(f[1] for f in files)
+    # empty folders (a folder is empty when it and everything below it holds no files)
+    empty = []
+    for root in roots:
+        for dp, dns, fns in os.walk(root, topdown=False, followlinks=False):
+            if os.path.basename(dp) in HEALTH_LEFTOVER_DIRS or Path(dp) == root:
+                continue
+            try:
+                if not os.listdir(dp):
+                    empty.append(dp)
+                elif all(f.lower() in JUNK_NAMES or f.startswith("._") for f in os.listdir(dp)):
+                    empty.append(dp)
+            except OSError:
+                pass
+    # exact-ish duplicates: same size, then the first and last 64 KB
+    say("Looking for duplicate files", 0, 0)
+    by_size = {}
+    for p, sz, ext, mt in files:
+        if sz > 0:
+            by_size.setdefault(sz, []).append(p)
+    dup_n = dup_b = 0
+    cands = [g for g in by_size.values() if len(g) > 1]
+    done = 0
+    for g in cands[:30000]:
+        stop()
+        h = {}
+        for p in g:
+            try:
+                with open(p, "rb") as fh:
+                    head = fh.read(65536)
+                    fh.seek(max(0, os.path.getsize(p) - 65536))
+                    tail = fh.read(65536)
+                h.setdefault(hashlib.sha1(head + tail).hexdigest(), []).append(p)
+            except OSError:
+                pass
+            done += 1
+        for lst in h.values():
+            if len(lst) > 1:
+                dup_n += len(lst) - 1
+                dup_b += os.path.getsize(lst[0]) * (len(lst) - 1)
+        if done % 400 == 0:
+            say("Looking for duplicate files", done, sum(len(x) for x in cands))
+    # RAW next to a JPEG/HEIC with the same name
+    raw_pairs = raw_pair_raw_b = raw_pair_jpg_b = 0
+    raw_total = raw_only = 0
+    raw_total_b = live_pairs = 0
+    for d, entries in by_dir.items():
+        stems = {}
+        for n, sz in entries:
+            stem, ext = os.path.splitext(n)
+            stems.setdefault(stem.lower(), []).append((ext.lower(), sz))
+        for stem, lst in stems.items():
+            exts = {e for e, _ in lst}
+            if ".mov" in exts and exts & {".heic", ".heif", ".jpg", ".jpeg"}:
+                live_pairs += 1
+            raws = [x for x in lst if x[0] in RAW_EXT]
+            flat = [x for x in lst if x[0] in (".jpg", ".jpeg", ".heic", ".heif")]
+            raw_total += len(raws)
+            raw_total_b += sum(sz for _, sz in raws)
+            if raws and flat:
+                raw_pairs += 1
+                raw_pair_raw_b += sum(sz for _, sz in raws)
+                raw_pair_jpg_b += sum(sz for _, sz in flat)
+            elif raws:
+                raw_only += 1
+    # duplicate formats
+    say("Looking for the same file in different formats", 0, 0)
+    fdir = {d: [(n, sz) for n, sz in e if os.path.splitext(n)[1].lower() in (FORMAT_VIDEO_EXT | IMAGE_EXT)] for d, e in by_dir.items()}
+    fdir = {d: e for d, e in fdir.items() if len(e) > 1}
+    formats = find_format_duplicates(fdir, True, lambda m, a, b: say(m, a, b), stop)
+    fmt_waste = sum(m["size"] for g in formats for m in g["members"][1:])
+    # orphan info files
+    json_n = json_b = orphan = 0
+    media_names = set()
+    for d, entries in by_dir.items():
+        for n, sz in entries:
+            if os.path.splitext(n)[1].lower() in MEDIA_EXT:
+                media_names.add(n.lower())
+    for d, entries in by_dir.items():
+        for n, sz in entries:
+            if n.lower().endswith(".json"):
+                json_n += 1
+                json_b += sz
+                key = json_key(Path(n))
+                if Path(key).suffix in MEDIA_EXT and key not in media_names and DUP_RE.sub("", key) not in media_names:
+                    orphan += 1
+    sim = find_similar_folders([str(r) for r in roots], False) if not any(inside_photos_library(r) for r in roots) else []
+    # deep: read the metadata of the files (or a sample)
+    deep_stats = None
+    if files and shutil.which("exiftool"):
+        pool = [f for f in files if f[2] in MEDIA_EXT]
+        random.seed(11)
+        pick = pool if (deep and len(pool) <= exif_cap) else random.sample(pool, min(len(pool), exif_cap if deep else 400))
+        mism = no_date = no_gps = yr_mismatch = n_read = 0
+        models = Counter()
+        mism_list = []
+        for k in range(0, len(pick), 300):
+            stop()
+            say("Reading photo metadata", min(k, len(pick)), len(pick))
+            fd, arg = tempfile.mkstemp(suffix=".args")
+            os.close(fd)
+            try:
+                Path(arg).write_text("\n".join(f[0] for f in pick[k:k + 300]), encoding="utf-8")
+                r = subprocess.run(["exiftool", "-charset", "filename=utf8", "-j", "-n", "-FileTypeExtension", "-DateTimeOriginal", "-CreateDate", "-GPSLatitude", "-Model", "-@", arg],
+                                   capture_output=True, text=True)
+                for it in json.loads(r.stdout or "[]"):
+                    n_read += 1
+                    p = it["SourceFile"]
+                    real = (it.get("FileTypeExtension") or "").lower()
+                    cur = os.path.splitext(p)[1].lower().lstrip(".")
+                    cur = {"jpeg": "jpg", "tiff": "tif", "heif": "heic", "m4v": "mp4"}.get(cur, cur)
+                    real = {"jpeg": "jpg", "tiff": "tif", "heif": "heic", "m4v": "mp4"}.get(real, real)
+                    if real and cur != real and not (cur in ("mov", "mp4") and real in ("mov", "mp4")):
+                        mism += 1
+                        if len(mism_list) < 30:
+                            mism_list.append("%s is really .%s" % (os.path.basename(p), real))
+                    d = str(it.get("DateTimeOriginal") or it.get("CreateDate") or "")
+                    if not d or d.startswith("0000"):
+                        no_date += 1
+                    else:
+                        m = re.search(r"Photos from (\d{4})", p)
+                        if m and d[:4].isdigit() and d[:4] != m.group(1):
+                            yr_mismatch += 1
+                    if it.get("GPSLatitude") is None:
+                        no_gps += 1
+                    if it.get("Model"):
+                        models[str(it["Model"])] += 1
+            except (ValueError, OSError):
+                pass
+            finally:
+                Path(arg).unlink(missing_ok=True)
+        deep_stats = {"read": n_read, "pool": len(pool), "mismatch": mism, "no_date": no_date, "no_gps": no_gps, "year_mismatch": yr_mismatch,
+                      "models": models.most_common(5), "mism_list": mism_list, "sampled": not deep or len(pool) > exif_cap}
+    # ---------------------------------------------------------------- findings
+    def add(fid, cat, sev, title, detail, count=0, nbytes=0, tab="", label="", extra=None):
+        F.append({"id": fid, "cat": cat, "sev": sev, "title": title, "detail": detail, "count": count, "bytes": nbytes, "tab": tab, "label": label, **(extra or {})})
+    if dup_n:
+        add("dups", "space", "warn", "Duplicate files", "%s of the same file were found (matching size and content at both ends). Keeping one copy of each would free the space." % f"{dup_n:,}", dup_n, dup_b, "merge", "Open Merge")
+    if formats:
+        add("formats", "space", "warn", "The same file in more than one format", "%s of files share a name but are saved in different formats (like IMG_1.mov, IMG_1.mp4 and IMG_1.avi). This often happens when a video is converted and the old copy is kept. Review them below." % _pl(len(formats), "group"), len(formats), fmt_waste, "", "Review below")
+    lo = sum(leftovers.values())
+    if leftovers:
+        add("leftovers", "space", "info", "Set-aside and leftover folders", "%s such as _original_videos, _duplicates and _similar_set_aside hold %s. Once you have checked them you can delete them yourself." % (_pl(len(leftovers), "folder"), fmt_bytes(lo)), len(leftovers), lo)
+    if temp:
+        add("temp", "space", "warn", "Temporary and partial files", "%s ending in .part, .tmp, .bak or ~ (often left by an interrupted conversion or download)." % _pl(temp, "file"), temp, temp_b, "clean", "Open Clean up")
+    if junk:
+        add("junk", "space", "info", "Junk and cache files", "%s system leftovers such as .DS_Store, Thumbs.db and thumbnail caches." % f"{junk:,}", junk, junk_b, "clean", "Open Clean up")
+    if json_n:
+        add("json", "space", "info", "Google .json info files", "%s taking %s. Once your photos carry their own dates and locations you can remove these." % (_pl(json_n, "file"), fmt_bytes(json_b)), json_n, json_b, "clean", "Open Clean up")
+    if orphan:
+        add("orphan", "files", "info", "Info files with no photo", "%s describe a photo that is not in this library." % _pl(orphan, ".json file"), orphan, 0, "clean", "Open Clean up")
+    if legacy["n"]:
+        add("legacy", "files", "info", "Old-format videos", "%s videos in formats that play badly on phones and cannot go into Apple Photos." % f"{legacy['n']:,}", legacy["n"], legacy["bytes"], "convert", "Open Convert")
+    if zero:
+        add("zero", "files", "bad", "Empty files (0 bytes)", "%s contain nothing. They are ghosts: they show a name but no picture." % _pl(zero, "file"), zero, 0, "clean", "Open Clean up")
+    if ghosts_icloud or dataless:
+        add("cloud", "cloud", "bad", "Files that are only in iCloud, not on this disk", "%s files are placeholders (iCloud Drive keeps the name but not the picture here). They cannot be backed up, merged or imported until they are downloaded: in Finder, right-click the folder and choose Download Now." % f"{ghosts_icloud + dataless:,}", ghosts_icloud + dataless)
+    if deep_stats and deep_stats["mismatch"]:
+        add("mismatch", "files", "warn", "Files with the wrong extension", "%s%s files are named one thing but are really another (for example a .jpg that is really a .heic)." % (f"{deep_stats['mismatch']:,}", " of the %s checked" % f"{deep_stats['read']:,}" if deep_stats["sampled"] else ""), deep_stats["mismatch"], 0, "clean", "Open Clean up", {"examples": deep_stats["mism_list"][:8]})
+    if deep_stats and deep_stats["read"]:
+        pct = round(100 * deep_stats["no_date"] / deep_stats["read"])
+        if pct >= 2:
+            add("nodate", "meta", "warn" if pct < 20 else "bad", "Photos with no date inside", "About %d%% of the files checked have no date taken, so apps cannot place them on your timeline." % pct, deep_stats["no_date"], 0, "guided", "Open Guided")
+        if deep_stats["year_mismatch"]:
+            add("yearmis", "meta", "info", "Photos in the wrong year folder", "%s files sit in a 'Photos from YYYY' folder that does not match the year inside the photo." % f"{deep_stats['year_mismatch']:,}", deep_stats["year_mismatch"])
+    if empty:
+        add("empty", "folders", "info", "Empty folders", "%s hold no files." % _pl(len(empty), "folder"), len(empty), 0, "clean", "Open Clean up")
+    if sim:
+        add("similar_folders", "folders", "warn", "Look-alike folder names", "%s of folders look like the same thing under different names (for example %s)." % (_pl(len(sim), "group"), ", ".join(m["name"] for m in sim[0]["members"][:3])), len(sim), 0, "clean", "Open Clean up")
+    if paren_dirs:
+        add("paren", "folders", "info", "Folders named like 'Folder (1)' or 'Folder copy'", "%s carry copy markers." % _pl(len(paren_dirs), "folder"), len(paren_dirs), 0, "clean", "Open Clean up")
+    if space_dirs:
+        add("spaces", "folders", "info", "Folder names with stray spaces", "%s have leading, trailing or doubled spaces." % _pl(len(space_dirs), "folder"), len(space_dirs), 0, "clean", "Open Clean up")
+    if case_clash:
+        add("case", "folders", "warn", "Folders that differ only by capital letters", "%s places hold folders like 'photos' and 'Photos' side by side. They look the same on a Mac and cause trouble on other systems." % len(case_clash), len(case_clash), 0, "merge", "Open Merge")
+    if long_paths:
+        add("longpath", "folders", "info", "Very long file paths", "%s have a path over 230 characters, which some apps and drives cannot handle." % _pl(len(long_paths), "file"), len(long_paths))
+    # ---------------------------------------------------------------- score: each area is 100, less penalties
+    parts = {}
+    waste = dup_b + fmt_waste + temp_b
+    parts["space"] = max(0, 100 - min(60, round(100 * waste / max(1, total_bytes) * 2)) - (10 if leftovers and lo > 0.05 * max(1, total_bytes) else 0))
+    fol_issues = len(empty) + len(sim) * 3 + len(paren_dirs) + len(case_clash) * 3 + len(space_dirs)
+    parts["folders"] = max(0, 100 - min(70, round(100 * fol_issues / max(30, len(by_dir)))))
+    parts["files"] = max(0, 100 - min(40, zero * 4) - min(30, round(100 * (deep_stats["mismatch"] / max(1, deep_stats["read"])) * 3) if deep_stats else 0) - min(20, round(100 * legacy["n"] / max(1, total_media))))
+    parts["cloud"] = max(0, 100 - min(100, round(100 * (ghosts_icloud + dataless) / max(1, total_media + ghosts_icloud) * 2)))
+    if deep_stats and deep_stats["read"]:
+        parts["metadata"] = max(0, 100 - min(80, round(100 * deep_stats["no_date"] / deep_stats["read"] * 1.5)))
+    score = round(sum(parts.values()) / len(parts)) if parts else 100
+    top_folders = [(os.path.relpath(d, str(roots[0])) if roots and str(roots[0]) in d else d, b) for d, b in folder_bytes.most_common(8)]
+    stats = {"files": total_media, "bytes": total_bytes, "by_ext": [(e, ext_n[e], ext_b[e]) for e, _ in ext_n.most_common(14)], "years": sorted(year_n.items()),
+             "folders": len(by_dir), "biggest": [(os.path.basename(p), p, sz) for sz, p in biggest[:10]], "top_folders": top_folders,
+             "raw": {"total": raw_total, "bytes": raw_total_b, "paired": raw_pairs, "paired_raw_bytes": raw_pair_raw_b, "paired_jpg_bytes": raw_pair_jpg_b, "raw_only": raw_only},
+             "live_pairs": live_pairs,
+             "deep": deep_stats, "waste_bytes": waste, "dup_n": dup_n, "dup_bytes": dup_b, "format_waste": fmt_waste}
+    order = {"bad": 0, "warn": 1, "info": 2}
+    F.sort(key=lambda f: (order.get(f["sev"], 3), -f["bytes"], -f["count"]))
+    return {"findings": F, "stats": stats, "formats": formats, "score": score, "parts": parts, "deep": bool(deep), "roots": [str(r) for r in roots]}
+
+
+def photos_db_health(lib):
+    """Experimental, read-only hints from an Apple Photos library's own database (a copy of it is read). Apple does not document
+    this database, so treat the numbers as hints."""
+    import sqlite3
+    lib = Path(lib)
+    db = lib / "database" / "Photos.sqlite"
+    if not db.exists():
+        return {"ok": False, "why": "no database folder found"}
+    tmp = tempfile.mkdtemp(prefix="backstory_photosdb_")
+    try:
+        for suf in ("", "-wal", "-shm"):
+            src = Path(str(db) + suf)
+            if src.exists():
+                shutil.copy2(src, Path(tmp) / ("Photos.sqlite" + suf))
+        con = sqlite3.connect("file:%s?mode=ro" % (Path(tmp) / "Photos.sqlite"), uri=True)
+        cols = {r[1] for r in con.execute("PRAGMA table_info(ZASSET)")}
+        if not cols:
+            return {"ok": False, "why": "this Photos version stores things differently"}
+        where = "WHERE ZTRASHEDSTATE = 0" if "ZTRASHEDSTATE" in cols else ""
+        total = con.execute("SELECT COUNT(*) FROM ZASSET " + where).fetchone()[0]
+        out = {"ok": True, "total": total}
+        if "ZCLOUDLOCALSTATE" in cols:
+            cond = (where + " AND " if where else "WHERE ") + "ZCLOUDLOCALSTATE = 0"
+            out["not_in_cloud"] = con.execute("SELECT COUNT(*) FROM ZASSET " + cond).fetchone()[0]
+        if "ZDIRECTORY" in cols and "ZFILENAME" in cols:
+            missing = 0
+            for d, f in con.execute("SELECT ZDIRECTORY, ZFILENAME FROM ZASSET " + where):
+                if d and f and not (lib / "originals" / d / f).exists():
+                    missing += 1
+            out["original_not_on_disk"] = missing
+        con.close()
+        return out
+    except Exception as ex:
+        return {"ok": False, "why": str(ex)[:120]}
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def main():

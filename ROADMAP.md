@@ -72,6 +72,8 @@ Most Takeout tools are one-shot scripts: they fix dates and stop, with no previe
 
 
 ## Ideas under consideration
+- See `BACKLOG.md` for pricing/licensing notes and more ideas.
+- **Always-on library health:** a background agent that rechecks and notifies.
 - **Verify uploads to iCloud** before sending the next Photos batch, instead of waiting on free space (needs reading Photos' own database, which Apple does not document).
 - **Set up a Photos library on an external drive** with a guided checklist.
 - **Merge Photos libraries with albums and edits** (via an export step) rather than originals only.
