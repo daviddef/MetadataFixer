@@ -1981,6 +1981,246 @@ def mark_zip_done(dest, z):
         fh.write(json.dumps({"zip": zip_key(z)}) + "\n")
 
 
+# ---- Check my files: a read-only look at real data, so the app can recommend what to do --------------------
+def assess(entries, dest="", progress=None, should_stop=None, sample_n=120):
+    """Facts about the user's Takeout (zip files and/or folders). Reads names and sizes (zip tables of contents are read
+    without unpacking), then a small random sample of files for their existing metadata. Changes nothing."""
+    import random
+    import tempfile
+    from collections import Counter
+    from pathlib import PurePosixPath
+    stop = should_stop or (lambda: None)
+    say = progress or (lambda *a: None)
+    zips, folders = split_sources(entries)
+    F = {"zips": len(zips), "folders": len(folders), "media": 0, "media_bytes": 0, "json": 0, "by_ext": {}, "wrapper": False,
+         "junk": 0, "zero_media": 0, "zero_other": 0, "extless": 0, "legacy": {}, "legacy_n": 0, "legacy_bytes": 0,
+         "live_pairs": 0, "dup_n": 0, "dup_bytes": 0, "dup_exact": bool(zips), "empty_dirs": 0, "tidy_dirs": 0,
+         "matched": 0, "unmatched": 0, "name_date_candidates": 0, "bad_zips": [], "zip_gaps": [], "zip_bytes": 0, "biggest_zip": 0,
+         "sample": None, "free": None, "need": None, "no_ext_bogus": 0}
+    items = []                       # (virtual path, size, crc or None, source, member)
+    jsons = []                       # (virtual path, source, member)
+    plan = zip_plan(zips) if zips else []
+    for z in plan:
+        if z["error"]:
+            F["bad_zips"].append((z["name"], z["error"]))
+    nums = sorted(int(m.group(1)) for z in zips for m in [re.search(r"-(\d{3})\\.zip$", z.name)] if m)
+    if nums:
+        F["zip_gaps"] = [n for n in range(nums[0], nums[-1] + 1) if n not in nums]
+    for z in zips:
+        stop()
+        say("Reading the contents of %s" % z.name, 0, 0)
+        try:
+            F["zip_bytes"] += z.stat().st_size
+            F["biggest_zip"] = max(F["biggest_zip"], z.stat().st_size)
+            with zipfile.ZipFile(z) as zf:
+                for i in zf.infolist():
+                    if i.is_dir():
+                        continue
+                    parts = _safe_member(i.filename)
+                    if parts:
+                        items.append((PurePosixPath(*parts), i.file_size, i.CRC, z, i.filename))
+        except (zipfile.BadZipFile, OSError):
+            continue
+    nfold = 0
+    for fo in folders:
+        for dp, dns, fns in os.walk(fo, followlinks=False):
+            stop()
+            dns[:] = [d for d in dns if not (os.path.islink(os.path.join(dp, d)) or is_bundle(d))]
+            nfold += 1
+            if nfold % 200 == 0:
+                say("Looking through %s" % Path(fo).name, 0, 0)
+            if not fns and not dns:
+                F["empty_dirs"] += 1
+            for d in dns:
+                if re.search(r" \\(\d+\\)$| copy( \d+)?$|  +", d):
+                    F["tidy_dirs"] += 1
+            for n in fns:
+                p = Path(dp) / n
+                try:
+                    sz = p.stat().st_size
+                except OSError:
+                    continue
+                items.append((PurePosixPath(*p.parts[1:]) if p.is_absolute() else PurePosixPath(*p.parts), sz, None, p, ""))
+    media = []
+    for vp, sz, crc, src, mem in items:
+        n = vp.name
+        low = n.lower()
+        ext = vp.suffix.lower()
+        if any(x.lower() in ("takeout", "google photos") for x in vp.parts[:2]):
+            F["wrapper"] = True
+        if low.endswith(".json"):
+            F["json"] += 1
+            jsons.append((vp, src, mem))
+            continue
+        if n.startswith("._") or low in JUNK_NAMES or ext in (".ithmb", ".thm") or low in ("picasa.ini", ".picasa.ini"):
+            F["junk"] += 1
+            continue
+        if SAFESAVE_RE.search(n) and sz == 0:
+            F["junk"] += 1
+            continue
+        if ext in MEDIA_EXT or "." not in n or bogus_ext(n):
+            if sz == 0:
+                F["zero_media"] += 1
+                continue
+            if ext not in MEDIA_EXT:
+                F["extless"] += 1
+            else:
+                F["by_ext"][ext] = F["by_ext"].get(ext, 0) + 1
+            F["media"] += 1
+            F["media_bytes"] += sz
+            media.append((vp, sz, crc, src, mem))
+            if ext in LEGACY_EXT:
+                d = F["legacy"].setdefault(ext, [0, 0])
+                d[0] += 1
+                d[1] += sz
+        elif sz == 0:
+            F["zero_other"] += 1
+    F["legacy_n"] = sum(v[0] for v in F["legacy"].values())
+    F["legacy_bytes"] = sum(v[1] for v in F["legacy"].values())
+    # Live Photo pairs: a still and a video with the same name in the same folder
+    stills, vids = set(), set()
+    for vp, *_ in media:
+        e = vp.suffix.lower()
+        key = (str(vp.parent), vp.stem.lower())
+        if e in (".heic", ".jpg", ".jpeg", ".heif"):
+            stills.add(key)
+        elif e in (".mov", ".mp4"):
+            vids.add(key)
+    F["live_pairs"] = len(stills & vids)
+    # Matching against Google's info files (by name only)
+    say("Matching photos to their info files", 0, 0)
+    stop()
+    idx = build_index([vp for vp, _, _ in jsons]) if jsons else None
+    matched_paths = {}
+    for k, (vp, sz, crc, src, mem) in enumerate(media):
+        if k % 2000 == 0:
+            stop()
+        if vp.suffix.lower() not in MEDIA_EXT:
+            continue                                  # no file type yet: counted as "missing file type"
+        if idx is not None:
+            sc, how = find_sidecar(vp, idx)
+            if sc:
+                F["matched"] += 1
+                matched_paths[str(vp)] = sc[0] if how == "tree-ambiguous" else sc
+                continue
+        F["unmatched"] += 1
+        if date_from_name(vp.name):
+            F["name_date_candidates"] += 1
+    # Exact duplicates
+    say("Looking for exact duplicates", 0, 0)
+    stop()
+    by = {}
+    if zips:
+        for vp, sz, crc, src, mem in media:
+            if sz and crc is not None and isinstance(src, Path) and src.suffix.lower() == ".zip":
+                by.setdefault((sz, crc), []).append(sz)
+        for g in by.values():
+            if len(g) > 1:
+                F["dup_n"] += len(g) - 1
+                F["dup_bytes"] += g[0] * (len(g) - 1)
+    sized = {}
+    for vp, sz, crc, src, mem in media:
+        if not (isinstance(src, Path) and src.suffix.lower() == ".zip") and sz:
+            sized.setdefault(sz, []).append(src)
+    cands = [g for g in sized.values() if len(g) > 1]
+    done = 0
+    todo = sum(len(g) for g in cands)
+    for g in cands[:20000]:
+        stop()
+        h = {}
+        for p in g:
+            try:
+                with open(p, "rb") as fh:
+                    head = fh.read(65536)
+                    fh.seek(max(0, os.path.getsize(p) - 65536))
+                    tail = fh.read(65536)
+                h.setdefault(hashlib.sha1(head + tail).hexdigest(), []).append(p)
+            except OSError:
+                pass
+            done += 1
+            if done % 200 == 0:
+                say("Looking for exact duplicates", done, todo)
+        for lst in h.values():
+            if len(lst) > 1:
+                F["dup_n"] += len(lst) - 1
+                try:
+                    F["dup_bytes"] += os.path.getsize(lst[0]) * (len(lst) - 1)
+                except OSError:
+                    pass
+    # A small sample of real files: how many already have a date and a location, and what Google's info would add
+    cand = [m for m in media if m[0].suffix.lower() in MEDIA_EXT and m[0].suffix.lower() not in NO_WRITE_EXT and 0 < m[1] <= 60 * 1024 * 1024]
+    random.seed(7)
+    pick = random.sample(cand, min(sample_n, len(cand))) if cand else []
+    if pick and shutil.which("exiftool"):
+        tmp = tempfile.mkdtemp(prefix="metadatafixer_assess_")
+        S = {"n": 0, "has_date": 0, "has_gps": 0, "has_desc": 0, "with_json": 0, "add_date": 0, "add_gps": 0, "add_desc": 0}
+        try:
+            zfs = {}
+            for k, (vp, sz, crc, src, mem) in enumerate(pick, 1):
+                stop()
+                say("Sampling your files", k, len(pick))
+                try:
+                    if isinstance(src, Path) and src.suffix.lower() == ".zip" and mem:
+                        zf = zfs.get(src) or zfs.setdefault(src, zipfile.ZipFile(src))
+                        real = Path(tmp) / ("m%d%s" % (k, vp.suffix))
+                        with zf.open(mem) as a, open(real, "wb") as b:
+                            shutil.copyfileobj(a, b, 1 << 20)
+                    else:
+                        real = src
+                    ex = read_existing(real, vp.suffix.lower() in VIDEO_EXT)
+                except (OSError, KeyError, zipfile.BadZipFile):
+                    continue
+                S["n"] += 1
+                has_d = bool(ex.get("date")) and not str(ex.get("date")).startswith("0000")
+                has_g = ex.get("lat") is not None and ex.get("lon") is not None
+                has_t = bool(ex.get("desc"))
+                S["has_date"] += has_d
+                S["has_gps"] += has_g
+                S["has_desc"] += has_t
+                sc = matched_paths.get(str(vp))
+                if sc is not None:
+                    S["with_json"] += 1
+                    sv = next((j for j in jsons if j[0] == sc), None)
+                    try:
+                        if sv and isinstance(sv[1], Path) and sv[1].suffix.lower() == ".zip":
+                            with zipfile.ZipFile(sv[1]) as zf2:
+                                d = json.loads(zf2.read(sv[2]).decode("utf-8", "replace"))
+                        elif sv:
+                            d = load_json(sv[1])
+                        else:
+                            d = None
+                    except (OSError, KeyError, ValueError, zipfile.BadZipFile):
+                        d = None
+                    if d:
+                        cl = classify(d, vp.suffix.lower(), ex, True, "earlier")
+                        S["add_date"] += cl.get("date") in ("added", "replaced")
+                        S["add_gps"] += cl.get("gps") in ("added", "replaced")
+                        S["add_desc"] += cl.get("desc") in ("added", "replaced")
+            F["sample"] = S
+        finally:
+            for zf in zfs.values():
+                try:
+                    zf.close()
+                except Exception:
+                    pass
+            shutil.rmtree(tmp, ignore_errors=True)
+            try:
+                close_all()
+            except Exception:
+                pass
+    # Space
+    if dest:
+        probe = Path(dest).expanduser()
+        while not probe.exists() and probe != probe.parent:
+            probe = probe.parent
+        try:
+            F["free"] = shutil.disk_usage(probe).free
+        except OSError:
+            pass
+    F["need"] = F["media_bytes"]
+    return F
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("root", type=Path, help="folder containing all extracted 'Takeout N' folders")

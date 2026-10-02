@@ -29,7 +29,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.02-d"
+VERSION = "2026.10.02-e"
 class Cancelled(Exception):
     pass
 
@@ -1563,12 +1563,125 @@ def read_doc(name):
         return ""
 
 
+def build_recommendations(F, dest):
+    """Turn the facts about the user's files into a plain-language plan. Each recommendation says why, with real numbers."""
+    def n(x):
+        return f"{int(x):,}"
+    def pl(x, one, many):
+        return f"{int(x):,} " + (one if int(x) == 1 else many)
+    recs, extras, warns = [], [], []
+    media = F["media"]
+    S = F.get("sample") or {}
+    # --- warnings first
+    for name, err in F.get("bad_zips", []):
+        warns.append("%s could not be read (%s). It may be incomplete: download it again from Google Takeout." % (name, err))
+    if F.get("zip_gaps"):
+        warns.append("Your Takeout zip numbering skips %s. If you meant to include them, add the missing zip file%s." % (
+            ", ".join("%03d" % g for g in F["zip_gaps"][:8]), "s" if len(F["zip_gaps"]) > 1 else ""))
+    if F["zips"] and dest and F.get("free") is not None:
+        need = F["biggest_zip"] * 2 + F["media_bytes"]
+        if F["free"] < need:
+            warns.append("The Destination may be too small: the finished library needs about %s plus room to unpack your largest zip (%s), and only %s is free." % (
+                fmt_bytes(F["media_bytes"]), fmt_bytes(F["biggest_zip"] * 2), fmt_bytes(F["free"])))
+    elif not F["zips"] and dest and F.get("free") is not None and F["free"] < F["media_bytes"] * 1.05:
+        warns.append("The Destination may be too small: the copy needs about %s and %s is free." % (fmt_bytes(F["media_bytes"]), fmt_bytes(F["free"])))
+    if not dest:
+        warns.append("You have not chosen a Destination yet. Choose where the finished library should go (a new, empty folder) before running the plan.")
+    if F["zero_media"]:
+        warns.append("%s photos or videos are empty (0 bytes) and will be skipped." % n(F["zero_media"]))
+    if media == 0:
+        warns.append("No photos or videos were found in what you added. Check that you chose your Takeout zip files or the folders that hold them.")
+    plan = {"dedupe": True, "live": False, "name_dates": False, "fix_ext": False, "replace": True, "convert": False}
+    # --- restore metadata
+    if media:
+        pct = round(100 * F["matched"] / media) if media else 0
+        why = "%s of your %s photos and videos (%s%%) have a Google info file (.json) that holds the real date, location and caption." % (n(F["matched"]), n(media), pct)
+        if S.get("n"):
+            k = S["n"]
+            est = lambda key: round(S[key] / max(1, S["with_json"]) * F["matched"]) if S.get("with_json") else 0
+            why += " In a sample of %d of your files, %d%% had no date inside them and %d%% had no location; Google's info would add roughly %s dates, %s locations and %s captions across everything." % (
+                k, round(100 * (k - S["has_date"]) / k), round(100 * (k - S["has_gps"]) / k), n(est("add_date")), n(est("add_gps")), n(est("add_desc")))
+        recs.append({"id": "restore", "title": "Put the real dates, locations and captions back", "why": why, "risk": "safe", "on": True, "fixed": True})
+        if pct < 60 and F["matched"] < media:
+            warns.append("Only %s%% of your files found an info file. Their info files may be in Takeout zips you have not added yet. Add them and check again." % pct)
+    # --- dates from file names
+    if F["name_date_candidates"]:
+        plan["name_dates"] = True
+        recs.append({"id": "name_dates", "title": "Use the date in the file name where there is no info file", "risk": "safe", "on": True,
+                     "why": "%s photos and videos have no info file but have a date in their name (like IMG_20190704_123456). Only a missing date is filled in; an existing date is never changed." % n(F["name_date_candidates"])})
+    # --- duplicates
+    if F["dup_n"]:
+        recs.append({"id": "dedupe", "title": "Merge folders and copy duplicates once", "risk": "safe", "on": True,
+                     "why": "%s of the same photo %s found, taking %s. They will be copied once. Same-named folders from different zips merge into one." % (
+                         pl(F["dup_n"], "extra copy" if F["dup_exact"] else "likely extra copy", "extra copies" if F["dup_exact"] else "likely extra copies"), "was" if F["dup_n"] == 1 else "were", fmt_bytes(F["dup_bytes"]))})
+    else:
+        recs.append({"id": "dedupe", "title": "Merge same-named folders", "risk": "safe", "on": True,
+                     "why": "No exact duplicates were found, but every folder with the same name (like Photos from 2012) across your zips will still become one folder." if F["wrapper"] or F["zips"] > 1 else
+                            "No exact duplicates were found. Same-named folders will still be merged into one."})
+    # --- live photos
+    if F["live_pairs"]:
+        plan["live"] = True
+        recs.append({"id": "live", "title": "Re-pair Live Photos", "risk": "safe", "on": True,
+                     "why": "%s photos have a matching video with the same name, the signature of an iPhone Live Photo. Re-pairing lets Apple Photos show them together." % n(F["live_pairs"])})
+    # --- missing file types
+    if F["extless"]:
+        plan["fix_ext"] = True
+        recs.append({"id": "fix_ext", "title": "Repair files with a missing file type", "risk": "caution" if F["folders"] else "safe", "on": True,
+                     "why": "%s no .jpg/.heic/.mp4 ending, so %s skipped. " % (pl(F["extless"], "file has", "files have"), "it would be" if F["extless"] == 1 else "they would be") + (
+                         "Inside zip files they are repaired in the copy automatically." if not F["folders"] else
+                         "For the folders you added this renames those files in your source folders (a warning, because it changes the originals' names).")})
+    # --- replace
+    if media:
+        recs.append({"id": "replace", "title": "Let Google's location and caption replace existing ones", "risk": "caution", "on": True,
+                     "why": "When a photo already has a different location or caption, Google's wins. Dates keep the earlier of the two. Untick this to only fill in what is missing."})
+    # --- extras (other tabs, not part of the plan)
+    if F["legacy_n"]:
+        extras.append({"id": "convert", "title": "Convert old videos to MP4", "tab": "convert", "risk": "caution",
+                       "why": "%s old-format videos (%s) were found: %s. They play badly on phones and TVs. Convert them afterwards on the Convert tab; the originals can be kept in a separate folder." % (
+                           n(F["legacy_n"]), fmt_bytes(F["legacy_bytes"]), ", ".join("%s %s" % (n(v[0]), k) for k, v in sorted(F["legacy"].items(), key=lambda kv: -kv[1][0])[:5]))})
+    if F["folders"] and (F["junk"] or F["empty_dirs"] or F["tidy_dirs"] or F["zero_other"]):
+        bits = [x for x in (("%s junk or cache files" % n(F["junk"])) if F["junk"] else "", ("%s empty folders" % n(F["empty_dirs"])) if F["empty_dirs"] else "",
+                            ("%s folders named like 'Folder (1)'" % n(F["tidy_dirs"])) if F["tidy_dirs"] else "", ("%s empty files" % n(F["zero_other"])) if F["zero_other"] else "") if x]
+        extras.append({"id": "cleanup", "title": "Tidy your source folders", "tab": "clean", "risk": "caution",
+                       "why": "Found " + ", ".join(bits) + ". The new library will not contain junk, so this is optional. If you want your source folders tidier, preview it on the Clean up tab."})
+    return {"recs": recs, "extras": extras, "warnings": warns, "plan": plan}
+
+
+def run_assess(roots, dest):
+    with LOCK:
+        STATE.update(state="scanning", cancel=False, total=0, done=0, counts={}, message="Looking at your files...", report="",
+                     summary=None, scan=None, extra={}, recent=[], phase=None, kind="assess", cv=None, **({} if IN_GUIDED[0] else {"guided": None}))
+    try:
+        zips, folders = fx.split_sources(roots) if roots else ([], [])
+        if not zips and not folders:
+            raise ValueError("Add your Takeout zip files or folders in the bar at the top first")
+
+        def prog(msg, done, total):
+            check_cancel()
+            with LOCK:
+                STATE.update(state="running", message=msg + (" (%s of %s)" % (f"{done:,}", f"{total:,}") if total else ""))
+                STATE["phase"] = {"stage": "pct", "done": done, "total": total} if total else None
+        F = fx.assess(roots, dest, prog, check_cancel)
+        rec = build_recommendations(F, dest)
+        tiles = [[F["media"], "photos and videos", ""], [F["matched"], "have an info file", "ok" if F["media"] and F["matched"] >= 0.6 * F["media"] else "bad"],
+                 [F["dup_n"], "exact duplicates", ""], [F["legacy_n"], "old-format videos", ""], [F["extless"], "missing a file type", "bad" if F["extless"] else ""]]
+        sm = {"kind": "assess", "dry_run": True, "facts": {k: v for k, v in F.items() if k not in ("by_ext",)}, "tiles": tiles, "size": fmt_bytes(F["media_bytes"]),
+              "by_ext": sorted(F["by_ext"].items(), key=lambda kv: -kv[1])[:12], "dest": dest, **rec, "tips": []}
+        with LOCK:
+            STATE.update(state="done", message="Finished", summary=sm, phase=None)
+    except Cancelled:
+        stopped_state("Nothing was changed.")
+    except Exception as e:
+        with LOCK:
+            STATE.update(state="error", message=str(e))
+
+
 # ---- Reports, run logs and history -------------------------------------------------------------------------
 APP_HOME = Path(os.environ.get("METADATAFIXER_HOME") or (
     Path.home() / "Library" / "Application Support" / "MetadataFixer" if sys.platform == "darwin" else Path.home() / ".metadatafixer"))
 HIST_DIR = APP_HOME / "history"
 REPORTS_DIR = Path(os.environ.get("METADATAFIXER_REPORTS") or (Path.home() / "Documents" / "Metadata Fixer Reports"))
-KIND_TITLE = {"fix": "Fix metadata", "merge": "Merge folders", "cleanup": "Clean up", "convert": "Convert videos", "guided": "Guided: Fix my Takeout"}
+KIND_TITLE = {"assess": "Check my files", "fix": "Fix metadata", "merge": "Merge folders", "cleanup": "Clean up", "convert": "Convert videos", "guided": "Guided: Fix my Takeout"}
 
 
 def _headline(sm):
@@ -1577,6 +1690,8 @@ def _headline(sm):
         return ""
     k = sm.get("kind")
     try:
+        if k == "assess":
+            return "%s files checked, %s recommendations" % (f"{sm['facts']['media']:,}", len(sm.get("recs", [])) + len(sm.get("extras", [])))
         if k == "guided":
             return "; ".join(h for h in (_headline(x.get("summary")) for x in sm.get("steps", [])) if h)
         if k == "merge":
@@ -1841,6 +1956,14 @@ class Handler(BaseHTTPRequestHandler):
                 bool(body.get("dry_run")), bool(body.get("overwrite")), bool(body.get("pair_live")),
                 bool(body.get("dedupe")), bool(body.get("move")), body.get("date_policy", "earlier"), bool(body.get("name_dates"))))
             self._send(200, "{}")
+        elif self.path == "/api/assess_start":
+            with LOCK:
+                busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
+            if busy:
+                return self._send(409, json.dumps({"error": "A job is already running"}))
+            b2 = dict(body, dry_run=True)
+            start_tracked("assess", b2, run_assess, (body.get("roots", []), body.get("out", "")))
+            self._send(200, "{}")
         elif self.path == "/api/guided_start":
             with LOCK:
                 busy = STATE["state"] in ("scanning", "running") or STATE["clean"].get("state") == "running"
@@ -2102,6 +2225,12 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
 .md pre code{background:none;padding:0}.md table{margin:10px 0;display:block;overflow-x:auto}.md blockquote{border-left:3px solid var(--acc);margin:10px 0;padding:2px 12px;color:var(--mute)}
 .gtools{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}.gtools input{flex:1 1 200px}.gtools select{flex:1 1 200px;max-width:100%}
 .hlight{background:color-mix(in srgb,var(--warn) 30%,transparent);border-radius:3px}
+
+.chkbox{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin:10px 0 14px;padding:14px 16px;border-radius:12px;background:linear-gradient(135deg,color-mix(in srgb,var(--acc) 12%,var(--card)),var(--card));border:1px solid color-mix(in srgb,var(--acc) 30%,var(--line))}
+.mutes{color:var(--mute);font-size:13.5px}
+.rec{display:flex;gap:12px;align-items:flex-start;padding:12px 14px;margin:8px 0;border:1px solid var(--line);border-radius:12px;background:var(--card)}
+.rec input{margin-top:4px}.rec .why{color:var(--mute);font-size:13.5px;margin-top:3px;line-height:1.45}
+.badge.warnb{background:color-mix(in srgb,var(--warn) 22%,var(--card));color:var(--warn)}
 </style></head><body><div id="ack" style="display:none"><div class="ackbox" role="dialog" aria-modal="true" aria-labelledby="acktitle">
 <h2 id="acktitle">Before you start</h2>
 <p>Metadata Fixer changes, copies, moves and (if you choose) deletes files. Please read this once:</p>
@@ -2158,6 +2287,7 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
 <h2 class="ph">Fix my Takeout</h2>
 <div class="card"><small style="margin-top:0">The easy way. Add your Google Takeout <b>zip files</b> (or the folders you unzipped) in the bar at the top, choose where the finished library should go, and press the button. Your originals are <b>never changed</b>: a clean, merged copy is made in the Destination, with the real dates, locations and captions put back, duplicates removed and your folder structure kept.</small>
 <div class="gcheck" id="gcheck"></div>
+<div class="chkbox"><div><b>Not sure what to tick?</b><br><span class="mutes">Let the app look at your real files and recommend a plan, with the reasons. It changes nothing.</span></div><button id="gchk" class="p">Check my files</button></div>
 <div class="opt"><input type="checkbox" id="gdry" checked><div>Preview only<small>On by default. Shows what would happen and changes nothing. Untick to do it for real.</small></div></div>
 <div class="opt"><input type="checkbox" id="gdedupe" checked><div>Merge same-named folders and remove exact duplicates<small>Every <i>Photos from 2012</i> across all your zips becomes one folder, and the same photo repeated in several albums is kept once.</small></div></div>
 <div class="opt"><input type="checkbox" id="glive" checked><div>Re-pair Live Photos<small>Reconnects each Live Photo&#39;s still and video so Apple Photos shows them together.</small></div></div>
@@ -2375,6 +2505,7 @@ function showSummary(s){
   if(s.kind==='merge'){showMerge(s);return}
   if(s.kind==='convert'){showConvert(s);return}
   if(s.kind==='guided'){showGuided(s);return}
+  if(s.kind==='assess'){showAssess(s);return}
   let h=`<div class="tiles">${tile(s.total,'media files')}${tile(s.duplicates,'exact duplicates skipped')}${tile(s.matched,'unique files matched ('+s.pct_matched+'%)','ok')}${tile(s.no_json,'no JSON found',s.no_json?'bad':'ok')}${tile(s.orphans,'JSON with no photo')}${s.name_dates?tile(s.name_dates,'dates from file names','ok'):''}</div>`;
   h+=s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
   h+=`<div class="tiles">${tile(s.replaced_files,'files with a value replaced')}${tile((s.live||{}).paired||0,'Live Photos paired')}</div>`;
@@ -2430,7 +2561,7 @@ function setBar(barId,fillId,pctId,pct,indet){
     for(let i=0;i<30;i++){await new Promise(x=>setTimeout(x,1000));const s=await st();if(s&&s.boot!==boot){location.reload();return}}
     $('updmsg').textContent='Updated. If the page does not reload, restart the app in Terminal.'}
 })();
-const TABS=['guided','fix','merge','clean','convert','history','help'];const tabOf=k=>({cleanup:'clean',sort:'merge'}[k]||k);let curGuided=false;const paneKind=()=>curGuided?'guided':tabOf(jobKind);let jobKind='fix';
+const TABS=['guided','fix','merge','clean','convert','history','help'];const tabOf=k=>({cleanup:'clean',sort:'merge',assess:'guided'}[k]||k);let curGuided=false;const paneKind=()=>curGuided?'guided':tabOf(jobKind);let jobKind='fix';
 function showTab(t){if(!TABS.includes(t))t='fix';
   TABS.forEach(x=>{$('pane-'+x).style.display=x===t?'block':'none';document.querySelector('.tab[data-tab="'+x+'"]').classList.toggle('on',x===t)});
   try{localStorage.setItem('tab',t)}catch(e){}
@@ -2583,6 +2714,28 @@ document.querySelectorAll('a[data-help]').forEach(a=>a.onclick=e=>{e.preventDefa
   $('ackgo').onclick=()=>{try{localStorage.setItem('ack-v1','1')}catch(e){}ack.style.display='none'};
   $('ackmore').onclick=()=>{ack.style.display='none';showTab('help');helpView('safety');
     const back=document.createElement('div');back.className='tip';back.innerHTML='Read the notice, then <a href="#" id="ackback">go back and accept it</a>.';$('hview').prepend(back);$('ackback').onclick=e=>{e.preventDefault();ack.style.display='flex'}}})();
+
+const RECMAP={dedupe:'gdedupe',live:'glive',name_dates:'gnd',fix_ext:'gext',replace:'gow'};
+function applyRecs(s){
+  Object.entries(RECMAP).forEach(([k,id])=>{const present=(s.recs||[]).find(r=>r.id===k);const cb=document.getElementById('rc_'+k);$(id).checked=!!present&&(!cb||cb.checked)});
+  $('gcv').checked=false}
+function showAssess(s){
+  const f=s.facts||{};
+  let h='<div class="tiles">'+s.tiles.map(t=>tile(t[0],t[1],t[2])).join('')+'</div><small>Total size of photos and videos: <b>'+esc(s.size)+'</b>'+(f.zips?' &middot; '+f.zips+' zip file'+(f.zips===1?'':'s'):'')+(f.folders?' &middot; '+f.folders+' folder'+(f.folders===1?'':'s'):'')+'</small>';
+  h+=(s.warnings||[]).map(w=>`<div class="tip">${esc(w)}</div>`).join('');
+  h+='<h2>Recommended plan</h2><small style="margin-top:0">Each step has the reason and the numbers from your files. Untick anything you do not want.</small>';
+  h+=(s.recs||[]).map(r=>`<label class="rec"><input type="checkbox" id="rc_${r.id}" checked ${r.fixed?'disabled':''}><div><b>${esc(r.title)}</b> <span class="badge ${r.risk==='safe'?'okb':'warnb'}">${r.risk==='safe'?'Safe':'Check this'}</span><div class="why">${esc(r.why)}</div></div></label>`).join('');
+  if((s.extras||[]).length)h+='<h2>Also worth doing later</h2>'+s.extras.map(r=>`<div class="rec"><div style="flex:1"><b>${esc(r.title)}</b> <span class="badge warnb">Check this</span><div class="why">${esc(r.why)}</div></div><button class="sm" data-tab="${r.tab}">Open ${esc(r.tab==='clean'?'Clean up':'Convert')} tab</button></div>`).join('');
+  h+='<div class="hbtns" style="margin-top:14px"><button class="p" id="rprev">Preview the recommended plan</button><button id="rapply">Apply these settings</button></div><small>A preview changes nothing. These are suggestions from a quick look: always read the preview before a real run.</small>';
+  if((s.by_ext||[]).length)h+='<h2>What is in your files</h2>'+tbl(['Type','Files'],s.by_ext.map(r=>[esc(r[0]),r[1].toLocaleString()]));
+  $('sumbody').innerHTML=h;$('sum').style.display='block';
+  document.querySelectorAll('#sumbody button[data-tab]').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
+  const rp=$('rprev'),ra=$('rapply');if(rp){rp.onclick=()=>{applyRecs(s);$('gdry').checked=true;$('gst').click()};ra.onclick=()=>{applyRecs(s);ra.textContent='Applied to the settings above';$('gdry').checked=true;window.scrollTo({top:0,behavior:'smooth'})}}}
+$('gchk').onclick=async()=>{
+  if(!roots().length){alert('Add your Takeout zip files or folders in the bar at the top first');return}
+  $('sum').style.display='none';curGuided=false;
+  const r=await post('/api/assess_start',{roots:roots(),out:dest()});
+  if(r.error)alert(r.error);else{placeResults('assess');$('prog').style.display='block';poll()}};
 function showMerge(s){
   const w=s.dry_run?'would be ':'';
   let h=`<div class="tiles">${tile(s.total,'files found')}${tile(s.brought,'files '+w+(s.move?'moved':'copied')+' in','ok')}${tile(s.in_place_files,'already in place')}${tile(s.identical,'identical copies (kept once)')}${tile(s.clashes,'name clashes resolved')}${tile(s.merged_dirs,'folders '+w+'merged from 2+ sources')}${s.json_along?tile(s.json_along,'.json files brought along'):''}${tile(s.failed,'problems',s.failed?'bad':'')}</div>`;
@@ -2658,6 +2811,7 @@ function showConvert(s){
 
 function liveTiles(s,c,done,nj){
   if(!s.total)return '';const x=s.extra||{};const err=(x.errors?tile(x.errors,'files with errors','bad'):'');
+  if(jobKind==='assess')return '';
   if(jobKind==='merge')return tile(s.total,'files found')+tile(x.placed||0,'brought in','ok')+tile(x.identical||0,'identical (kept once)')+tile(x.clashes||0,'name clashes')+(x.json_along?tile(x.json_along,'.json brought along'):'')+(x.errors?tile(x.errors,'problems','bad'):'');
   if(jobKind==='cleanup')return tile(x.json||0,'.json files')+tile(x.junk||0,'junk files')+tile(x.renamed||0,'renamed')+tile(x.merged||0,'folders merged')+tile(x.empty||0,'empty folders')+(x.errors?tile(x.errors,'errors','bad'):'');
   if(jobKind==='convert')return tile(s.total,'videos found')+tile(done,'checked so far')+tile(x.converted||0,'converted','ok')+(x.bytes_before?tile(fmtBytes(Math.max(0,x.bytes_before-x.bytes_after))+' ('+Math.round(100*(1-x.bytes_after/x.bytes_before))+'%)','space saved so far','ok'):'')+tile(x.skipped_live||0,'Live Photo videos skipped')+(x.errors?tile(x.errors,'could not convert','bad'):'');
@@ -2714,7 +2868,7 @@ $('hfolder').onclick=()=>post('/api/open_reports');
 $('hdiag').onclick=async()=>{const r=await post('/api/diagnostics');try{await navigator.clipboard.writeText(r.text);$('hdiag').textContent='Copied'}catch(e){const t=document.createElement('textarea');t.value=r.text;document.body.appendChild(t);t.select();try{document.execCommand('copy');$('hdiag').textContent='Copied'}catch(_){prompt('Copy this:',r.text)}t.remove()}setTimeout(()=>{$('hdiag').textContent='Copy diagnostic info'},2000)};
 let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   const s=await (await fetch('/api/status')).json();$('prog').style.display='block';
-  const run=s.state==='scanning'||s.state==='running';$('go').disabled=run;$('gst').disabled=run;
+  const run=s.state==='scanning'||s.state==='running';$('go').disabled=run;$('gst').disabled=run;$('gchk').disabled=run;
   jobKind=s.kind||'fix';const gd=s.guided||null;curGuided=!!gd;placeResults(jobKind);
   let pct=0,indet=false;
   if(s.state==='done'){pct=100}
@@ -2723,7 +2877,7 @@ let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   else if(s.phase&&s.phase.total){pct=100*s.phase.done/s.phase.total}
   else if(s.state==='scanning'||s.state==='running'){indet=true}
   setBar('bar','fill','pct',pct,indet);
-  const LBL=(gd&&!gd.final&&gd.steps.length)?('Guided &middot; step '+gd.i+' of '+gd.steps.length+': '+esc(gd.steps[gd.i-1]||'')):gd&&jobKind==='guided'?'Guided':{fix:'Part 1 Fix',convert:'Part 4 Convert',cleanup:'Part 3 Clean up',merge:'Part 2 Merge'}[jobKind]||'';
+  const LBL=(gd&&!gd.final&&gd.steps.length)?('Guided &middot; step '+gd.i+' of '+gd.steps.length+': '+esc(gd.steps[gd.i-1]||'')):gd&&jobKind==='guided'?'Guided':{assess:'Check my files',fix:'Part 1 Fix',convert:'Part 4 Convert',cleanup:'Part 3 Clean up',merge:'Part 2 Merge'}[jobKind]||'';
   $('msg').innerHTML=(LBL?'<b>'+LBL+'</b> &middot; ':'')+(s.state==='error'?'<span class="err">'+esc(s.message)+'</span>':s.state==='done'?'<span class="ok">Finished.</span>':esc(s.message)+(s.done?` (${s.done.toLocaleString()} / ${s.total.toLocaleString()})`:''));
   const c=s.counts||{},done=s.done||0,nj=c['no-json']||0;
   $('tiles').innerHTML=liveTiles(s,c,done,nj);
