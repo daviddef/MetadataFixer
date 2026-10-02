@@ -2238,6 +2238,7 @@ def assess(entries, dest="", progress=None, should_stop=None, sample_n=120):
     pick = random.sample(cand, min(sample_n, len(cand))) if cand else []
     if pick and shutil.which("exiftool"):
         tmp = tempfile.mkdtemp(prefix="metadatafixer_assess_")
+        story = []
         S = {"n": 0, "has_date": 0, "has_gps": 0, "has_desc": 0, "with_json": 0, "add_date": 0, "add_gps": 0, "add_desc": 0, "diff_date": 0, "diff_gps": 0}
         try:
             zfs = {}
@@ -2282,8 +2283,21 @@ def assess(entries, dest="", progress=None, should_stop=None, sample_n=120):
                         S["add_gps"] += cl.get("gps") in ("added", "replaced")
                         S["add_desc"] += cl.get("desc") in ("added", "replaced")
                         S["diff_date"] += cl.get("date") in ("kept", "replaced")
+                        if len(story) < 6 and (cl.get("date") in ("added", "replaced") or cl.get("gps") in ("added", "replaced") or cl.get("desc") in ("added", "replaced")):
+                            fake = {"file": str(vp), "date": cl.get("date"), "date_before": cl.get("date_before", ""), "date_google": cl.get("date_google", ""),
+                                    "gps": cl.get("gps"), "gps_before": "", "gps_google": cl.get("gps_google", ""),
+                                    "desc": cl.get("desc"), "desc_before": cl.get("desc_before", ""), "desc_google": cl.get("desc_google", ""), "output": "", "status": "", "live": "", "match": ""}
+                            c_ = story_from_row(fake, None, thumb=False)
+                            c_["thumb"] = thumb_b64(real)
+                            c_["where"] = str(vp.parent)
+                            if ex.get("lat") is not None and ex.get("lon") is not None:
+                                c_["before"]["gps"] = "%.5f, %.5f" % (float(ex["lat"]), float(ex["lon"]))
+                            if ex.get("desc"):
+                                c_["before"]["desc"] = ex["desc"][:80]
+                            story.append(c_)
                         S["diff_gps"] += cl.get("gps") in ("kept", "replaced")
             F["sample"] = S
+            F["story"] = story
         finally:
             for zf in zfs.values():
                 try:
@@ -3321,6 +3335,58 @@ def collect_crash_reports(days=7):
     except OSError:
         pass
     return sorted(out)
+
+
+def thumb_b64(path, width=200):
+    """A small JPEG of a picture or video frame as a data: address, for showing next to its details."""
+    import base64
+    def run(cmd, data=None):
+        try:
+            r = subprocess.run(cmd, input=data, capture_output=True, timeout=40)
+            return r.stdout if r.returncode == 0 else b""
+        except (OSError, subprocess.TimeoutExpired):
+            return b""
+    vf = "scale='min(%d,iw)':-2" % width
+    out = run(["ffmpeg", "-nostdin", "-v", "error", "-i", str(path), "-frames:v", "1", "-vf", vf, "-q:v", "6", "-f", "mjpeg", "-"])
+    if not out and shutil.which("exiftool"):
+        th = run(["exiftool", "-b", "-ThumbnailImage", str(path)]) or run(["exiftool", "-b", "-PreviewImage", str(path)])
+        if th:
+            out = run(["ffmpeg", "-nostdin", "-v", "error", "-i", "pipe:0", "-frames:v", "1", "-vf", vf, "-q:v", "6", "-f", "mjpeg", "-"], th) or th
+    return ("data:image/jpeg;base64," + base64.b64encode(out).decode()) if out else ""
+
+
+def story_card(name, thumb, where, before, after, notes):
+    """before/after: {"date","gps","desc"} text. Marks which fields change."""
+    changes = {k: (before.get(k, "") != after.get(k, "")) for k in ("date", "gps", "desc")}
+    return {"name": name, "thumb": thumb, "where": where, "before": before, "after": after, "changes": changes, "notes": notes}
+
+
+def story_from_row(row, out_root=None, thumb=True):
+    """A before/after card from one processed file (its row in the report)."""
+    p = Path(row["file"])
+    def after(field, google_key, before_key):
+        if row.get(field) in ("added", "replaced"):
+            return row.get(google_key, "")
+        return row.get(before_key, "")
+    b = {"date": row.get("date_before", "") or "", "gps": row.get("gps_before", "") or "", "desc": row.get("desc_before", "") or ""}
+    a = {"date": (after("date", "date_google", "date_before") or ""), "gps": (after("gps", "gps_google", "gps_before") or ""), "desc": (after("desc", "desc_google", "desc_before") or "")}
+    notes = []
+    if row.get("match") == "filename-date":
+        a["date"] = a["date"] or "from the file name"
+        notes.append("Date read from the file name")
+    if row.get("live") == "paired":
+        notes.append("Live Photo re-paired with its video")
+    if row.get("status") == "duplicate":
+        notes.append("Identical copy: the photo is kept once")
+    if row.get("status") == "left-out":
+        notes.append("Left out: " + (row.get("detail") or "").replace("left out: ", ""))
+    where = ""
+    if row.get("output"):
+        try:
+            where = str(Path(row["output"]).parent.relative_to(out_root)) if out_root else str(Path(row["output"]).parent)
+        except ValueError:
+            where = str(Path(row["output"]).parent)
+    return story_card(p.name, thumb_b64(p) if thumb and p.exists() else "", where or "", b, a, notes)
 
 
 def main():

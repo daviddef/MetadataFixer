@@ -29,7 +29,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.02-n"
+VERSION = "2026.10.02-p"
 class Cancelled(Exception):
     pass
 
@@ -249,6 +249,7 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
         all_sidecars, noext, dupe_bytes, claimed_all = [], 0, 0, set()
         shared_sizes, prior_sig = set(), {}
         album_links = {}
+        story_cards = []
         zip_info = {"zips": 0, "skipped": 0, "bad": []}
 
         def run_pass(media, sidecars, pass_roots, ns=""):
@@ -343,6 +344,25 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
                     kept_out = out_by_src.get(kept) or (kept if (out_root and str(kept).startswith(str(out_root)) and os.path.exists(kept)) else None)
                     if kept_out:
                         album_links.setdefault(kept_out, set()).add(alb)
+            if len(story_cards) < 8 and media:
+                new_rows = rows[pass_start:]
+                chg = lambda r_: r_["status"] in ("updated", "would-update") and ({r_.get("date"), r_.get("gps"), r_.get("desc")} & {"added", "replaced"})
+                picks = [r_ for r_ in new_rows if chg(r_)][:5]
+                for kind_ in (lambda r_: r_["status"] == "duplicate", lambda r_: r_.get("match") == "filename-date" and r_["status"] in ("updated", "would-update"),
+                              lambda r_: r_.get("live") == "paired", lambda r_: r_["status"] == "left-out"):
+                    x_ = next((r_ for r_ in new_rows if kind_(r_) and r_ not in picks), None)
+                    if x_:
+                        picks.append(x_)
+                for r_ in picks[: 8 - len(story_cards)]:
+                    try:
+                        card = fx.story_from_row(r_, out_root)
+                        if r_["status"] == "duplicate":
+                            alb = Path(r_["file"]).parent.name
+                            if fx.is_album_folder(alb) and albums:
+                                card["notes"].append("Also in the album '%s': the album name is saved as a keyword" % alb)
+                        story_cards.append(card)
+                    except Exception:
+                        pass
             for r in rows[-len(media):] if media else []:
                 sg = cur_sig.get(r["file"])
                 if sg and r["output"] and sg not in prior_sig:
@@ -494,6 +514,7 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
             sm["edited_pairs"] = extra["edited_pairs"]
             sm["tips"].append("%d photo%s had a Google-edited copy next to the original. %s" % (
                 extra["edited_pairs"], "" if extra["edited_pairs"] == 1 else "s", "Only the edited versions were kept." if edited == "edited" else "Only the originals were kept."))
+        sm["story"] = story_cards[:8]
         sm["problems"] = [{"file": Path(r["file"]).name, "status": r["status"], "detail": r.get("detail", "")} for r in rows
                           if r["status"] in ("copy-error", "error", "exiftool-error")][:100]
         sm["dupe_bytes"] = dupe_bytes
@@ -1810,7 +1831,7 @@ def run_assess(roots, dest):
         tiles = [[F["media"], "photos and videos", ""], [F["matched"], "have an info file", "ok" if F["media"] and F["matched"] >= 0.6 * F["media"] else "bad"],
                  [F["dup_n"], "exact duplicates", ""], [F["legacy_n"], "old-format videos", ""], [F["extless"], "missing a file type", "bad" if F["extless"] else ""]]
         sm = {"kind": "assess", "dry_run": True, "facts": {k: v for k, v in F.items() if k not in ("by_ext",)}, "tiles": tiles, "size": fmt_bytes(F["media_bytes"]),
-              "by_ext": sorted(F["by_ext"].items(), key=lambda kv: -kv[1])[:12], "dest": dest, "sources": F.get("sources", []), "overlap": F.get("overlap", []), **rec, "tips": []}
+              "by_ext": sorted(F["by_ext"].items(), key=lambda kv: -kv[1])[:12], "dest": dest, "sources": F.get("sources", []), "overlap": F.get("overlap", []), "story": F.get("story", []), **rec, "tips": []}
         with LOCK:
             STATE.update(state="done", message="Finished", summary=sm, phase=None)
     except Cancelled:
@@ -3216,6 +3237,18 @@ a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#
 .pbar{flex:1;height:8px;border-radius:99px;background:var(--line);overflow:hidden}.pbar i{display:block;height:100%;border-radius:99px}
 .years{display:flex;align-items:flex-end;gap:3px;height:92px;overflow-x:auto;padding:6px 0}.yr{display:flex;flex-direction:column;align-items:center;gap:3px;font-size:10px;color:var(--mute)}.yr i{display:block;width:14px;background:linear-gradient(var(--acc),var(--acc2));border-radius:4px 4px 0 0}
 .fmtrow{display:flex;gap:12px;align-items:center;padding:4px 0;font-size:14px}.fmtrow>span:first-child{width:56px}
+
+.story{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin:10px 0}
+.stcard{display:flex;gap:12px;padding:12px;border:1px solid var(--line);border-radius:14px;background:var(--card);box-shadow:var(--shadow)}
+.stcard img,.stnoimg{width:96px;height:96px;object-fit:cover;border-radius:10px;flex:none;background:var(--line);display:grid;place-items:center;font-size:26px}
+.stbody{min-width:0;display:flex;flex-direction:column;gap:3px;font-size:12.5px}.stbody b{font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stwhere{color:var(--mute);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.strow{display:grid;grid-template-columns:48px 1fr;gap:2px 8px}.stl{color:var(--mute)}.stb{color:var(--mute);text-decoration:none;grid-column:2}
+.sta{grid-column:2;font-weight:600}.sta.same{font-weight:400;color:var(--mute)}.sta em{font-style:normal;font-size:11px}.sta.chg{color:var(--ok)}
+.strow .stb{text-decoration:line-through;text-decoration-color:color-mix(in srgb,var(--mute) 50%,transparent)}
+.fstrip{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:6px 0 14px;padding:12px 14px;border-radius:14px;background:var(--soft)}
+.fst{display:flex;gap:8px;align-items:center}.fst .fn{display:inline-grid;place-items:center;width:26px;height:26px;border-radius:50%;background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;font-weight:700;font-size:13px;flex:none}
+.fst b{display:block;font-size:13px}.fst span:not(.fn){display:block;font-size:12px;color:var(--mute)}.fsarrow{color:var(--mute);font-size:22px}
 </style></head><body><div id="ack" style="display:none"><div class="ackbox" role="dialog" aria-modal="true" aria-labelledby="acktitle">
 <h2 id="acktitle">Before you start</h2>
 <p>Backstory changes, copies, moves and (if you choose) deletes files. Please read this once:</p>
@@ -3577,7 +3610,7 @@ function showSummary(s){
   if(s.kind==='health'){showHealth(s);return}
   if(s.kind==='monitor'){showMonitor(s);return}
   if(s.kind==='similar_apply'||s.kind==='formats_apply'){showSimilarApply(s);return}
-  let h=`<div class="tiles">${tile(s.total,'media files')}${tile(s.duplicates,'exact duplicates skipped')}${tile(s.matched,'unique files matched ('+s.pct_matched+'%)','ok')}${tile(s.no_json,'no JSON found',s.no_json?'bad':'ok')}${tile(s.orphans,'JSON with no photo')}${s.name_dates?tile(s.name_dates,'dates from file names','ok'):''}</div>`;
+  let h=flowStrip(s)+storyHTML(s.story,s.dry_run?'What a few of your real photos would look like after the run.':'A few of your real photos, before and after.')+`<div class="tiles">${tile(s.total,'media files')}${tile(s.duplicates,'exact duplicates skipped')}${tile(s.matched,'unique files matched ('+s.pct_matched+'%)','ok')}${tile(s.no_json,'no JSON found',s.no_json?'bad':'ok')}${tile(s.orphans,'JSON with no photo')}${s.name_dates?tile(s.name_dates,'dates from file names','ok'):''}</div>`;
   h+=s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
   h+=`<div class="tiles">${tile(s.replaced_files,'files with a value replaced')}${tile((s.live||{}).paired||0,'Live Photos paired')}</div>`;
   const c=s.changes||{},v=s.dry_run?'would change':'changed';
@@ -3797,6 +3830,7 @@ function showAssess(s){
   const f=s.facts||{};
   let h='<div class="tiles">'+s.tiles.map(t=>tile(t[0],t[1],t[2])).join('')+'</div><small>Total size of photos and videos: <b>'+esc(s.size)+'</b>'+(f.zips?' &middot; '+f.zips+' zip file'+(f.zips===1?'':'s'):'')+(f.folders?' &middot; '+f.folders+' folder'+(f.folders===1?'':'s'):'')+'</small>';
   h+=(s.warnings||[]).map(w=>`<div class="tip">${esc(w)}</div>`).join('');
+  h+=storyHTML(s.story,'Real photos from your files and what the restore would do to each one.');
   const TL={guided:'Guided',fix:'Fix',merge:'Merge',clean:'Clean up',convert:'Convert',photos:'Photos',similar:'Similar',health:'Health',history:'History'};
   if((s.sources||[]).length>1)h+='<h2>Your '+s.sources.length+' sources</h2>'+tbl(['Source','Type','Photos and videos','Size'],s.sources.map(x=>[esc(x.label),esc(x.kind),x.media.toLocaleString(),esc(fmtB(x.bytes))]))+((s.overlap||[]).length?'<small>Shared between sources: '+s.overlap.map(o=>esc(o.a)+' and '+esc(o.b)+': <b>'+o.n.toLocaleString()+'</b> identical files ('+esc(fmtB(o.bytes))+')').join('; ')+'</small>':'');
   if((s.flow||[]).length)h+='<h2>Your suggested route</h2><div class="flow">'+s.flow.map(f=>`<div class="flowstep ${f.kind}"><span class="fn">${f.n}</span><div style="flex:1;min-width:0"><b>${esc(f.title)}</b> <span class="badge ${f.kind==='do'?'okb':''}">${f.kind==='done'?'Done':f.kind==='do'?'Recommended':'Optional'}</span><div class="why">${esc(f.why)}</div></div>${f.kind==='done'?'':`<button class="sm" data-tab="${f.tab}">Open ${esc(TL[f.tab]||f.tab)}</button>`}</div>`).join('')+'</div>';
@@ -4009,6 +4043,17 @@ function showMonitor(s){
   setInterval(async()=>{const m=+$('mauto').value;if(!m)return;let last=0;try{last=+localStorage.getItem('mon_last')||0}catch(e){}
     if(Date.now()-last<m*60e3)return;try{const s=await (await fetch('/api/status')).json();if(s.state==='scanning'||s.state==='running')return}catch(e){return}
     startMonitor(true)},60000)})();
+
+function storyHTML(items,sub){
+  if(!items||!items.length)return '';
+  const row=(lab,b,a,ch)=>ch?`<div class="strow"><span class="stl">${lab}</span><span class="stb">${esc(b||'none')}</span><span class="sta chg">&rarr; ${esc(a||'none')}</span></div>`:`<div class="strow"><span class="stl">${lab}</span><span class="sta same">${esc(a||'none')} <em>(unchanged)</em></span></div>`;
+  return '<h2>Storyboard: before and after</h2><small style="margin-top:0">'+esc(sub||'Real photos from your library and what happens to each one.')+'</small><div class="story">'+items.map(c=>`<div class="stcard">${c.thumb?`<img src="${c.thumb}" alt="">`:'<div class="stnoimg">&#128247;</div>'}<div class="stbody"><b title="${esc(c.name)}">${esc(c.name)}</b>${c.where?`<span class="stwhere">&rarr; ${esc(c.where.split('/').slice(-2).join('/')||'.')}</span>`:''}
+  ${row('Date',c.before.date,c.after.date,c.changes.date)}${row('Place',c.before.gps,c.after.gps,c.changes.gps)}${row('Caption',c.before.desc,c.after.desc,c.changes.desc)}
+  ${(c.notes||[]).map(n=>`<span class="badge okb">${esc(n)}</span>`).join(' ')}</div></div>`).join('')+'</div>'}
+function flowStrip(s){
+  const c=s.changes||{};const w=s.dry_run?'would be ':'';
+  const steps=[['1','Found',(s.total||0).toLocaleString()+' files'],['2','Restored',(c.dates||0).toLocaleString()+' dates, '+(c.gps||0).toLocaleString()+' places'],['3','Merged',(s.duplicates||0).toLocaleString()+' duplicates skipped'+((s.albums||{}).albums?', '+s.albums.albums+' albums kept':'')],['4','Result',(s.out_folders||[]).length?(s.out_folders.length+' folders'):'done']];
+  return '<div class="fstrip">'+steps.map((x,i)=>`<div class="fst"><span class="fn">${x[0]}</span><div><b>${x[1]}</b><span>${esc(x[2])}</span></div></div>${i<3?'<span class="fsarrow">&rsaquo;</span>':''}`).join('')+'</div>'}
 function showMerge(s){
   const w=s.dry_run?'would be ':'';
   let h=`<div class="tiles">${tile(s.total,'files found')}${tile(s.brought,'files '+w+(s.move?'moved':'copied')+' in','ok')}${tile(s.in_place_files,'already in place')}${tile(s.identical,'identical copies (kept once)')}${tile(s.clashes,'name clashes resolved')}${tile(s.merged_dirs,'folders '+w+'merged from 2+ sources')}${s.json_along?tile(s.json_along,'.json files brought along'):''}${tile(s.failed,'problems',s.failed?'bad':'')}</div>`;

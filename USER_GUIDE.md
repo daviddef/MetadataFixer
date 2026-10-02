@@ -57,7 +57,7 @@ A page opens at `http://127.0.0.1:8765`. It is served only on your own computer.
 
 The longer explanations sit behind small **i** buttons: hover over one (or tap it on a phone) to read it. Each tab has a one-line description under its title. Warnings that matter, such as "(empties the source folders)", stay visible.
 
-The app has ten tabs: **Guided** (the easy way), **Fix** (metadata), **Merge** (folders), **Clean up** (`.json` files, junk, names, empty folders, similar folders), **Convert** (videos), **Health** (library health, duplicate formats and statistics), **Photos** (send to Apple Photos), **Similar** (the same photo saved twice), **History** (past runs, reports and undo) and **Help** (this guide, support and the disclaimer).
+The app has eleven tabs: **Guided** (the easy way), **Fix** (metadata), **Merge** (folders), **Clean up** (`.json` files, junk, names, empty folders, similar folders), **Convert** (videos), **Health** (library health, duplicate formats and statistics), **Monitor** (iCloud upload status and log issues), **Photos** (send to Apple Photos), **Similar** (the same photo saved twice), **History** (past runs, reports and undo) and **Help** (this guide, support and the disclaimer).
 
 ## The warning sign
 
@@ -157,7 +157,7 @@ The **Photos** tab sends a finished library to the Photos app, **in batches**, s
 How it works:
 - It plans batches of about 2, 5, 10, 25 or 50 GB, **oldest first**, so your timeline fills in order. A Live Photo's still and video always travel together. Folders that are albums (not `Photos from 2012`) become Photos albums.
 - Photos skips photos it already has, so running it again never duplicates.
-- Between batches it waits, so Photos can upload to iCloud and macOS can free the space: **Wait until my Mac has enough free space** (you choose how many GB to keep free), **Pause and let me press Continue**, or **Do not wait**. A **Continue** button appears in the status bar while it waits. Stop works at any time, and finished files are remembered.
+- Between batches it waits so Photos can upload to iCloud. **Wait until Photos shows each batch as uploaded to iCloud** (the default) verifies the uploads by reading Photos' database, and can **adapt the batch size**: bigger when iCloud keeps up easily, smaller when a batch takes hours. Other choices: **Wait until my Mac has enough free space** (you choose how many GB to keep free), **Pause and let me press Continue**, or **Do not wait**. A **Continue** button appears in the status bar while it waits. Stop works at any time, and finished files are remembered.
 - Always **preview** first (it shows every batch), then **send a small test (20 photos)** and look at the result in Photos before sending everything.
 - Files Photos cannot import (such as AVI, MKV, WMV) are listed and left out: convert them on the Convert tab first.
 
@@ -186,6 +186,18 @@ What it looks for:
 **Statistics.** Library size by file type, photos and videos by year, the biggest folders and files, RAW photos (how many have a JPEG or HEIC with the same name, and how much space each takes; Backstory never deletes RAW files), Live Photos and the most common cameras.
 
 **Check again automatically.** Choose every hour, 6 hours or day. This runs only while Backstory is open and never while another job is running. A health check that runs in the background all the time, even when the app is closed, is on the roadmap.
+
+## Storyboard: before and after
+
+Before you commit, Backstory shows what will happen to a few of **your real photos**. In **Check my files** and in the Guided and Fix summaries (preview and real runs) you see cards with a thumbnail, the folder it goes to, and for each of **Date**, **Place** and **Caption** what it is now and what it becomes. Changed values are highlighted; unchanged ones are marked. Notes explain special cases: a date read from the file name, a Live Photo re-paired, an identical copy kept once (and the album name saved as a keyword), or a copy left out. A four-step strip above it summarises the run: found, restored, merged, result. The thumbnails are saved inside the report, so the report still shows them later.
+
+## Photos and iCloud monitor (Monitor tab)
+
+**Is everything in iCloud yet?** Backstory reads a copy of your Photos library's database (never the original) and shows how many items are in Photos, how many are uploaded to iCloud, and how many are waiting. If you check again later it works out your **upload speed and the time left**, and if the number waiting has not fallen for about 45 minutes it tells you uploads look **stuck** and offers to check the logs for the cause. It also checks **the files Backstory itself sent** (by name and size) against Photos, so you can see that every one of them arrived and uploaded. When they all have, it shows a short **Ready to retire the staging copy?** checklist. Keep your Takeout zip files and the staging drive until you have looked through Photos and iCloud.com. The zips hold Google's original information.
+
+Apple does not document this database, and it changes between macOS versions, so these numbers are a strong hint rather than a guarantee. If it cannot be read, Backstory says so, and the Photos tab falls back to waiting for free space.
+
+**Log issues.** Photos and iCloud write errors that you never see in Console. **Check the logs** reads the last hour, 6 hours, day or week of Photos and iCloud errors from the macOS log, recent Photos crash reports, and Backstory's own failed runs. It groups them and explains each in plain language with what to do: a full disk, a full iCloud plan, a dropped network, an iCloud sign-in problem, a damaged Photos database, a repair or rebuild in progress, files Photos refused to import, Low Power Mode, a paused sync, permissions that block Backstory, a hot Mac, crashes, unreadable files, and drive I/O errors. Errors it does not recognise are listed so you can send them to support. You can also **paste log text** (from Console or a crash report) to have it interpreted, on any computer. **Check automatically** repeats the check while Backstory is open and can show a notification for a new serious problem. Reading the macOS log needs no special permission for normal use, but some entries may be hidden by macOS privacy rules.
 
 ## Albums and Google-edited copies
 
