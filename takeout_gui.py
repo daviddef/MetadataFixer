@@ -68,6 +68,17 @@ def choose_folders(prompt):
     return [p.rstrip("/") for p in r.stdout.splitlines() if p.strip()] if r.returncode == 0 else []
 
 
+def choose_gpx(prompt):
+    """Native macOS picker for one GPX track file."""
+    prompt = _safe_prompt(prompt)
+    script = ('set f to choose file with prompt "%s" of type {"gpx", "public.xml"}\nreturn POSIX path of f' % prompt)
+    try:
+        r = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
+    except FileNotFoundError:
+        return []
+    return [r.stdout.strip()] if r.returncode == 0 and r.stdout.strip() else []
+
+
 def choose_zips(prompt):
     """Native macOS picker for Takeout .zip files (several allowed)."""
     prompt = _safe_prompt(prompt)
@@ -135,7 +146,10 @@ def summarise(rows, sidecars, roots, dry_run):
                "gps_replaced": fields["gps"].get("replaced", 0),
                "desc": changed("desc"), "people": people_tagged, "favourites": favourites,
                "dates_filled": sum(1 for r in rows if r.get("date_fix") == "filled"), "dates_corrected": sum(1 for r in rows if r.get("date_fix") == "corrected"),
-               "gps_guessed": sum(1 for r in rows if r.get("gps_guess")),
+               "gps_guessed": sum(1 for r in rows if r.get("gps_guess") and not r.get("gps_src")),
+               "gps_nearby": sum(1 for r in rows if r.get("gps_src") == "nearby"), "gps_gpx": sum(1 for r in rows if r.get("gps_src") == "gpx"),
+               "dates_reconstructed": sum(1 for r in rows if r.get("date_conf")),
+               "recon_low": sum(1 for r in rows if r.get("date_conf") == "low"), "recon_medium": sum(1 for r in rows if r.get("date_conf") == "medium"), "recon_high": sum(1 for r in rows if r.get("date_conf") == "high"),
                "flag_future": sum(1 for r in rows if r.get("date_flag") == "future" and r.get("date_fix") != "corrected"),
                "flag_year": sum(1 for r in rows if r.get("date_flag") == "year" and r.get("date_fix") != "corrected"),
                "flag_loc": sum(1 for r in rows if r.get("gps_flag")),
@@ -179,6 +193,12 @@ def summarise(rows, sidecars, roots, dry_run):
         tips.append("%d photos had no date inside; the year in their folder name was used (shown as 'date set from the folder name' in the report)." % cc["dates_filled"])
     if cc["dates_corrected"]:
         tips.append("%d photos had a date that did not fit their folder (or was in the future); it was corrected from the folder name." % cc["dates_corrected"])
+    if cc["dates_reconstructed"]:
+        tips.append("%d missing dates were reconstructed from every clue (file name, neighbouring photo numbers, folder name, file time): %d high, %d medium and %d low confidence. Each one says why in the report's date_note column; sort by date_conf to review the low ones." % (cc["dates_reconstructed"], cc["recon_high"], cc["recon_medium"], cc["recon_low"]))
+    if cc["gps_nearby"]:
+        tips.append("%d photos with no location received the location of photos taken minutes before or after them. They carry the keyword '%s'." % (cc["gps_nearby"], fx.GUESS_TAG_NB))
+    if cc["gps_gpx"]:
+        tips.append("%d photos received a location from your GPX track (matched by time). They carry the keyword '%s'." % (cc["gps_gpx"], fx.GUESS_TAG_NB))
     if cc["gps_guessed"]:
         tips.append("%d photos with no location got an approximate one guessed from their folder name. They carry the keyword '%s' so you can find or remove them. Locations that already existed were not touched." % (cc["gps_guessed"], fx.GUESS_TAG))
     if cc["flag_future"]:
@@ -251,7 +271,7 @@ def write_text_summary(path, sm):
     Path(path).write_text("\n".join(L) + "\n", encoding="utf-8")
 
 
-def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=False, date_policy="earlier", name_dates=False, albums=False, edited="both", near=False, folder_dates="", guess_gps=False, dupe=None, tzfix=False):
+def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=False, date_policy="earlier", name_dates=False, albums=False, edited="both", near=False, folder_dates="", guess_gps=False, dupe=None, tzfix=False, smart_dates="", loc_nearby=False, gpx_path=""):
     with LOCK:
         STATE.update(state="scanning", cancel=False, total=0, done=0, counts={}, message="Scanning folders...",
                      report="", summary=None, scan=None, extra={}, recent=[], phase=None, kind="fix", **({} if IN_GUIDED[0] else {"guided": None}))
@@ -293,7 +313,9 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
             args = argparse.Namespace(dry_run=dry_run, overwrite=overwrite, pair_live=pair_live,
                                       dedupe=dedupe, move=move, out_root=out or None, roots=pass_roots,
                                       date_policy=date_policy, manifest_ns=ns, name_dates=name_dates,
-                                      folder_dates=folder_dates if folder_dates in ("missing", "fix") else "", guess_gps=bool(guess_gps))
+                                      folder_dates=folder_dates if folder_dates in ("missing", "fix") else "", guess_gps=bool(guess_gps),
+                                      smart_dates=smart_dates if smart_dates in ("low", "medium", "high") else "", loc_nearby=bool(loc_nearby),
+                                      gpx=str(gpx_path) if gpx_path and os.path.isfile(str(gpx_path)) else "")
             args.skip = {}
             pass_start = len(rows)
 
@@ -643,7 +665,7 @@ def _run_guided(roots, out, dry_run, opts):
                                                      "junk": None, "names": None, "empty": None})))
         steps.append(("Put dates, locations and captions back, and merge into one library", lambda: run_job(
             roots, out, dry_run, bool(opts.get("replace", True)), bool(opts.get("live", True)), bool(opts.get("dedupe", True)), False, "earlier", bool(opts.get("name_dates", True)), bool(opts.get("albums", True)), opts.get("edited", "both"), bool(opts.get("near", False)),
-            "fix" if opts.get("fix_dates") else ("missing" if opts.get("folder_dates", False) else ""), bool(opts.get("guess_gps", False)), opts.get("dupe"), bool(opts.get("tzfix", False)))))
+            "fix" if opts.get("fix_dates") else ("missing" if opts.get("folder_dates", False) else ""), bool(opts.get("guess_gps", False)), opts.get("dupe"), bool(opts.get("tzfix", False)), opts.get("smart_dates", ""), bool(opts.get("loc_nearby", False)), opts.get("gpx", ""))))
         if opts.get("convert") and not dry_run:
             steps.append(("Convert old videos to MP4", lambda: run_convert([out], False, list(fx.DEFAULT_EXT), False, "high", "move", False)))
         titles = [t for t, _ in steps]
@@ -3332,7 +3354,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _route(self, path, body):
         if path == "/api/choose":
-            pick = choose_zips if body.get("kind") == "zip" else choose_folders
+            pick = choose_zips if body.get("kind") == "zip" else (choose_gpx if body.get("kind") == "gpx" else choose_folders)
             self._send(200, json.dumps({"paths": pick(body.get("prompt", "Choose folders"))}))
         elif path == "/api/rerun":
             # run an earlier job again with the same settings: finished files are remembered, so this carries on where it stopped
@@ -3359,7 +3381,7 @@ class Handler(BaseHTTPRequestHandler):
                 bool(body.get("dry_run")), bool(body.get("overwrite")), bool(body.get("pair_live")),
                 bool(body.get("dedupe")), bool(body.get("move")), body.get("date_policy", "earlier"), bool(body.get("name_dates")), bool(body.get("albums")),
                 body.get("edited") if body.get("edited") in ("both", "edited", "original") else "both", bool(body.get("near")),
-                body.get("folder_dates") if body.get("folder_dates") in ("missing", "fix") else "", bool(body.get("guess_gps")), body.get("dupe"), bool(body.get("tzfix"))))
+                body.get("folder_dates") if body.get("folder_dates") in ("missing", "fix") else "", bool(body.get("guess_gps")), body.get("dupe"), bool(body.get("tzfix")), body.get("smart_dates") or "", bool(body.get("loc_nearby")), str(body.get("gpx") or "")))
             self._send(200, "{}")
         elif path == "/api/health_start":
             with LOCK:
@@ -4022,6 +4044,9 @@ h2{margin:12px 0 4px}small{margin-top:3px}
 <div class="opt"><input type="checkbox" id="glive" checked><div>Re-pair Live Photos<small>Reconnects each Live Photo&#39;s still and video so Apple Photos shows them together.</small></div></div>
 <div class="opt"><input type="checkbox" id="gnd" checked><div>Use the date in the file name when there is no .json<small>Fills in a missing date from names like <i>IMG_20190704_123456</i>. Never changes a date that is already there.</small></div></div>
 <div class="opt"><input type="checkbox" id="gtz" checked><div>Correct the time zone of dates<small>Google stores times in UTC, but Apple Photos reads a time with no zone as local time, so photos can show the wrong hour or even day. This writes the local time (using the place where the photo was taken, or your Mac&#39;s time zone if it has no location) together with its UTC offset. Videos keep UTC.</small></div></div>
+<div class="opt"><div style="flex:1"><label for="gsd" style="font-weight:600">Reconstruct missing dates from every clue</label><select id="gsd" class="sel"><option value="">Off</option><option value="high">Only when sure (high confidence)</option><option value="medium">When fairly sure (medium or better)</option><option value="low">Best guess (any confidence)</option></select><small>For a photo with no date inside, combines its file name, the photos numbered either side of it, its folder name and the file&#39;s modified time. Each result says why and how confident it is.</small></div></div>
+<div class="opt"><input type="checkbox" id="gnb"><div>&#9888;&#65039; Fill missing locations from photos taken minutes apart<small>A photo with no location takes the location of photos taken within minutes before or after it (when they are close together). Labelled with a keyword. Never replaces an existing location.</small></div></div>
+<div class="opt"><div style="flex:1"><label for="ggpx" style="font-weight:600">Fill missing locations from a GPX track (optional)</label><div class="row" style="margin-top:4px"><input type="text" id="ggpx" placeholder="Path to a .gpx file from a watch or app"><button id="ggpxb" class="sm" type="button">Choose...</button></div><small>Matches each photo&#39;s time to where the track says you were. Works best together with Correct the time zone.</small></div></div>
 <div class="opt"><input type="checkbox" id="gfd" checked><div>Fill missing dates from the folder name<small>A photo with no date inside, in a folder called <i>2017</i>, <i>2026-06</i> or <i>June 2015</i>, gets that date. A date that already exists is never changed by this.</small></div></div>
 <div class="opt"><input type="checkbox" id="gfx"><div>&#9888;&#65039; Correct dates that disagree with the folder name, and dates in the future<small>A photo in the <i>2017</i> folder that says 2025, or says 2028, almost certainly lost its metadata. This sets it from the folder name. Only tick it if you trust your folder names.</small></div></div>
 <div class="opt"><input type="checkbox" id="ggps"><div>&#9888;&#65039; Guess a location from the folder name (Johannesburg, Japan...)<small>Where a photo has <b>no</b> location and its folder names a city or country, an approximate location is added and labelled as a guess. A location that already exists is never touched.</small></div></div>
@@ -4052,6 +4077,9 @@ h2{margin:12px 0 4px}small{margin-top:3px}
 <div class="opt"><input type="checkbox" id="ow" checked><div>&#9888;&#65039; Replace location and caption already stored in the photo<small>Every photo has hidden facts saved inside the file itself (called EXIF). <b>Off</b>: only fill in a location or caption that is missing. <b>On</b>: replace a different one with Google&#39;s version. Your pictures themselves are never altered.</small></div></div></div>
 <div class="opt"><input type="checkbox" id="ndates" checked><div>Use the date in the file name when there is no .json<small>For photos with no Google info file and no date of their own, reads a date from names like <i>IMG_20190704_123456</i>, <i>PXL_20210512_...</i> or <i>Screenshot 2019-07-04 at 12.34.56</i>. It only fills in a missing date and never changes one that is already there.</small></div></div>
 <div class="opt"><input type="checkbox" id="ftz" checked><div>Correct the time zone of dates<small>Writes local time plus its UTC offset instead of raw UTC, using the photo&#39;s location (or this Mac&#39;s time zone when it has none), so Apple Photos shows the right hour. Videos keep UTC.</small></div></div>
+<div class="opt"><div style="flex:1"><label for="fsd" style="font-weight:600">Reconstruct missing dates from every clue</label><select id="fsd" class="sel"><option value="">Off</option><option value="high">Only when sure (high confidence)</option><option value="medium">When fairly sure (medium or better)</option><option value="low">Best guess (any confidence)</option></select><small>For a photo with no date inside, combines its file name, the photos numbered either side of it, its folder name and the file&#39;s modified time. Each result says why and how confident it is.</small></div></div>
+<div class="opt"><input type="checkbox" id="fnb"><div>&#9888;&#65039; Fill missing locations from photos taken minutes apart<small>A photo with no location takes the location of photos taken within minutes before or after it (when they are close together). Labelled with a keyword. Never replaces an existing location.</small></div></div>
+<div class="opt"><div style="flex:1"><label for="fgpx" style="font-weight:600">Fill missing locations from a GPX track (optional)</label><div class="row" style="margin-top:4px"><input type="text" id="fgpx" placeholder="Path to a .gpx file from a watch or app"><button id="fgpxb" class="sm" type="button">Choose...</button></div><small>Matches each photo&#39;s time to where the track says you were. Works best together with Correct the time zone.</small></div></div>
 <div class="opt"><input type="checkbox" id="fdates" checked><div>Fill missing dates from the folder name<small>No date inside the photo, and the folder is called <i>2017</i>, <i>2026-06</i>, <i>June 2015</i> or <i>Photos from 2019</i>: use that. Existing dates are not changed by this.</small></div></div>
 <div class="opt"><input type="checkbox" id="fdfix"><div>&#9888;&#65039; Correct dates that disagree with the folder name, and dates in the future<small>Sets the date from the folder name when the photo says a different year (a sign it lost its metadata) or a date that has not happened yet. Preview first.</small></div></div>
 <div class="opt"><input type="checkbox" id="fgps"><div>&#9888;&#65039; Guess a location from the folder name<small>Only for photos with no location, in a folder that names a city or country. The location is the middle of that place, and each photo is labelled with a keyword so you can find them. Preview first.</small></div></div>
@@ -4309,7 +4337,7 @@ $('go').onclick=async()=>{
   if(!$('dry').checked&&!dest()&&!confirm('No output folder: files will be edited IN PLACE. Continue?'))return;
   if($('move').checked&&!$('dry').checked&&!confirm('MOVE will take files out of your Takeout folders. Make sure you have another backup. Continue?'))return;
   $('sum').style.display='none';
-  const r=await post('/api/start',{roots:roots(),out:dest(),dry_run:$('dry').checked,overwrite:$('ow').checked,pair_live:$('live').checked,dedupe:$('dedupe').checked,move:$('move').checked,date_policy:$('datepol').value,name_dates:$('ndates').checked,albums:$('albums').checked,edited:$('edited').value,near:$('near').checked,folder_dates:$('fdfix').checked?'fix':($('fdates').checked?'missing':''),guess_gps:$('fgps').checked,tzfix:$('ftz').checked,dupe:getDupe()});
+  const r=await post('/api/start',{roots:roots(),out:dest(),dry_run:$('dry').checked,overwrite:$('ow').checked,pair_live:$('live').checked,dedupe:$('dedupe').checked,move:$('move').checked,date_policy:$('datepol').value,name_dates:$('ndates').checked,albums:$('albums').checked,edited:$('edited').value,near:$('near').checked,folder_dates:$('fdfix').checked?'fix':($('fdates').checked?'missing':''),guess_gps:$('fgps').checked,tzfix:$('ftz').checked,smart_dates:$('fsd').value,loc_nearby:$('fnb').checked,gpx:$('fgpx').value.trim(),dupe:getDupe()});
   if(r.error)alert(r.error);else poll();
 };
 $('rev').onclick=()=>post('/api/reveal');
@@ -4477,7 +4505,7 @@ $('gst').onclick=async()=>{
   const real=!$('gdry').checked;
   if(real&&$('gcv').checked&&!confirm('After the library is built, old videos in the Destination will be converted to MP4 and the originals moved into an _original_videos folder. Continue?'))return;
   $('sum').style.display='none';curGuided=true;
-  const r=await post('/api/guided_start',{roots:roots(),out:dest(),dry_run:$('gdry').checked,opts:{fix_ext:$('gext').checked,convert:$('gcv').checked,replace:$('gow').checked,live:$('glive').checked,dedupe:$('gdedupe').checked,name_dates:$('gnd').checked,albums:$('galb').checked,edited:$('gedit').value,near:$('gnear').checked,folder_dates:$('gfd').checked,fix_dates:$('gfx').checked,guess_gps:$('ggps').checked,tzfix:$('gtz').checked,dupe:getDupe()}});
+  const r=await post('/api/guided_start',{roots:roots(),out:dest(),dry_run:$('gdry').checked,opts:{fix_ext:$('gext').checked,convert:$('gcv').checked,replace:$('gow').checked,live:$('glive').checked,dedupe:$('gdedupe').checked,name_dates:$('gnd').checked,albums:$('galb').checked,edited:$('gedit').value,near:$('gnear').checked,folder_dates:$('gfd').checked,fix_dates:$('gfx').checked,guess_gps:$('ggps').checked,tzfix:$('gtz').checked,smart_dates:$('gsd').value,loc_nearby:$('gnb').checked,gpx:$('ggpx').value.trim(),dupe:getDupe()}});
   if(r.error){alert(r.error);curGuided=false}else{placeResults('guided');$('prog').style.display='block';poll()}};
 
 // ---- Help: user guide (rendered from USER_GUIDE.md), safety notice, support, about
@@ -4752,6 +4780,7 @@ async function checkUpload(){
   if(!r.ok){$('upres').innerHTML=`<div class="tip">Could not read the Photos database${r.why?': '+esc(r.why):''}. This needs a Mac with a Photos library; the check is experimental.</div>`;return}
   $('upres').innerHTML=uploadHTML(r);const w=$('whystuck');if(w)w.onclick=e=>{e.preventDefault();startMonitor(false)}}
 $('upgo').onclick=checkUpload;
+['ggpxb','fgpxb'].forEach(id=>{const b=$(id);if(b)b.onclick=async()=>{const r=await post('/api/choose',{kind:'gpx',prompt:'Choose a GPX track file'});if(r.paths&&r.paths[0]){$('ggpx').value=r.paths[0];$('fgpx').value=r.paths[0]}}});
 $('rcgo').onclick=async()=>{const d=dest();if(!d){alert('Choose your Destination (the finished library) in the bar at the top first');return}$('rcgo').disabled=true;$('rcgo').textContent='Making the receipt...';const r=await post('/api/receipt',{dest:d,library:($('uplib')||{}).value||''});$('rcgo').disabled=false;$('rcgo').textContent='Make a migration receipt';if(r.error)alert(r.error);else alert('Receipt saved to:\n'+r.path+'\n\nIt is also opening in your browser.')};
 async function startMonitor(quiet,pasted){
   if(!quiet){$('sum').style.display='none'}curGuided=false;
@@ -5042,24 +5071,24 @@ renderDP();
 // ---- styles: one tap sets the options everywhere ----
 const PROFILES={
  safest:{icon:'\u{1F6DF}',name:'Safest',blurb:'Only fills gaps. Changes nothing it does not have to.',time:3,risk:1,reward:2,
-  g:{gdedupe:1,glive:1,gnd:1,gtz:1,gfd:1,gfx:0,ggps:0,gnear:0,galb:1,gow:0,gext:0,gcv:0,gedit:'both'},
-  f:{dedupe:1,live:1,ndates:1,ftz:1,fdates:1,fdfix:0,fgps:0,near:0,albums:1,ow:0,move:0,datepol:'earlier',edited:'both'},
+  g:{gdedupe:1,glive:1,gnd:1,gtz:1,gsd:'',gnb:0,gfd:1,gfx:0,ggps:0,gnear:0,galb:1,gow:0,gext:0,gcv:0,gedit:'both'},
+  f:{dedupe:1,live:1,ndates:1,ftz:1,fsd:'',fnb:0,fdates:1,fdfix:0,fgps:0,near:0,albums:1,ow:0,move:0,datepol:'earlier',edited:'both'},
   o:{simsens:'3',pbatch:'5',ppace:'verify',padapt:0,palb:1},dp:{bursts:'keep',must:['name','dimensions']}},
  balanced:{icon:'⚖️',name:'Balanced',blurb:'The recommended mix. Good results, sensible care.',time:3,risk:2,reward:3,
-  g:{gdedupe:1,glive:1,gnd:1,gtz:1,gfd:1,gfx:0,ggps:0,gnear:0,galb:1,gow:1,gext:1,gcv:0,gedit:'both'},
-  f:{dedupe:1,live:1,ndates:1,ftz:1,fdates:1,fdfix:0,fgps:0,near:0,albums:1,ow:1,move:0,datepol:'earlier',edited:'both'},
+  g:{gdedupe:1,glive:1,gnd:1,gtz:1,gsd:'medium',gnb:0,gfd:1,gfx:0,ggps:0,gnear:0,galb:1,gow:1,gext:1,gcv:0,gedit:'both'},
+  f:{dedupe:1,live:1,ndates:1,ftz:1,fsd:'medium',fnb:0,fdates:1,fdfix:0,fgps:0,near:0,albums:1,ow:1,move:0,datepol:'earlier',edited:'both'},
   o:{simsens:'6',pbatch:'10',ppace:'verify',padapt:1,palb:1},dp:{bursts:'keep',must:[]}},
  fastest:{icon:'⚡',name:'Fastest',blurb:'Fewest passes over your files. Skips the slow extras.',time:1,risk:2,reward:1,
-  g:{gdedupe:0,glive:0,gnd:1,gtz:1,gfd:0,gfx:0,ggps:0,gnear:0,galb:0,gow:1,gext:0,gcv:0,gedit:'both'},
-  f:{dedupe:0,live:0,ndates:1,ftz:1,fdates:0,fdfix:0,fgps:0,near:0,albums:0,ow:1,move:0,datepol:'earlier',edited:'both'},
+  g:{gdedupe:0,glive:0,gnd:1,gtz:1,gsd:'',gnb:0,gfd:0,gfx:0,ggps:0,gnear:0,galb:0,gow:1,gext:0,gcv:0,gedit:'both'},
+  f:{dedupe:0,live:0,ndates:1,ftz:1,fsd:'',fnb:0,fdates:0,fdfix:0,fgps:0,near:0,albums:0,ow:1,move:0,datepol:'earlier',edited:'both'},
   o:{simsens:'3',pbatch:'25',ppace:'space',padapt:0,palb:0},dp:{bursts:'keep',must:[]}},
  thorough:{icon:'\u{1F3AF}',name:'Thorough',blurb:'Does everything safe, as well as it can. Takes longer.',time:5,risk:2,reward:4,
-  g:{gdedupe:1,glive:1,gnd:1,gtz:1,gfd:1,gfx:0,ggps:0,gnear:0,galb:1,gow:1,gext:1,gcv:0,gedit:'both'},
-  f:{dedupe:1,live:1,ndates:1,ftz:1,fdates:1,fdfix:0,fgps:0,near:0,albums:1,ow:1,move:0,datepol:'earlier',edited:'both'},
+  g:{gdedupe:1,glive:1,gnd:1,gtz:1,gsd:'medium',gnb:0,gfd:1,gfx:0,ggps:0,gnear:0,galb:1,gow:1,gext:1,gcv:0,gedit:'both'},
+  f:{dedupe:1,live:1,ndates:1,ftz:1,fsd:'medium',fnb:0,fdates:1,fdfix:0,fgps:0,near:0,albums:1,ow:1,move:0,datepol:'earlier',edited:'both'},
   o:{simsens:'6',pbatch:'5',ppace:'verify',padapt:1,palb:1},dp:{bursts:'keep',must:[]}},
  risky:{icon:'\u{1F3B2}',name:'I like risk',blurb:'Maximum clean-up and guessing. Review the preview carefully.',time:3,risk:5,reward:5,
-  g:{gdedupe:1,glive:1,gnd:1,gtz:1,gfd:1,gfx:1,ggps:1,gnear:1,galb:1,gow:1,gext:1,gcv:1,gedit:'edited'},
-  f:{dedupe:1,live:1,ndates:1,ftz:1,fdates:1,fdfix:1,fgps:1,near:1,albums:1,ow:1,move:0,datepol:'earlier',edited:'edited'},
+  g:{gdedupe:1,glive:1,gnd:1,gtz:1,gsd:'low',gnb:1,gfd:1,gfx:1,ggps:1,gnear:1,galb:1,gow:1,gext:1,gcv:1,gedit:'edited'},
+  f:{dedupe:1,live:1,ndates:1,ftz:1,fsd:'low',fnb:1,fdates:1,fdfix:1,fgps:1,near:1,albums:1,ow:1,move:0,datepol:'earlier',edited:'edited'},
   o:{simsens:'10',pbatch:'25',ppace:'space',padapt:1,palb:1},dp:{bursts:'best',must:[]}}
 };
 let PROF=(function(){try{const p=localStorage.getItem('profile');if(p&&PROFILES[p])return p}catch(e){}return 'balanced'})(),PROF_CUSTOM=false;

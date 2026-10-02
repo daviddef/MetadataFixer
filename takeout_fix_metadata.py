@@ -651,7 +651,7 @@ def pick_closest(m, candidates):
 
 REPORT_FIELDS = ["file", "sidecar", "match", "status", "detail", "live", "output",
                  "date", "date_before", "date_google", "date_note",
-                 "gps", "gps_before", "gps_google", "gps_guess", "gps_flag", "date_fix", "date_flag",
+                 "gps", "gps_before", "gps_google", "gps_guess", "gps_src", "gps_flag", "date_fix", "date_conf", "date_flag",
                  "desc", "desc_before", "desc_google",
                  "people", "favourite"]
 
@@ -1067,6 +1067,11 @@ def prepare(args, media, progress=None):
     dedupe_progress = (lambda d, t: progress("dedupe", d, t)) if progress else None
     args.dupes, args.dupe_bytes = (plan_duplicates(media, dedupe_progress) if getattr(args, "dedupe", False) else ({}, 0))
     args.live_plan = plan_live(media, progress) if getattr(args, "pair_live", False) else {}
+    if getattr(args, "smart_dates", "") or getattr(args, "loc_nearby", False) or getattr(args, "gpx", ""):
+        args.ctx = scan_context(media, progress)
+        args.nearby = plan_nearby_gps(args.ctx) if getattr(args, "loc_nearby", False) else {}
+        args.seq_index = build_seq_index(args.ctx, media) if getattr(args, "smart_dates", "") else {}
+        args.gpx_points = parse_gpx(args.gpx) if getattr(args, "gpx", "") else []
 
 
 def _ckey(p):
@@ -1620,6 +1625,195 @@ def location_problem(lat, lon, place):
 
 
 GUESS_TAG = "Backstory: location guessed from folder name"
+GUESS_TAG_NB = "Backstory: location copied from nearby photos or a GPX track"
+
+# ---- Context from the other photos: nearby locations, GPX tracks and smarter dates -----------------------------------------
+CONF_RANK = {"low": 1, "medium": 2, "high": 3}
+
+
+def scan_context(media, progress=None, should_stop=None):
+    """One exiftool pass over every photo/video: when it was taken (as written and as UTC) and where. {path: {...}}"""
+    stop = should_stop or (lambda: None)
+    paths = [str(m) for m in media]
+    ctx = {}
+    home = home_tzname()
+    for k in range(0, len(paths), 300):
+        stop()
+        if progress:
+            progress("context", min(k, len(paths)), len(paths))
+        fd, arg = tempfile.mkstemp(suffix=".args")
+        os.close(fd)
+        try:
+            Path(arg).write_text("\n".join(paths[k:k + 300]), encoding="utf-8", errors="surrogateescape")
+            r = subprocess.run(["exiftool", "-charset", "filename=utf8", "-j", "-n", "-DateTimeOriginal", "-CreateDate", "-OffsetTimeOriginal", "-GPSLatitude", "-GPSLongitude", "-@", arg],
+                               capture_output=True, text=True)
+            for it in json.loads(r.stdout or "[]"):
+                d = str(it.get("DateTimeOriginal") or it.get("CreateDate") or "")
+                wall = _epoch(d) if d and not d.startswith("0000") else None
+                utc = wall
+                if wall is not None:
+                    off = str(it.get("OffsetTimeOriginal") or "")
+                    m_ = re.fullmatch(r"([+-])(\d\d):(\d\d)", off)
+                    if m_:
+                        utc = wall - (1 if m_.group(1) == "+" else -1) * (int(m_.group(2)) * 3600 + int(m_.group(3)) * 60)
+                    elif home:
+                        try:
+                            from zoneinfo import ZoneInfo
+                            utc = wall - datetime.fromtimestamp(wall, timezone.utc).astimezone(ZoneInfo(home)).utcoffset().total_seconds()
+                        except Exception:
+                            pass
+                lat, lon = it.get("GPSLatitude"), it.get("GPSLongitude")
+                ctx[it["SourceFile"]] = {"wall": wall, "utc": utc, "lat": lat, "lon": lon if lat is not None else None}
+        except (ValueError, OSError):
+            pass
+        finally:
+            Path(arg).unlink(missing_ok=True)
+    return ctx
+
+
+def plan_nearby_gps(ctx, max_gap=1800):
+    """For photos with no location: the location of photos taken minutes before and after. Both sides close together, or one side very close.
+    Returns {path: {"lat","lon","gap_min","from"}}."""
+    timed = sorted(((v["wall"], p) for p, v in ctx.items() if v["wall"] is not None), key=lambda x: x[0])
+    located = [(t, p) for t, p in timed if ctx[p]["lat"] is not None]
+    out = {}
+    import bisect
+    times = [t for t, _ in located]
+    for t, p in timed:
+        if ctx[p]["lat"] is not None:
+            continue
+        i = bisect.bisect_left(times, t)
+        prev = located[i - 1] if i > 0 else None
+        nxt = located[i] if i < len(located) else None
+        gp = (t - prev[0]) if prev else None
+        gn = (nxt[0] - t) if nxt else None
+        pick = None
+        if prev and nxt and gp <= max_gap and gn <= max_gap:
+            a, b = ctx[prev[1]], ctx[nxt[1]]
+            if km_between(a["lat"], a["lon"], b["lat"], b["lon"]) <= 5:
+                pick = prev if gp <= gn else nxt
+            elif min(gp, gn) <= 600:
+                pick = prev if gp <= gn else nxt
+        elif prev and gp <= 900 and not nxt:
+            pick = prev
+        elif nxt and gn <= 900 and not prev:
+            pick = nxt
+        elif prev and gp <= 900 and (not gn or gn > max_gap):
+            pick = prev
+        elif nxt and gn <= 900 and (not gp or gp > max_gap):
+            pick = nxt
+        if pick:
+            c = ctx[pick[1]]
+            out[p] = {"lat": c["lat"], "lon": c["lon"], "gap_min": round(abs(pick[0] - t) / 60), "from": os.path.basename(pick[1])}
+    return out
+
+
+def parse_gpx(path):
+    """Track points from a GPX file: sorted [(utc epoch, lat, lon)]. Returns [] when unreadable."""
+    import xml.etree.ElementTree as ET
+    pts = []
+    try:
+        for ev, el in ET.iterparse(str(path)):
+            tag = el.tag.rsplit("}", 1)[-1]
+            if tag == "trkpt" or tag == "wpt":
+                tm = None
+                for ch in el:
+                    if ch.tag.rsplit("}", 1)[-1] == "time" and ch.text:
+                        tm = ch.text.strip()
+                if tm and el.get("lat") and el.get("lon"):
+                    try:
+                        dt = datetime.fromisoformat(tm.replace("Z", "+00:00"))
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        pts.append((dt.timestamp(), float(el.get("lat")), float(el.get("lon"))))
+                    except ValueError:
+                        pass
+                el.clear()
+    except (ET.ParseError, OSError):
+        return []
+    pts.sort()
+    return pts
+
+
+def gpx_lookup(pts, utc, max_gap=600):
+    """Where the track says you were at a UTC moment (interpolated between points, or the nearest point within max_gap seconds)."""
+    if not pts or utc is None:
+        return None
+    import bisect
+    ts_ = [p[0] for p in pts]
+    i = bisect.bisect_left(ts_, utc)
+    a = pts[i - 1] if i > 0 else None
+    b = pts[i] if i < len(pts) else None
+    if a and b and (b[0] - a[0]) <= 1800:
+        f = 0 if b[0] == a[0] else (utc - a[0]) / (b[0] - a[0])
+        return a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f, int(min(utc - a[0], b[0] - utc))
+    near = min((x for x in (a, b) if x), key=lambda x: abs(x[0] - utc), default=None)
+    if near and abs(near[0] - utc) <= max_gap:
+        return near[1], near[2], int(abs(near[0] - utc))
+    return None
+
+
+def reconstruct_date(m, args, ctx_entry, now=None):
+    """Every clue about when a photo was taken, combined: {"epoch","conf","why":[...]} or None. Used only where the photo has no date."""
+    now = now or time.time()
+    ev = []                                                     # (epoch, confidence, reason)
+    nd = date_from_name(Path(m).name)
+    if nd:
+        ev.append((nd, "high", "the date in its file name"))
+    seq = getattr(args, "seq_index", None) or {}
+    nb = seq.get(str(m))
+    if nb:
+        ev.append(nb)
+    h = date_hint_from_path(m, getattr(args, "roots", None), now)
+    if h:
+        ev.append((h["epoch"], "medium" if h["precision"] in ("day", "month") and h.get("strict") else "low", "its folder name '%s'" % h["folder"]))
+    try:
+        mt = os.stat(m).st_mtime
+        if 788918400 < mt < now - 2 * 86400:                    # after 1995 and not "just now"
+            ev.append((int(mt), "low", "the file's modified time"))
+    except OSError:
+        pass
+    if not ev:
+        return None
+    ev.sort(key=lambda e: -CONF_RANK[e[1]])
+    best = ev[0]
+    conf, why = best[1], [best[2]]
+    agree = [e for e in ev[1:] if abs(e[0] - best[0]) <= 7 * 86400]
+    if agree:
+        why += [e[2] for e in agree]
+        conf = {"low": "medium", "medium": "high", "high": "high"}[conf]
+    return {"epoch": int(best[0]), "conf": conf, "why": why}
+
+
+def build_seq_index(ctx, media):
+    """Neighbours by file number: IMG_1234 sits between IMG_1233 and IMG_1235, which have dates. {path: (epoch, conf, reason)}"""
+    by_dir = {}
+    for m in media:
+        n = Path(m).stem
+        mm = re.findall(r"\d{3,}", n)
+        if mm:
+            by_dir.setdefault((str(Path(m).parent), re.sub(r"\d+", "#", n)), []).append((int(mm[-1]), str(m)))
+    out = {}
+    for lst in by_dir.values():
+        lst.sort()
+        known = [(sq, ctx[p]["wall"], p) for sq, p in lst if ctx.get(p, {}).get("wall") is not None]
+        if not known:
+            continue
+        import bisect
+        seqs = [k[0] for k in known]
+        for sq, p in lst:
+            if ctx.get(p, {}).get("wall") is not None:
+                continue
+            i = bisect.bisect_left(seqs, sq)
+            a = known[i - 1] if i > 0 else None
+            b = known[i] if i < len(known) else None
+            if a and b and sq - a[0] <= 20 and b[0] - sq <= 20 and abs(b[1] - a[1]) <= 3 * 86400:
+                out[p] = (int((a[1] + b[1]) / 2), "medium" if abs(b[1] - a[1]) <= 86400 else "low", "the photos numbered either side of it")
+            elif (a and sq - a[0] <= 3) or (b and b[0] - sq <= 3):
+                x = a if (a and sq - a[0] <= 3) else b
+                out[p] = (int(x[1]), "low", "the photo numbered next to it")
+    return out
+
 
 
 def apply_sanity(m, args, ext, d, ex_now, final_taken, row, exif_args, taken):
@@ -1644,6 +1838,18 @@ def apply_sanity(m, args, ext, d, ex_now, final_taken, row, exif_args, taken):
         row["date_note"] = {"future": "this photo's date is in the future, so it is wrong",
                             "year": "the date does not fit the year in the folder name ('%s')" % (hint or {}).get("folder", ""),
                             "month": "the date is a few months away from the folder name ('%s')" % (hint or {}).get("folder", "")}[prob]
+    sd = getattr(args, "smart_dates", "") or ""
+    if sd and prob == "missing" and ext not in NO_WRITE_EXT:
+        rc = reconstruct_date(m, args, (getattr(args, "ctx", None) or {}).get(str(m)), now)
+        if rc and CONF_RANK[rc["conf"]] >= CONF_RANK.get(sd, 2):
+            exif_args = strip_date_args(exif_args) + date_args(rc["epoch"], is_video)
+            taken = final_taken = rc["epoch"]
+            row["date"], row["date_before"], row["date_fix"] = "added", "", "filled"
+            row["date_google"] = time.strftime("%Y:%m:%d %H:%M:%S", time.gmtime(rc["epoch"])) + " (reconstructed)"
+            row["date_conf"] = rc["conf"]
+            row["date_note"] = "date reconstructed from " + " and ".join(rc["why"]) + " (%s confidence)" % rc["conf"]
+            used = True
+            prob = "reconstructed"
     if fd and hint and ((prob == "missing") or (fd == "fix" and prob in ("future", "year"))) and ext not in NO_WRITE_EXT:
         before = ex_now.get("date", "") if prob != "missing" else ""
         exif_args = strip_date_args(exif_args) + date_args(hint["epoch"], is_video)
@@ -1659,6 +1865,21 @@ def apply_sanity(m, args, ext, d, ex_now, final_taken, row, exif_args, taken):
         why = location_problem(ex_now["lat"], ex_now["lon"], guess_place(m, getattr(args, "roots", None)))
         if why:
             row["gps_flag"] = why                                  # reported only: a stored location is never changed here
+    if ex_now.get("lat") is None and not (row.get("gps") in ("added", "replaced", "same", "kept")) and (getattr(args, "gpx_points", None) or getattr(args, "nearby", None)):
+        hit = None
+        c0 = (getattr(args, "ctx", None) or {}).get(str(m)) or {}
+        utc = taken if (taken and d) else c0.get("utc")
+        if getattr(args, "gpx_points", None):
+            g_ = gpx_lookup(args.gpx_points, utc)
+            if g_:
+                hit = (g_[0], g_[1], "your GPX track (%d s from a track point)" % g_[2], "gpx")
+        if hit is None and getattr(args, "nearby", None) and str(m) in args.nearby:
+            nb_ = args.nearby[str(m)]
+            hit = (nb_["lat"], nb_["lon"], "%s, taken %d min away" % (nb_["from"], nb_["gap_min"]), "nearby")
+        if hit:
+            exif_args = exif_args + gps_args(hit[0], hit[1], is_video, False) + ([] if is_video else [f"-XMP-dc:Subject-={GUESS_TAG_NB}", f"-XMP-dc:Subject+={GUESS_TAG_NB}"])
+            row["gps"], row["gps_google"], row["gps_guess"], row["gps_src"] = "added", "%.5f, %.5f" % (hit[0], hit[1]), "from " + hit[2], hit[3]
+            used = True
     if gg and ex_now.get("lat") is None and not (row.get("gps") in ("added", "replaced", "same", "kept")):
         pl = guess_place(m, getattr(args, "roots", None))
         if pl:
@@ -1747,7 +1968,7 @@ def process(m, idx, args, out_root):
                 row["detail"] = (row.get("detail") or "") + " kept the best copy and carried over what the left-out copy had"
                 if not d:
                     d = {"_sanity": True}
-    if ext not in NO_WRITE_EXT and not read_failed and (ex_now or getattr(args, "folder_dates", "") or getattr(args, "guess_gps", False)):
+    if ext not in NO_WRITE_EXT and not read_failed and (ex_now or getattr(args, "folder_dates", "") or getattr(args, "guess_gps", False) or getattr(args, "smart_dates", "") or getattr(args, "loc_nearby", False) or getattr(args, "gpx", "")):
         exif_args, taken, final_taken, san2, ex_now = apply_sanity(m, args, ext, d, ex_now, final_taken, row, exif_args, taken)
         sanity = sanity or san2
         if sanity and not d:

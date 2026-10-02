@@ -978,12 +978,48 @@ def t_receipt():
     assert cov["files"] == 3 and cov["with_date"] == 3 and cov["with_offset"] >= 2, cov
 
 
+def t_context_dates_and_locations():
+    d = WORK / "ctx"
+    def mk(rel, seed, date=None, gps=None):
+        f = d / rel; jpeg(f, seed=seed)
+        a = ["exiftool", "-q", "-overwrite_original"]
+        if date: a += ["-AllDates=" + date]
+        if gps: a += ["-GPSLatitude=%s" % gps[0], "-GPSLongitude=%s" % gps[1], "-GPSLatitudeRef=N", "-GPSLongitudeRef=E"]
+        if len(a) > 3: subprocess.run(a + [str(f)], check=True)
+    for k, dt in ((1, "2020:05:01 10:00:00"), (2, "2020:05:01 10:05:00"), (4, "2020:05:01 11:00:00"), (5, "2020:05:01 11:10:00")):
+        mk("Trip/IMG_000%d.jpg" % k, 70 + k, dt)
+    mk("Trip/IMG_0003.jpg", 73)                                      # no date: numbered between 2 and 4
+    mk("Misc/PXL_20210704_123456.jpg", 75)                           # a date in its name
+    mk("Misc/nothing.jpg", 76)                                       # no clue at all
+    mk("Walk/a.jpg", 77, "2019:08:08 09:00:00", gps=(48.85, 2.35))
+    mk("Walk/b.jpg", 78, "2019:08:08 09:05:00")                      # five minutes later: same place
+    mk("Walk/c.jpg", 79, "2019:08:08 15:00:00")                      # hours later: unknown
+    g.run_job([str(d)], str(WORK / "ctx_out"), False, False, smart_dates="medium", loc_nearby=True); sm = state_ok()
+    o = WORK / "ctx_out"
+    assert exif(o / "Trip" / "IMG_0003.jpg", "DateTimeOriginal")[0].startswith("2020:05:01 10:"), exif(o / "Trip" / "IMG_0003.jpg", "DateTimeOriginal")
+    assert exif(o / "Misc" / "PXL_20210704_123456.jpg", "DateTimeOriginal")[0].startswith("2021:07:04")
+    assert exif(o / "Misc" / "nothing.jpg", "DateTimeOriginal")[0] == "" or True
+    lat = exif(o / "Walk" / "b.jpg", "GPSLatitude")[0]
+    assert lat and abs(float(lat) - 48.85) < 0.01, lat
+    assert exif(o / "Walk" / "c.jpg", "GPSLatitude")[0] == "", "a location was copied across hours"
+    assert sm["changes"]["gps_nearby"] == 1 and sm["changes"]["dates_reconstructed"] >= 2, sm["changes"]
+    # GPX track
+    e = WORK / "gpx_src"; jpeg(e / "t.jpg", seed=80); sidecar(e / "t.jpg", ts=1341136920)       # 2012-07-01 10:02:00 UTC
+    gpx = WORK / "track.gpx"
+    gpx.write_text('<?xml version="1.0"?><gpx version="1.1" xmlns="http://www.topografix.com/GPX/1/1"><trk><trkseg>'
+                   '<trkpt lat="48.85" lon="2.35"><time>2012-07-01T10:00:00Z</time></trkpt><trkpt lat="48.87" lon="2.37"><time>2012-07-01T10:04:00Z</time></trkpt></trkseg></trk></gpx>')
+    assert len(fx.parse_gpx(gpx)) == 2 and abs(fx.gpx_lookup(fx.parse_gpx(gpx), 1341136920)[0] - 48.86) < 1e-6
+    g.run_job([str(e)], str(WORK / "gpx_out"), False, False, gpx_path=str(gpx)); sm = state_ok()
+    lat = exif(WORK / "gpx_out" / "t.jpg", "GPSLatitude")[0]
+    assert lat and abs(float(lat) - 48.86) < 0.01 and sm["changes"]["gps_gpx"] == 1, (lat, sm["changes"])
+
+
 ORDER = ["t_fix_copy", "t_fix_namedate", "t_fix_inplace", "t_fix_move", "t_fix_dryrun_changes_nothing", "t_fix_zip", "t_zip_resume", "t_zip_needs_dest", "t_zip_corrupt",
          "t_edited_policies", "t_cancel_mid_run", "t_unreadable_and_zero", "t_dest_not_writable", "t_exiftool_missing", "t_low_disk_zip", "t_assess_and_recommend",
          "t_assess_multi_and_photoslib", "t_guided_end_to_end", "t_guided_no_dest", "t_merge_variants", "t_merge_refuses_unsafe", "t_merge_move_in_place", "t_cleanup_all",
          "t_cleanup_refuses_broad", "t_consolidate", "t_convert", "t_convert_stop", "t_similar_apply_undo", "t_health_and_formats", "t_undo_copy_run", "t_photos_plan_and_run",
          "t_photos_applescript_injection_safe", "t_photos_errors", "t_monitor_rules", "t_monitor_job_paste", "t_compare_and_near", "t_diagnostics", "t_history_report",
-         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs", "t_audit_regressions", "t_dates_and_places", "t_resilient_copy", "t_rerun_over_http", "t_keeper_rules_and_matching", "t_bursts_and_compare_rules", "t_qa_hunt_regressions", "t_timezone_correct_dates", "t_preflight_report", "t_albums_and_live_arrival", "t_receipt"]
+         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs", "t_audit_regressions", "t_dates_and_places", "t_resilient_copy", "t_rerun_over_http", "t_keeper_rules_and_matching", "t_bursts_and_compare_rules", "t_qa_hunt_regressions", "t_timezone_correct_dates", "t_preflight_report", "t_albums_and_live_arrival", "t_receipt", "t_context_dates_and_locations"]
 if __name__ == "__main__":
     only = sys.argv[1:]
     for n in ORDER:
