@@ -262,6 +262,15 @@ The zone for a location comes from the nearest of about 100 reference cities. Ne
 - **Fill missing locations from photos taken minutes apart** (⚠️). A photo with no location takes the location of photos taken within about 30 minutes before and after it when those are close together (or one very close neighbour within 15 minutes). It never replaces a location and is labelled with a keyword.
 - **Fill missing locations from a GPX track** (optional). Choose a `.gpx` file from a watch or app; each photo's time is matched to where the track says you were (interpolated between points, within about 10 minutes of a point). Use it with *Correct the time zone*. A GPX location beats a nearby-photo location, which beats a folder-name guess.
 
+## Offline place names (Guided and Fix: *Write place names*)
+
+Backstory can turn a location into a place name **without going online**. It ships with a list of about **144,000 towns and cities** (from GeoNames, see the notices) and finds the nearest one to a photo's location in a fraction of a millisecond. With **Write place names (city, region, country) from the location** on, every photo that has a location (from Google's info file, already inside the photo, copied from nearby photos or a GPX track, or guessed from a folder) gets its **city, region and country** written into it (IPTC and XMP fields), unless it already has a city. Apple Photos works out place names for itself from the GPS location; **Lightroom, digiKam, Synology Photos** and most other apps read the ones written here.
+- The town is only named when it is within about 60 km; farther out, only the region and country are written; in the middle of an ocean nothing is written.
+- It is nearest *town in the list*, so a spot in a suburb may name the neighbouring town.
+- The **Health** tab shows *Where your photos were taken* (the commonest places in the files it checked), the **location-mismatch** warning now also says where the location actually is, and the **migration receipt** reports how many photos have a place name.
+- It is on in every style except *Fastest*.
+- The data file is `places.csv.gz`, kept next to the app. If it is missing, the option quietly does nothing.
+
 ## Albums and Live Photos in Apple Photos
 
 After you check upload status (Monitor tab), Backstory also checks **whether your albums and Live Photos arrived**: how many album folders became albums with all their photos, which are missing or short, and how many Live Photos Photos holds against how many were sent. This reads a copy of Photos' own database, which Apple does not document, so treat it as a strong hint.

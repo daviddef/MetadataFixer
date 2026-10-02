@@ -52,7 +52,7 @@ Most Takeout tools are one-shot scripts: they fix dates and stop, with no previe
 - ~~**Library health report:**~~ DONE (Health tab). One page of what is wrong with a library: missing dates, no GPS, duplicates, odd formats, corrupt files, biggest folders.
 - **Corrupt file triage:** detect truncated or damaged photos and videos, and repair the simple cases (like the leading-bytes problem we saw).
 - **HEIC/RAW/format helpers:** optional convert for HEIC to JPG, and old RAW to DNG, with the same verify-before-replace rule.
-- **Location tools:** ~~guess from folder names~~ DONE; ~~fill from neighbouring photos~~ DONE, ~~GPX track import~~ DONE; still to do: place-name lookup offline.
+- **Location tools:** ~~guess from folder names~~ DONE; ~~fill from neighbouring photos~~ DONE, ~~GPX track import~~ DONE; ~~offline place-name lookup~~ DONE (about 144,000 towns and cities).
 - ~~**Receipt**~~ DONE (Monitor tab): a shareable page with metadata coverage, Photos/iCloud counts, albums and Live Photos.
 - ~~**Quality helpers:**~~ blurry and screenshot detection DONE (keeper rules, Health). Still to do: side-by-side zoom compare.
 - ~~**Motion Photos**~~ extraction DONE (video saved as .MP4). Pairing as Apple Live Photos is not possible with exiftool alone.

@@ -1063,12 +1063,36 @@ def t_motion_photo_extract():
     assert list((WORK / "motion_out").rglob("plain.MP4")) == []
 
 
+def t_offline_place_names():
+    assert fx.places_available()
+    for (la, lo), city, cc in (((-26.2041, 28.0473), "Johannesburg", "ZA"), ((35.68, 139.65), "Tokyo", "JP"), ((48.8566, 2.3522), "Paris", "FR"), ((-33.92, 18.42), "Cape Town", "ZA")):
+        pn = fx.place_name(la, lo)
+        assert pn and pn["city"] == city and pn["cc"] == cc, (la, lo, pn)
+    assert fx.place_name(0.0, 0.0) is None and fx.place_name(-45.0, -150.0) is None and fx.place_name("x", 1) is None
+    assert "actually near" in fx.location_problem(35.68, 139.65, fx.guess_place("/x/Johannesburg/a.jpg", ["/x"]))
+    d = WORK / "pn_src"
+    jpeg(d / "a.jpg", seed=111); sidecar(d / "a.jpg", lat=-26.2041, lon=28.0473)
+    jpeg(d / "b.jpg", seed=112); sidecar(d / "b.jpg", lat=35.68, lon=139.65)
+    subprocess.run(["exiftool", "-q", "-overwrite_original", "-IPTC:City=Home Town", str(d / "b.jpg")], check=True)
+    jpeg(d / "c.jpg", seed=113); sidecar(d / "c.jpg")
+    g.run_job([str(d)], str(WORK / "pn_out"), False, False, place_names=True); sm = state_ok()
+    o = WORK / "pn_out"
+    def city(f):
+        return subprocess.run(["exiftool", "-s3", "-City", "-Country", "-CountryCode", "-State", str(f)], capture_output=True, text=True).stdout.split("\n")
+    assert city(o / "a.jpg")[:2] == ["Johannesburg", "South Africa"] and city(o / "a.jpg")[3] == "Gauteng", city(o / "a.jpg")
+    assert city(o / "b.jpg")[0] == "Home Town", "an existing city was replaced"
+    assert city(o / "c.jpg")[0] == "", "a place was invented for a photo with no location"
+    assert sm["changes"]["places_named"] == 1, sm["changes"]
+    g.run_job([str(d)], str(WORK / "pn_out2"), False, False, place_names=False); state_ok()
+    assert city(WORK / "pn_out2" / "a.jpg")[0] == ""
+
+
 ORDER = ["t_fix_copy", "t_fix_namedate", "t_fix_inplace", "t_fix_move", "t_fix_dryrun_changes_nothing", "t_fix_zip", "t_zip_resume", "t_zip_needs_dest", "t_zip_corrupt",
          "t_edited_policies", "t_cancel_mid_run", "t_unreadable_and_zero", "t_dest_not_writable", "t_exiftool_missing", "t_low_disk_zip", "t_assess_and_recommend",
          "t_assess_multi_and_photoslib", "t_guided_end_to_end", "t_guided_no_dest", "t_merge_variants", "t_merge_refuses_unsafe", "t_merge_move_in_place", "t_cleanup_all",
          "t_cleanup_refuses_broad", "t_consolidate", "t_convert", "t_convert_stop", "t_similar_apply_undo", "t_health_and_formats", "t_undo_copy_run", "t_photos_plan_and_run",
          "t_photos_applescript_injection_safe", "t_photos_errors", "t_monitor_rules", "t_monitor_job_paste", "t_compare_and_near", "t_diagnostics", "t_history_report",
-         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs", "t_audit_regressions", "t_dates_and_places", "t_resilient_copy", "t_rerun_over_http", "t_keeper_rules_and_matching", "t_bursts_and_compare_rules", "t_qa_hunt_regressions", "t_timezone_correct_dates", "t_preflight_report", "t_albums_and_live_arrival", "t_receipt", "t_context_dates_and_locations", "t_blur_and_screenshots", "t_motion_photo_extract"]
+         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs", "t_audit_regressions", "t_dates_and_places", "t_resilient_copy", "t_rerun_over_http", "t_keeper_rules_and_matching", "t_bursts_and_compare_rules", "t_qa_hunt_regressions", "t_timezone_correct_dates", "t_preflight_report", "t_albums_and_live_arrival", "t_receipt", "t_context_dates_and_locations", "t_blur_and_screenshots", "t_motion_photo_extract", "t_offline_place_names"]
 if __name__ == "__main__":
     only = sys.argv[1:]
     for n in ORDER:

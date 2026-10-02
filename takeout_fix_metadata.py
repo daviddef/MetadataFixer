@@ -29,6 +29,7 @@ import atexit
 import csv
 import json
 import unicodedata
+import math
 import os
 import re
 import shutil
@@ -533,7 +534,7 @@ def read_existing(path, is_video=False):
     try:
         _, lines = tool().run(["-j", "-n", "-api", "QuickTimeUTC=1", "-DateTimeOriginal", "-CreateDate",
                                "-QuickTime:CreateDate", "-XMP:DateCreated", "-GPSLatitude", "-GPSLongitude", "-Keys:GPSCoordinates",
-                               "-ImageDescription", "-XMP-dc:Description", "-XMP:Rating", str(path)])
+                               "-ImageDescription", "-XMP-dc:Description", "-XMP:Rating", "-City", str(path)])
     except (OSError, RuntimeError, UnicodeError):
         return {"_failed": True}
     try:
@@ -554,7 +555,7 @@ def read_existing(path, is_video=False):
              else (d.get("DateTimeOriginal"), d.get("CreateDate"), d.get("DateCreated")))
     date = str(next((c for c in cands if c and not str(c).startswith("0000")), "") or "")
     desc = str(d.get("ImageDescription") or d.get("Description") or "").strip()
-    return {"date": date, "lat": lat, "lon": lon, "desc": desc, "rating": d.get("Rating")}
+    return {"date": date, "lat": lat, "lon": lon, "desc": desc, "rating": d.get("Rating"), "city": str(d.get("City") or "")}
 
 
 def _epoch(date_str):
@@ -651,7 +652,7 @@ def pick_closest(m, candidates):
 
 REPORT_FIELDS = ["file", "sidecar", "match", "status", "detail", "live", "output",
                  "date", "date_before", "date_google", "date_note",
-                 "gps", "gps_before", "gps_google", "gps_guess", "gps_src", "gps_flag", "date_fix", "date_conf", "date_flag",
+                 "gps", "gps_before", "gps_google", "gps_guess", "gps_src", "gps_flag", "place", "date_fix", "date_conf", "date_flag",
                  "desc", "desc_before", "desc_google",
                  "people", "favourite"]
 
@@ -1607,6 +1608,88 @@ def km_between(lat1, lon1, lat2, lon2):
     a = math.sin(math.radians(lat2 - lat1) / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(math.radians(lon2 - lon1) / 2) ** 2
     return 6371 * 2 * math.asin(min(1.0, math.sqrt(a)))
 
+# ---- Offline place names: where is this latitude/longitude? ----------------------------------------------------------------
+# places.csv.gz holds about 144,000 towns and cities (GeoNames, CC BY 4.0, https://www.geonames.org) as: lat, lon, name, region, country code.
+COUNTRY_NAMES = dict(x.split(" ", 1) for x in """AD Andorra|AE United Arab Emirates|AF Afghanistan|AG Antigua and Barbuda|AI Anguilla|AL Albania|AM Armenia|AO Angola|AQ Antarctica|AR Argentina|AS American Samoa|AT Austria|AU Australia|AW Aruba|AX Aland Islands|AZ Azerbaijan|BA Bosnia and Herzegovina|BB Barbados|BD Bangladesh|BE Belgium|BF Burkina Faso|BG Bulgaria|BH Bahrain|BI Burundi|BJ Benin|BL Saint Barthelemy|BM Bermuda|BN Brunei|BO Bolivia|BQ Bonaire, Sint Eustatius and Saba|BR Brazil|BS Bahamas|BT Bhutan|BW Botswana|BY Belarus|BZ Belize|CA Canada|CC Cocos Islands|CD Democratic Republic of the Congo|CF Central African Republic|CG Republic of the Congo|CH Switzerland|CI Ivory Coast|CK Cook Islands|CL Chile|CM Cameroon|CN China|CO Colombia|CR Costa Rica|CU Cuba|CV Cape Verde|CW Curacao|CX Christmas Island|CY Cyprus|CZ Czechia|DE Germany|DJ Djibouti|DK Denmark|DM Dominica|DO Dominican Republic|DZ Algeria|EC Ecuador|EE Estonia|EG Egypt|EH Western Sahara|ER Eritrea|ES Spain|ET Ethiopia|FI Finland|FJ Fiji|FK Falkland Islands|FM Micronesia|FO Faroe Islands|FR France|GA Gabon|GB United Kingdom|GD Grenada|GE Georgia|GF French Guiana|GG Guernsey|GH Ghana|GI Gibraltar|GL Greenland|GM Gambia|GN Guinea|GP Guadeloupe|GQ Equatorial Guinea|GR Greece|GS South Georgia and the South Sandwich Islands|GT Guatemala|GU Guam|GW Guinea-Bissau|GY Guyana|HK Hong Kong|HN Honduras|HR Croatia|HT Haiti|HU Hungary|ID Indonesia|IE Ireland|IL Israel|IM Isle of Man|IN India|IO British Indian Ocean Territory|IQ Iraq|IR Iran|IS Iceland|IT Italy|JE Jersey|JM Jamaica|JO Jordan|JP Japan|KE Kenya|KG Kyrgyzstan|KH Cambodia|KI Kiribati|KM Comoros|KN Saint Kitts and Nevis|KP North Korea|KR South Korea|KW Kuwait|KY Cayman Islands|KZ Kazakhstan|LA Laos|LB Lebanon|LC Saint Lucia|LI Liechtenstein|LK Sri Lanka|LR Liberia|LS Lesotho|LT Lithuania|LU Luxembourg|LV Latvia|LY Libya|MA Morocco|MC Monaco|MD Moldova|ME Montenegro|MF Saint Martin|MG Madagascar|MH Marshall Islands|MK North Macedonia|ML Mali|MM Myanmar|MN Mongolia|MO Macao|MP Northern Mariana Islands|MQ Martinique|MR Mauritania|MS Montserrat|MT Malta|MU Mauritius|MV Maldives|MW Malawi|MX Mexico|MY Malaysia|MZ Mozambique|NA Namibia|NC New Caledonia|NE Niger|NF Norfolk Island|NG Nigeria|NI Nicaragua|NL Netherlands|NO Norway|NP Nepal|NR Nauru|NU Niue|NZ New Zealand|OM Oman|PA Panama|PE Peru|PF French Polynesia|PG Papua New Guinea|PH Philippines|PK Pakistan|PL Poland|PM Saint Pierre and Miquelon|PN Pitcairn Islands|PR Puerto Rico|PS Palestine|PT Portugal|PW Palau|PY Paraguay|QA Qatar|RE Reunion|RO Romania|RS Serbia|RU Russia|RW Rwanda|SA Saudi Arabia|SB Solomon Islands|SC Seychelles|SD Sudan|SE Sweden|SG Singapore|SH Saint Helena|SI Slovenia|SJ Svalbard and Jan Mayen|SK Slovakia|SL Sierra Leone|SM San Marino|SN Senegal|SO Somalia|SR Suriname|SS South Sudan|ST Sao Tome and Principe|SV El Salvador|SX Sint Maarten|SY Syria|SZ Eswatini|TC Turks and Caicos Islands|TD Chad|TF French Southern Territories|TG Togo|TH Thailand|TJ Tajikistan|TK Tokelau|TL Timor-Leste|TM Turkmenistan|TN Tunisia|TO Tonga|TR Turkey|TT Trinidad and Tobago|TV Tuvalu|TW Taiwan|TZ Tanzania|UA Ukraine|UG Uganda|UM United States Minor Outlying Islands|US United States|UY Uruguay|UZ Uzbekistan|VA Vatican City|VC Saint Vincent and the Grenadines|VE Venezuela|VG British Virgin Islands|VI US Virgin Islands|VN Vietnam|VU Vanuatu|WF Wallis and Futuna|WS Samoa|XK Kosovo|YE Yemen|YT Mayotte|ZA South Africa|ZM Zambia|ZW Zimbabwe""".split("|"))
+PLACE_CFG = {"on": False}
+_PLACES = {"grid": None, "rows": None, "tried": False}
+PLACES_FILE = Path(__file__).resolve().parent / "places.csv.gz"
+
+
+def places_available():
+    return PLACES_FILE.exists()
+
+
+def _load_places():
+    if _PLACES["tried"]:
+        return _PLACES["rows"] is not None
+    _PLACES["tried"] = True
+    try:
+        import gzip
+        import csv as _csv
+        rows, grid = [], {}
+        with gzip.open(PLACES_FILE, "rt", encoding="utf-8") as fh:
+            for lat, lon, name, region, cc in _csv.reader(fh):
+                la, lo = float(lat), float(lon)
+                rows.append((la, lo, name, region, cc))
+                grid.setdefault((int(la // 1), int(lo // 1)), []).append(len(rows) - 1)
+        _PLACES["rows"], _PLACES["grid"] = rows, grid
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def place_name(lat, lon, max_km=60):
+    """The nearest known town or city to a spot: {"city","region","country","cc","km","text"} or None. Offline.
+    Within max_km the town is named; farther away only the region and country are given (the nearest place within 400 km)."""
+    try:
+        lat, lon = float(lat), float(lon)
+    except (TypeError, ValueError):
+        return None
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180) or not _load_places():
+        return None
+    rows, grid = _PLACES["rows"], _PLACES["grid"]
+    best = None
+    cy, cx = int(lat // 1), int(lon // 1)
+    for ring in range(0, 5):
+        for dy in range(-ring, ring + 1):
+            for dx in range(-ring, ring + 1):
+                if max(abs(dy), abs(dx)) != ring:
+                    continue
+                for i in grid.get((cy + dy, ((cx + dx + 180) % 360) - 180), ()):
+                    la, lo = rows[i][0], rows[i][1]
+                    d2 = (la - lat) ** 2 + ((lo - lon) * max(0.05, math.cos(math.radians(lat)))) ** 2
+                    if best is None or d2 < best[0]:
+                        best = (d2, i)
+        if best is not None and ring >= 1 and (best[0] ** 0.5) * 111 < ring * 80:
+            break
+    if best is None:
+        return None
+    la, lo, name, region, cc = rows[best[1]]
+    km = km_between(lat, lon, la, lo)
+    if km > 400:
+        return None
+    country = COUNTRY_NAMES.get(cc, cc)
+    city = name if km <= max_km else ""
+    text = ", ".join(x for x in (city, region if region and region != name else "", country) if x)
+    return {"city": city, "region": region, "country": country, "cc": cc, "km": round(km, 1), "text": text}
+
+
+def place_args(lat, lon):
+    """exiftool arguments that write the place name into a still picture (IPTC and XMP, which Lightroom, digiKam, Synology and most
+    other apps read). Apple Photos works out place names itself from the GPS location."""
+    pn = place_name(lat, lon)
+    if not pn:
+        return [], None
+    a = []
+    if pn["city"]:
+        a += [f"-IPTC:City={pn['city']}", f"-XMP-photoshop:City={pn['city']}"]
+    if pn["region"]:
+        a += [f"-IPTC:Province-State={pn['region']}", f"-XMP-photoshop:State={pn['region']}"]
+    a += [f"-IPTC:Country-PrimaryLocationName={pn['country']}", f"-XMP-photoshop:Country={pn['country']}", f"-XMP-iptcCore:CountryCode={pn['cc']}"]
+    return a, pn
+
+
 
 def location_problem(lat, lon, place):
     """Why a stored location looks wrong, or None: it sits at 0,0 (a classic error), or far from the place the folder names."""
@@ -1620,7 +1703,8 @@ def location_problem(lat, lon, place):
         lim = 300 if place["kind"] == "city" else (4500 if place["place"] in LARGE_COUNTRIES else 1500)
         km = km_between(lat, lon, place["lat"], place["lon"])
         if km > lim:
-            return "about %s km from %s, the place named by folder '%s'" % (f"{int(km):,}", place["place"], place["folder"])
+            here = place_name(lat, lon)
+            return "about %s km from %s, the place named by folder '%s'%s" % (f"{int(km):,}", place["place"], place["folder"], (" (its location is actually near %s)" % here["text"]) if here else "")
     return None
 
 
@@ -1886,6 +1970,21 @@ def apply_sanity(m, args, ext, d, ex_now, final_taken, row, exif_args, taken):
             exif_args = exif_args + gps_args(pl["lat"], pl["lon"], is_video, ext not in NO_WRITE_EXT and not is_video)
             row["gps"], row["gps_google"], row["gps_guess"] = "added", "%.4f, %.4f" % (pl["lat"], pl["lon"]), "%s (%s, from folder '%s')" % (pl["place"], pl["kind"], pl["folder"])
             used = True
+    if PLACE_CFG["on"] and not is_video and ext not in NO_WRITE_EXT and not ex_now.get("city"):
+        flat = flon = None
+        if row.get("gps") in ("added", "replaced") and row.get("gps_google"):
+            try:
+                flat, flon = (float(x) for x in str(row["gps_google"]).split(",")[:2])
+            except ValueError:
+                flat = flon = None
+        elif ex_now.get("lat") is not None and ex_now.get("lon") is not None:
+            flat, flon = ex_now["lat"], ex_now["lon"]
+        if flat is not None:
+            pa, pn = place_args(flat, flon)
+            if pa:
+                exif_args = exif_args + pa
+                row["place"] = pn["text"]
+                used = True
     return exif_args, taken, final_taken, used, ex_now
 
 # ---- Google Motion Photos: a JPEG with a short MP4 stuck on the end -------------------------------------------------------
@@ -2017,7 +2116,7 @@ def process(m, idx, args, out_root):
                 row["detail"] = (row.get("detail") or "") + " kept the best copy and carried over what the left-out copy had"
                 if not d:
                     d = {"_sanity": True}
-    if ext not in NO_WRITE_EXT and not read_failed and (ex_now or getattr(args, "folder_dates", "") or getattr(args, "guess_gps", False) or getattr(args, "smart_dates", "") or getattr(args, "loc_nearby", False) or getattr(args, "gpx", "")):
+    if ext not in NO_WRITE_EXT and not read_failed and (ex_now or PLACE_CFG["on"] or getattr(args, "folder_dates", "") or getattr(args, "guess_gps", False) or getattr(args, "smart_dates", "") or getattr(args, "loc_nearby", False) or getattr(args, "gpx", "")):
         exif_args, taken, final_taken, san2, ex_now = apply_sanity(m, args, ext, d, ex_now, final_taken, row, exif_args, taken)
         sanity = sanity or san2
         if sanity and not d:
@@ -4620,6 +4719,7 @@ def health_scan(roots, deep=False, progress=None, should_stop=None, exif_cap=400
         mism = no_date = no_gps = yr_mismatch = n_read = future = month_mis = fillable = guessable = loc_mis = 0
         loc_ex = []
         date_ex, fut_ex, place_ex = [], [], []
+        places_c = Counter()
         models = Counter()
         mism_list = []
         for k in range(0, len(pick), 300):
@@ -4662,6 +4762,9 @@ def health_scan(roots, deep=False, progress=None, should_stop=None, exif_cap=400
                         if why in ("future", "year") and len(date_ex if why == "year" else fut_ex) < 6:
                             (date_ex if why == "year" else fut_ex).append("%s (in '%s') says %s" % (os.path.basename(p), (date_hint_from_path(p, roots) or {}).get("folder", os.path.basename(os.path.dirname(p))), d[:10]))
                     if it.get("GPSLatitude") is not None and it.get("GPSLongitude") is not None:
+                        pn_ = place_name(it["GPSLatitude"], it["GPSLongitude"])
+                        if pn_:
+                            places_c[(pn_["city"] + ", " if pn_["city"] else "") + pn_["country"]] += 1
                         why_ = location_problem(it["GPSLatitude"], it["GPSLongitude"], guess_place(p, roots))
                         if why_:
                             loc_mis += 1
@@ -4681,7 +4784,7 @@ def health_scan(roots, deep=False, progress=None, should_stop=None, exif_cap=400
             finally:
                 Path(arg).unlink(missing_ok=True)
         deep_stats = {"read": n_read, "pool": len(pool), "mismatch": mism, "no_date": no_date, "no_gps": no_gps, "year_mismatch": yr_mismatch,
-                      "future": future, "month_mismatch": month_mis, "fillable": fillable, "guessable": guessable, "loc_mismatch": loc_mis, "loc_examples": loc_ex, "date_examples": date_ex, "future_examples": fut_ex, "place_examples": place_ex,
+                      "places": places_c.most_common(8), "future": future, "month_mismatch": month_mis, "fillable": fillable, "guessable": guessable, "loc_mismatch": loc_mis, "loc_examples": loc_ex, "date_examples": date_ex, "future_examples": fut_ex, "place_examples": place_ex,
                       "models": models.most_common(5), "mism_list": mism_list, "sampled": not deep or len(pool) > exif_cap}
     # screenshots (by name, and by look when the file was read) and very soft pictures (a sample)
     shots = [f for f in files if SCREENSHOT_NAME_RE.search(os.path.basename(f[0]))]
@@ -4887,9 +4990,10 @@ def library_coverage(root, sample=250, progress=None, should_stop=None):
             os.close(fd)
             try:
                 Path(arg).write_text("\n".join(pick[k:k + 200]), encoding="utf-8", errors="surrogateescape")
-                r = subprocess.run(["exiftool", "-charset", "filename=utf8", "-j", "-n", "-DateTimeOriginal", "-CreateDate", "-GPSLatitude", "-ImageDescription", "-OffsetTimeOriginal", "-@", arg], capture_output=True, text=True)
+                r = subprocess.run(["exiftool", "-charset", "filename=utf8", "-j", "-n", "-DateTimeOriginal", "-CreateDate", "-GPSLatitude", "-ImageDescription", "-OffsetTimeOriginal", "-City", "-@", arg], capture_output=True, text=True)
                 for it in json.loads(r.stdout or "[]"):
                     out["sampled"] += 1
+                    out["with_city"] = out.get("with_city", 0) + bool(it.get("City"))
                     d = str(it.get("DateTimeOriginal") or it.get("CreateDate") or "")
                     if d and not d.startswith("0000"):
                         out["with_date"] += 1
@@ -5230,6 +5334,8 @@ def story_from_row(row, out_root=None, thumb=True):
         notes.append("Date " + ("filled in" if row["date_fix"] == "filled" else "corrected") + " from the folder name")
     if row.get("gps_guess"):
         notes.append("Location is a guess: " + row["gps_guess"])
+    if row.get("place"):
+        notes.append("Place name added: " + row["place"])
     if row.get("status") == "duplicate":
         notes.append("Identical copy: the photo is kept once")
     if row.get("status") == "left-out":
