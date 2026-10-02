@@ -30,7 +30,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.03-h"
+VERSION = "2026.10.03-i"
 class Cancelled(Exception):
     pass
 
@@ -3751,6 +3751,61 @@ input[type=checkbox]:checked{animation:tick .3s cubic-bezier(.2,1.8,.4,1)}
 .profinfo{display:flex;flex-wrap:wrap;gap:6px 18px;align-items:center;font-size:13.5px;padding:8px 12px;border-radius:10px;background:var(--soft)}
 .dots{letter-spacing:2px;color:var(--acc)}.dots.risk{color:var(--warn)}.dots.rew{color:var(--ok)}
 .profline{font-size:13px;color:var(--mute);margin:-4px 0 10px}.profline b{color:var(--ink)}
+
+/* ---- v4 compact: short screens, details on demand, floating activity dock ---- */
+.card{padding:14px 16px;margin-bottom:10px}
+.ph{font-size:20px;margin:2px 0 2px}
+.subline{margin:0 0 8px}
+.hero{padding:12px 16px 10px;margin-bottom:12px;border-radius:16px}.hero h1{font-size:22px}.hero .tag{font-size:13px;margin-top:2px}.logo{width:42px!important;height:42px!important}
+.hero .fbar{margin-top:8px;padding-top:6px}.floaties span{font-size:18px}
+#frame{padding-top:8px;margin-bottom:10px}.tabs{padding:3px}.tab{padding:6px 10px;font-size:13px}.tab b{font-size:14px}
+.status{margin-top:6px}.status .bar{height:14px;margin-top:4px}
+.opt{padding:4px 10px;margin:0 -10px}.opt small{display:none;margin-top:3px}.opt.open small{display:block}
+.opt .ib{flex:none;margin-left:auto;align-self:flex-start;width:20px;height:20px;padding:0;border-radius:50%;font:700 11px/1 system-ui;color:var(--mute);border:1px solid var(--line);background:transparent;cursor:pointer;display:grid;place-items:center}
+.opt.open .ib{background:var(--acc);color:#fff;border-color:var(--acc)}
+.opt>div{flex:1}
+details.more{margin:6px 0;border:1px dashed var(--line);border-radius:12px;padding:0 12px}
+details.more>summary{cursor:pointer;padding:9px 0;font-weight:600;color:var(--mute);list-style:none}
+details.more>summary::before,details.sec>summary::before{content:"\25B8";display:inline-block;width:16px;transition:transform .15s}
+details[open]>summary::before{transform:rotate(90deg)}
+details.more[open]>summary{color:var(--ink)}
+details.sec{margin:6px 0;border:1px solid var(--line);border-radius:12px;background:var(--card)}
+details.sec>summary{cursor:pointer;padding:9px 14px;font-weight:700;font-size:15px;list-style:none}
+details.sec>.secbody{padding:0 14px 12px}
+details.sec .tiles{margin:6px 0}
+.secbar{display:flex;gap:6px;justify-content:flex-end;margin:4px 0}
+.gcheck{display:flex!important;flex-wrap:wrap;gap:6px!important;margin:8px 0 4px!important}
+.gc{padding:3px 10px 3px 4px!important;font-size:12.5px!important;border-radius:999px!important}.gc small{display:none!important}.gc i{width:18px!important;height:18px!important;font-size:11px!important}
+.rec{padding:8px 12px;margin:5px 0;cursor:pointer}.rec .why{display:none}.rec.open .why{display:block}.rec>div>b::after{content:" \25BE";color:var(--mute);font-size:11px}
+.flowstep{padding:8px 12px}.flowstep .why{display:none}.flowstep.open .why{display:block}
+.tile{padding:8px 12px}.tile b{font-size:22px}.tile span{font-size:11px}.tiles{gap:8px;margin:6px 0}
+.chkbox{padding:8px 12px;margin:6px 0 8px}.chkbox .mutes{display:none}
+.profcard .mutes{display:none}.profpills{margin:8px 0 6px;gap:6px}.profpill{padding:6px 10px;min-width:0}.profpill span{display:none}.profpill b{font-size:13.5px}.profinfo{padding:5px 10px;font-size:12.5px}
+.profline{margin:-2px 0 6px}
+button.p{padding:9px 18px;font-size:15px}
+h2{margin:12px 0 4px}small{margin-top:3px}
+.foot{margin:18px 0 70px}
+#prog:has(#tiles:empty):has(#recent:empty):not(:has(#cvlive:not([style*="none"]))){display:none!important}
+/* floating activity dock */
+.dock{position:fixed;right:14px;bottom:14px;width:360px;max-width:calc(100vw - 20px);z-index:150;background:var(--card);border:1px solid var(--line);border-radius:16px;box-shadow:0 18px 50px -12px rgba(15,23,42,.45);display:none;overflow:hidden;animation:cardIn .25s both}
+.dock.on{display:block}
+.dockhead{display:flex;align-items:center;gap:8px;padding:8px 10px 8px 14px;background:linear-gradient(120deg,color-mix(in srgb,var(--acc) 18%,var(--card)),color-mix(in srgb,var(--acc2) 14%,var(--card)));cursor:default}
+.dockhead b{flex:1;min-width:0;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dockhead .dp{font-weight:700;font-size:13px;font-variant-numeric:tabular-nums}
+.dockhead button{padding:0;width:24px;height:24px;border-radius:8px;line-height:1;font-size:15px}
+.dbar{height:6px;background:var(--line)}.dbar i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--acc),var(--acc2));transition:width .3s}
+.dbar.indet i{width:35%!important;animation:slide 1.2s ease-in-out infinite alternate}
+.dockbody{padding:8px 12px 10px}
+.dock.min .dockbody{display:none}
+.dmsg{font-size:13px;margin-bottom:6px}
+.dretry{font-size:12.5px;padding:5px 8px;border-radius:8px;background:color-mix(in srgb,var(--sun) 22%,var(--card));margin-bottom:6px;display:none}
+.dlog{font:11.5px/1.5 ui-monospace,Menlo,monospace;color:var(--mute);max-height:150px;overflow:auto;border-top:1px solid var(--line);padding-top:6px;white-space:pre-wrap;word-break:break-word}
+.dlog .e{color:var(--bad)}.dlog .w{color:var(--warn)}.dlog .g{color:var(--ok)}
+.dfoot{display:flex;gap:8px;align-items:center;margin-top:8px;font-size:13px}
+.dtoggle{position:fixed;right:14px;bottom:14px;z-index:140;border-radius:999px;padding:8px 14px;box-shadow:0 8px 24px -8px rgba(15,23,42,.4);display:none}
+.dtoggle.on{display:block}
+#actbtn{margin-left:6px}
+@media(max-width:560px){.dock{left:8px;right:8px;bottom:8px;width:auto}.dlog{max-height:110px}}
 </style></head><body><div id="ack" style="display:none"><div class="ackbox" role="dialog" aria-modal="true" aria-labelledby="acktitle">
 <h2 id="acktitle">Before you start</h2>
 <p>Backstory changes, copies, moves and (if you choose) deletes files. Please read this once:</p>
@@ -3819,7 +3874,7 @@ input[type=checkbox]:checked{animation:tick .3s cubic-bezier(.2,1.8,.4,1)}
     <button class="tab" data-tab="history" role="tab"><b>&#128196;</b> History</button>
     <button class="tab" data-tab="help" role="tab"><b>&#10067;</b> Help</button>
   </nav>
-  <div class="status"><div class="srow"><span id="msg">Ready when you are! Pick a tab, set it up and press Start.</span><a href="#" id="goto" style="display:none">View results &rarr;</a><button id="contbtn" class="sm p" style="display:none;margin-left:10px">Continue</button><button id="stopall" class="sm" style="display:none;margin-left:10px">Stop</button></div>
+  <div class="status"><div class="srow"><span id="msg">Ready when you are! Pick a tab, set it up and press Start.</span><a href="#" id="goto" style="display:none">View results &rarr;</a><button id="actbtn" class="sm" title="Show or hide the floating activity log">Show activity</button><button id="contbtn" class="sm p" style="display:none;margin-left:10px">Continue</button><button id="stopall" class="sm" style="display:none;margin-left:10px">Stop</button></div>
   <div id="retrybar" class="retrybar" style="display:none"></div>
   <div class="bar" id="bar"><i id="fill"></i><span id="pct">0%</span></div></div>
 </div>
@@ -4037,6 +4092,8 @@ input[type=checkbox]:checked{animation:tick .3s cubic-bezier(.2,1.8,.4,1)}
 
 
 
+<div id="dock" class="dock" role="status" aria-live="polite"><div class="dockhead"><b id="dtitle">Activity</b><span class="dp" id="dpct"></span><button id="dmin" title="Minimise" aria-label="Minimise">&ndash;</button><button id="dhide" title="Hide" aria-label="Hide activity">&times;</button></div><div class="dbar" id="dbar"><i id="dfill"></i></div><div class="dockbody"><div class="dmsg" id="dmsg"></div><div class="dretry" id="dretry"></div><div class="dlog" id="dlog"></div><div class="dfoot"><button id="dstop" class="sm" style="display:none">Stop</button><a href="#" id="dview" style="display:none">View results &rarr;</a></div></div></div>
+<button id="dtoggle" class="dtoggle p" aria-label="Show activity">&#128200; Activity</button>
 <footer class="foot">Free software provided &ldquo;as is&rdquo;, without warranty. Back up your photos first. &middot; <a href="#" data-help="safety">Safety &amp; disclaimer</a> &middot; Support: <a href="mailto:thestocksoup@gmail.com">thestocksoup@gmail.com</a></footer>
 
 
@@ -4787,7 +4844,7 @@ let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   else if(s.done>0&&s.total){pct=100*s.done/s.total}
   else if(s.phase&&s.phase.total){pct=100*s.phase.done/s.phase.total}
   else if(s.state==='scanning'||s.state==='running'){indet=true}
-  setBar('bar','fill','pct',pct,indet);$('bar').classList.toggle('finished',s.state==='done');$('bar').classList.toggle('running',run);
+  setBar('bar','fill','pct',pct,indet);try{dockUpdate(s)}catch(e){}$('bar').classList.toggle('finished',s.state==='done');$('bar').classList.toggle('running',run);
   const LBL=(gd&&!gd.final&&gd.steps.length)?('Guided &middot; step '+gd.i+' of '+gd.steps.length+': '+esc(gd.steps[gd.i-1]||'')):gd&&jobKind==='guided'?'Guided':{diagnostics:'Full diagnostics',compare:'Compare libraries',monitor:'Log check',health:'Library health',formats_apply:'Set aside',photos:'Apple Photos',similar:'Find similar photos',similar_apply:'Set aside',undo:'Undo',consolidate:'Merge similar folders',assess:'Check my files',fix:'Part 1 Fix',convert:'Part 4 Convert',cleanup:'Part 3 Clean up',merge:'Part 2 Merge'}[jobKind]||'';
   $('msg').innerHTML=(LBL?'<b>'+LBL+'</b> &middot; ':'')+(s.state==='error'?'<span class="err">'+esc(s.message)+'</span>':s.state==='done'?'<span class="ok">Finished.</span>':esc(s.message)+(s.done?` (${s.done.toLocaleString()} / ${s.total.toLocaleString()})`:''));
   const c=s.counts||{},done=s.done||0,nj=c['no-json']||0;
@@ -4879,6 +4936,63 @@ function renderProfile(){const P=PROFILES[PROF];
   document.querySelectorAll('.profline').forEach(e=>e.innerHTML='Style: <b>'+P.icon+' '+P.name+(PROF_CUSTOM?' (customised)':'')+'</b> &middot; change it at the top of the Guided tab.')}
 document.addEventListener('change',e=>{if(e.isTrusted&&e.target&&e.target.closest&&e.target.closest('.pane')&&!e.target.closest('#profpills')&&!PROF_CUSTOM){PROF_CUSTOM=true;renderProfile()}});
 renderProfile();if(PROF!=='balanced')applyProfile(PROF);
+
+// ---- compact mode: details on demand, collapsible sections, floating activity dock ----
+(function(){
+  function ibtn(opt){if(opt.querySelector('.ib')||!opt.querySelector('small'))return;const b=document.createElement('button');b.type='button';b.className='ib';b.textContent='i';b.setAttribute('aria-label','More about this option');b.onclick=e=>{e.preventDefault();e.stopPropagation();opt.classList.toggle('open')};opt.appendChild(b)}
+  window.compactOpts=function(root){(root||document).querySelectorAll('.opt').forEach(ibtn)};
+  function groupMore(paneId,keep){const pane=document.getElementById(paneId);if(!pane)return;const card=pane.querySelector('.card:has(.opt)');if(!card)return;
+    const kids=[...card.children].filter(c=>c.classList.contains('opt')||c.classList.contains('dpbox'));
+    const more=kids.filter(c=>{const i=c.querySelector('input[type=checkbox]');return !(i&&keep.indexOf(i.id)>=0)&&!(c.classList.contains('opt')&&!i&&false)});
+    if(!more.length)return;const d=document.createElement('details');d.className='more';d.innerHTML='<summary>More options ('+more.length+')</summary>';card.insertBefore(d,more[0]);kids.filter(c=>more.indexOf(c)<0).forEach(k=>card.insertBefore(k,d));more.forEach(m=>d.appendChild(m))}
+  groupMore('pane-guided',['gdry','gdedupe','glive','gfd']);
+  groupMore('pane-fix',['dry','dedupe','live','fdates']);
+  compactOpts();
+  // click a recommendation or route step to read why
+  document.addEventListener('click',e=>{const r=e.target.closest&&e.target.closest('.rec,.flowstep');if(r&&!e.target.closest('button,input,a,label'))r.classList.toggle('open')});
+  // summaries: every section collapsible, the first one open
+  window.collapseSummary=function(root){if(!root||root.dataset.cs===root.innerHTML.length+'')return;const kids=[...root.childNodes];let cur=null,n=0;const out=[];
+    kids.forEach(k=>{if(k.nodeType===1&&k.tagName==='H2'){cur=document.createElement('details');cur.className='sec';const s=document.createElement('summary');s.textContent=k.textContent;cur.appendChild(s);const body=document.createElement('div');body.className='secbody';cur.appendChild(body);cur._b=body;out.push(cur);n++}
+      else if(cur){cur._b.appendChild(k)}else out.push(k)});
+    root.innerHTML='';out.forEach(o=>root.appendChild(o));
+    if(n>=3){const bar=document.createElement('div');bar.className='secbar';bar.innerHTML='<button class="sm" data-all="1">Expand all</button><button class="sm" data-all="0">Collapse all</button>';bar.onclick=e=>{const b=e.target.closest('button');if(!b)return;root.querySelectorAll('details.sec').forEach(d=>d.open=b.dataset.all==='1')};const first=root.querySelector('details.sec');root.insertBefore(bar,first)}
+    compactOpts(root);root.dataset.cs=root.innerHTML.length+''};
+  const _ss2=window.showSummary;
+  window.showSummary=function(s){_ss2(s);try{collapseSummary($('sumbody'))}catch(e){console.error(e)}};
+  // ---- floating activity dock ----
+  let DS='auto';try{DS=localStorage.getItem('dock')||'auto'}catch(e){}
+  const LOGF=[];let lastKey='',lastRun='',seenRecent=0;
+  const el=id=>document.getElementById(id);
+  function setDS(v){DS=v;try{localStorage.setItem('dock',v)}catch(e){}render()}
+  function render(){const d=el('dock');if(!d)return;const running=window.__dockRunning,has=LOGF.length>0;
+    const show=DS!=='off'&&(running||DS==='open'||DS==='min'||(DS==='auto'&&has&&window.__dockRecent));
+    d.classList.toggle('on',!!show);d.classList.toggle('min',DS==='min');
+    el('dtoggle').classList.toggle('on',!show&&(running||has));el('actbtn').textContent=show&&DS!=='min'?'Hide activity':'Show activity'}
+  function push(t,c){LOGF.push({t:new Date(),x:t,c:c||''});if(LOGF.length>300)LOGF.shift()}
+  window.dockUpdate=function(s){const running=s.state==='scanning'||s.state==='running';window.__dockRunning=running;
+    const rid=s.run&&s.run.id||'';if(running&&rid!==lastRun&&rid){LOGF.length=0;lastRun=rid;seenRecent=0;lastKey=''}
+    if(running&&!lastRun){lastRun='x';LOGF.length=0}
+    const key=(s.state||'')+'|'+String(s.message||'').replace(/[\d,.]+/g,'#');
+    if(key!==lastKey&&s.message){lastKey=key;push((s.state==='error'?'ERROR: ':'')+s.message,s.state==='error'?'e':s.state==='done'?'g':'')}
+    if(s.retry&&Date.now()/1000-s.retry.t<90){const k='r'+s.retry.text;if(LOGF.length===0||LOGF[LOGF.length-1].x!==s.retry.text)push(s.retry.text,'w')}
+    const rec=s.recent||[];rec.forEach(r=>{const t=r.name+' -> '+(r.status==='duplicate'?'duplicate (skipped)':(r.to||'')+' ['+r.status+']');if(!LOGF.some(l=>l.x===t))push(t,/error/.test(r.status)?'e':'')});
+    if(s.state==='done'&&LOGF.length&&LOGF[LOGF.length-1].x!=='Finished.'){push('Finished.','g')}
+    window.__dockRecent=running||(s.state==='done'||s.state==='error');
+    const pct=s.state==='done'?100:(s.done>0&&s.total?Math.min(100,100*s.done/s.total):(s.phase&&s.phase.total?100*s.phase.done/s.phase.total:0));
+    const lbl=el('dtitle');if(lbl)lbl.textContent=(({fix:'Fix',guided:'Guided',merge:'Merge',cleanup:'Clean up',convert:'Convert',health:'Health',photos:'Apple Photos',similar:'Similar',assess:'Check my files',compare:'Compare',monitor:'Monitor',diagnostics:'Diagnostics',consolidate:'Merge folders',undo:'Undo'})[s.kind]||'Activity')+(running?' running':s.state==='done'?' finished':s.state==='error'?' stopped':'');
+    el('dpct').textContent=running||s.state==='done'?Math.floor(pct)+'%':'';
+    const bar=el('dbar');bar.classList.toggle('indet',running&&!(pct>0));el('dfill').style.width=pct+'%';
+    el('dmsg').textContent=s.state==='error'?s.message:(s.message||'');
+    const rt=el('dretry'),show=running&&s.retry&&Date.now()/1000-s.retry.t<90;rt.style.display=show?'block':'none';if(show)rt.textContent='⏳ '+s.retry.text;
+    const lg=el('dlog'),atEnd=lg.scrollHeight-lg.scrollTop-lg.clientHeight<30;
+    lg.innerHTML=LOGF.slice(-60).map(l=>'<div class="'+l.c+'">'+l.t.toTimeString().slice(0,8)+'  '+l.x.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))+'</div>').join('');if(atEnd)lg.scrollTop=lg.scrollHeight;
+    el('dstop').style.display=running?'inline-block':'none';el('dview').style.display=(s.state==='done'||s.state==='error')?'inline':'none';render()};
+  el('dmin').onclick=()=>setDS(DS==='min'?'open':'min');el('dhide').onclick=()=>setDS('off');el('dtoggle').onclick=()=>setDS('open');
+  el('actbtn').onclick=()=>{const d=el('dock');setDS(d.classList.contains('on')&&DS!=='min'?'off':'open')};
+  el('dstop').onclick=()=>{const b=el('stopall');if(b)b.click()};
+  el('dview').onclick=e=>{e.preventDefault();const g=el('goto');if(g)g.click()};
+  render();
+})();
 </script></main></body></html>"""
 
 

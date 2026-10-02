@@ -14,7 +14,7 @@ for(const [id,e] of [['gdedupe',false],['glive',false],['gfd',false],['galb',fal
 await pg.click('[data-prof=balanced]');
 for(const [id,e] of [['gdedupe',true],['gow',true],['gfx',false],['ggps',false],['dry',true],['simsens','6'],['ppace','verify']])await chk('balanced',id,e);
 // customise
-await pg.click('#gnear');const cust=await pg.evaluate(()=>document.getElementById('profinfo').innerText.includes('Customised'));if(!cust)bad.push('customised label missing');
+await pg.evaluate(()=>document.querySelectorAll('details.more').forEach(d=>d.open=true));await pg.click('#gnear');const cust=await pg.evaluate(()=>document.getElementById('profinfo').innerText.includes('Customised'));if(!cust)bad.push('customised label missing');
 // bursts follow the style
 await pg.click('[data-prof=risky]');const bu=await pg.evaluate(()=>DP.bursts);if(bu!=='best')bad.push('risky bursts='+bu);
 await pg.click('[data-prof=balanced]');

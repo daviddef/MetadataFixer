@@ -54,6 +54,21 @@ python3 takeout_gui.py
 ```
 A page opens at `http://127.0.0.1:8765`. It is served only on your own computer. The app checks for a newer version when it starts, when you reload the page, and every 30 minutes; press **Check for updates** next to the version number to check now. When an update is available a banner lists the changed files. **Update now** downloads them, checks they are valid, keeps your old copies as `.bak`, restarts, and reloads the page. It never updates while a job is running and never without you pressing the button. To skip the check: `python3 takeout_gui.py --no-update-check`. To go back, copy the `.bak` files over the current ones.
 
+## A short, light screen
+
+Backstory keeps each screen short:
+- Only the essential options show. The rest are under **More options**; tap it to open them.
+- Each option's explanation hides behind its small **i** button; tap the **i** to read it.
+- Results are a few tiles and tips with every section folded away. Tap a heading to open it, or use **Expand all** / **Collapse all**. Recommendations and route steps open when you tap them.
+- The ready checks (Takeout added, Destination, ExifTool, ffmpeg) are small chips.
+
+## The floating activity log
+
+While anything is running, a small **Activity** window floats at the bottom-right of every tab, so you can see progress while you look at other screens. It shows the title and percentage, a progress bar, the current step, drive-retry notices, and a scrolling log of what is happening, with a **Stop** button and **View results** when it finishes.
+- **–** minimises it to its title bar; **×** hides it.
+- **Show activity / Hide activity** in the status row (and the **Activity** button when hidden) brings it back or removes it. Your choice is remembered.
+- On a phone-width window it becomes a bar along the bottom.
+
 ## Reading the screen
 
 The longer explanations sit behind small **i** buttons: hover over one (or tap it on a phone) to read it. Each tab has a one-line description under its title. Warnings that matter, such as "(empties the source folders)", stay visible.
