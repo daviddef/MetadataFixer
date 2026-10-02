@@ -47,7 +47,7 @@ To keep each tab uncluttered, the longer explanations sit behind small **i** but
 
 ## Layout
 
-The app has five tabs: **Guided** (the easy way), **1 Fix metadata**, **2 Merge folders** (also sorts Takeout folders and removes duplicates), **3 Clean up** (`.json` files, junk, names, empty folders) and **4 Convert videos**.
+The app has six tabs: **Guided** (the easy way), **Fix** (metadata), **Merge** (folders) (also sorts Takeout folders and removes duplicates), **3 Clean up** (`.json` files, junk, names, empty folders) **Convert** (videos) and **History**.
 
 ## The warning sign
 
@@ -83,6 +83,21 @@ You do not need to unzip Google Takeout downloads. Add the `.zip` files (or the 
 - A photo that appears in more than one zip is copied once.
 - Zips that finished are remembered in the Destination, so an interrupted run carries on with the remaining zips.
 - Limits: Live Photo pairing works when the still and its video are in the same zip (Google normally keeps them together). The other tabs (Merge, Clean up, Convert) work on folders, not zip files.
+
+## Reports, logs and history
+
+Every run is recorded automatically:
+- A **report**: the same summary you see on screen, saved as a page you can open, print or keep (**Open full report** under the summary).
+- A plain-text **log**: the settings used, what happened step by step, how long it took, the version and tools, and a list of any problems. Useful if something goes wrong.
+- A **History** tab listing every run with its headline result, and buttons to open the report, the log, or the folder.
+
+Reports and logs are saved in `Documents/Metadata Fixer Reports`, one folder per run. Nothing is uploaded. If you need help, press **Copy diagnostic info** in the History tab and paste it into your message (check it for private paths first).
+
+On the Guided tab, a short **checklist** shows whether your Takeout and Destination are set, whether the Destination has enough free space for your zip files, and whether ExifTool and ffmpeg are installed.
+
+## Dates from file names
+
+Photos with no Google `.json` and no date of their own can get a date from their name: `IMG_20190704_123456.jpg`, `PXL_20210512_153045123.jpg`, `VID_20180102_030405.mp4`, `Screenshot 2019-07-04 at 12.34.56.png`, `IMG-20190704-WA0001.jpg`. This is ticked by default on Guided and Fix. It only fills in a **missing** date and never changes one that is already there. The time is used as written in the name; if the name has only a date, noon is used. The summary shows how many dates came from names.
 
 ## Choosing your folders (once, for every tab)
 

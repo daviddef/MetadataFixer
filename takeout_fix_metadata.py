@@ -721,6 +721,34 @@ def prune_empty_dirs(roots):
     return removed
 
 
+_ND = [
+    re.compile(r"(?<!\d)(19[89]\d|20\d{2})(\d{2})(\d{2})[_ T-]?(\d{2})(\d{2})(\d{2})"),                       # 20190704_123456, PXL_20210512_153045123
+    re.compile(r"(?<!\d)(19[89]\d|20\d{2})[-_.](\d{2})[-_.](\d{2})(?:\s+at\s+|[ _T-]+)(\d{2})[-_.:](\d{2})[-_.:](\d{2})"),  # 2019-07-04 12.34.56, Screenshot 2019-07-04 at 12.34.56
+    re.compile(r"(?<!\d)(19[89]\d|20\d{2})[-_.]?(\d{2})[-_.]?(\d{2})(?!\d)()()()"),                                  # IMG-20190704-WA0001, 2019-07-04
+]
+
+
+def date_from_name(name):
+    """A date written in a file name (IMG_20190704_123456.jpg, Screenshot 2019-07-04 at 12.34.56.png). Returns epoch (the
+    wall-clock time as written, treated as UTC so exiftool stores the same digits) or None."""
+    stem = os.path.splitext(name)[0]
+    now = time.time() + 86400
+    for rx in _ND:
+        for m in rx.finditer(stem):
+            y, mo, d, hh, mi, ss = (int(x) if x else 0 for x in m.groups())
+            if not (1 <= mo <= 12 and 1 <= d <= 31 and hh < 24 and mi < 60 and ss < 60):
+                continue
+            if not m.group(4):
+                hh = 12                                        # date only: noon, so no time zone can move it to another day
+            try:
+                t = datetime(y, mo, d, hh, mi, ss, tzinfo=timezone.utc).timestamp()
+            except ValueError:
+                continue
+            if t <= now:
+                return int(t)
+    return None
+
+
 def process(m, idx, args, out_root):
     sc, how = find_sidecar(m, idx)
     if how == "tree-ambiguous":
@@ -742,6 +770,14 @@ def process(m, idx, args, out_root):
         row["live"] = "paired" if cid else why
     d = load_json(sc) if sc else None
     status0 = "no-json" if not sc else "bad-json"
+    if d is None and getattr(args, "name_dates", False) and ext not in NO_WRITE_EXT:
+        nt = date_from_name(m.name)
+        if nt:
+            have = read_existing(m, ext in VIDEO_EXT).get("date", "")
+            if not have or have.startswith("0000"):          # only fills a missing date, never changes one
+                d = {"photoTakenTime": {"timestamp": str(nt)}}
+                row["match"] = "filename-date"
+                row["detail"] = "date taken from the file name"
     skip, final_taken = set(), None
     if d and ext not in NO_WRITE_EXT:
         cl = classify(d, ext, read_existing(m, ext in VIDEO_EXT), args.overwrite, getattr(args, "date_policy", "earlier"))
@@ -1959,6 +1995,7 @@ def main():
     ap.add_argument("--move", action="store_true", help="move files into --out instead of copying (frees space)")
     ap.add_argument("--sort-only", action="store_true",
                     help="only merge same-named folders and (with --dedupe) drop duplicates; no metadata changes")
+    ap.add_argument("--name-dates", action="store_true", help="when a file has no .json and no date, read the date from its file name")
     ap.add_argument("--no-json", action="store_true", help="with --sort-only: do not bring .json files along")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--report", type=Path, default=Path("takeout_report.csv"))

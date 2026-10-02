@@ -29,7 +29,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.02-a"
+VERSION = "2026.10.02-c"
 class Cancelled(Exception):
     pass
 
@@ -218,7 +218,7 @@ def write_text_summary(path, sm):
     Path(path).write_text("\n".join(L) + "\n", encoding="utf-8")
 
 
-def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=False, date_policy="earlier"):
+def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=False, date_policy="earlier", name_dates=False):
     with LOCK:
         STATE.update(state="scanning", cancel=False, total=0, done=0, counts={}, message="Scanning folders...",
                      report="", summary=None, scan=None, extra={}, recent=[], phase=None, kind="fix", **({} if IN_GUIDED[0] else {"guided": None}))
@@ -253,7 +253,7 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
             idx = fx.build_index(sidecars)
             args = argparse.Namespace(dry_run=dry_run, overwrite=overwrite, pair_live=pair_live,
                                       dedupe=dedupe, move=move, out_root=out or None, roots=pass_roots,
-                                      date_policy=date_policy, manifest_ns=ns)
+                                      date_policy=date_policy, manifest_ns=ns, name_dates=name_dates)
 
             def hashing(stage, done, todo):
                 check_cancel()
@@ -436,6 +436,10 @@ def run_job(roots, out, dry_run, overwrite, pair_live=False, dedupe=False, move=
                               "Open the Clean up tab, tick 'Fix files with no extension', then run Fix again." % noext)
         if pruned:
             sm["tips"].append("%d folders left empty by the move were removed. Google's .json files are left where they were; remove them with the Clean up tab, then use Empty folders to tidy the rest." % pruned)
+        nd = sum(1 for r in rows if r.get("match") == "filename-date" and r["status"] in ("updated", "would-update"))
+        sm["name_dates"] = nd
+        if nd:
+            sm["tips"].append("%d files had no Google info file and no date of their own, so their date %s from the file name." % (nd, "would be taken" if dry_run else "was taken"))
         sm["problems"] = [{"file": Path(r["file"]).name, "status": r["status"], "detail": r.get("detail", "")} for r in rows
                           if r["status"] in ("copy-error", "error", "exiftool-error")][:100]
         sm["dupe_bytes"] = dupe_bytes
@@ -499,7 +503,7 @@ def _run_guided(roots, out, dry_run, opts):
                 [str(p) for p in folders], dry_run, {"ext": {"json": True, "aside": False}, "json": False, "json_other": False,
                                                      "junk": None, "names": None, "empty": None})))
         steps.append(("Put dates, locations and captions back, and merge into one library", lambda: run_job(
-            roots, out, dry_run, bool(opts.get("replace", True)), bool(opts.get("live", True)), bool(opts.get("dedupe", True)), False, "earlier")))
+            roots, out, dry_run, bool(opts.get("replace", True)), bool(opts.get("live", True)), bool(opts.get("dedupe", True)), False, "earlier", bool(opts.get("name_dates", True)))))
         if opts.get("convert") and not dry_run:
             steps.append(("Convert old videos to MP4", lambda: run_convert([out], False, list(fx.DEFAULT_EXT), False, "high", "move", False)))
         titles = [t for t, _ in steps]
@@ -1500,6 +1504,36 @@ def apply_update():
     return {"ok": True}
 
 
+def doctor(roots, dest):
+    """Is everything in place for a run? Used by the Guided checklist."""
+    out = {"exiftool": "", "ffmpeg": bool(shutil.which("ffmpeg") and shutil.which("ffprobe")), "free": None, "need": None,
+           "dest_ok": None, "sources": 0, "zips": 0, "error": ""}
+    ex = shutil.which("exiftool")
+    if ex:
+        try:
+            out["exiftool"] = subprocess.run([ex, "-ver"], capture_output=True, text=True, timeout=10).stdout.strip() or "ok"
+        except Exception:
+            out["exiftool"] = "ok"
+    try:
+        zips, folders = fx.split_sources(roots) if roots else ([], [])
+        out["sources"], out["zips"] = len(zips) + len(folders), len(zips)
+        if zips:
+            out["need"] = sum(z.stat().st_size for z in zips)
+    except (ValueError, OSError) as e:
+        out["error"] = str(e)
+    if dest:
+        p = Path(dest).expanduser()
+        probe = p
+        while not probe.exists() and probe != probe.parent:
+            probe = probe.parent
+        try:
+            out["free"] = shutil.disk_usage(probe).free
+            out["dest_ok"] = os.access(probe, os.W_OK)
+        except OSError:
+            out["dest_ok"] = False
+    return out
+
+
 # ---- Reports, run logs and history -------------------------------------------------------------------------
 APP_HOME = Path(os.environ.get("METADATAFIXER_HOME") or (
     Path.home() / "Library" / "Application Support" / "MetadataFixer" if sys.platform == "darwin" else Path.home() / ".metadatafixer"))
@@ -1774,7 +1808,7 @@ class Handler(BaseHTTPRequestHandler):
             start_tracked('fix', body, run_job, (
                 body.get("roots", []), body.get("out", ""),
                 bool(body.get("dry_run")), bool(body.get("overwrite")), bool(body.get("pair_live")),
-                bool(body.get("dedupe")), bool(body.get("move")), body.get("date_policy", "earlier")))
+                bool(body.get("dedupe")), bool(body.get("move")), body.get("date_policy", "earlier"), bool(body.get("name_dates"))))
             self._send(200, "{}")
         elif self.path == "/api/guided_start":
             with LOCK:
@@ -1782,10 +1816,12 @@ class Handler(BaseHTTPRequestHandler):
             if busy:
                 return self._send(409, json.dumps({"error": "A job is already running"}))
             o = body.get("opts", {})
-            opts = {k: bool(o.get(k)) for k in ("fix_ext", "convert", "replace", "live", "dedupe")}
+            opts = {k: bool(o.get(k)) for k in ("fix_ext", "convert", "replace", "live", "dedupe", "name_dates")}
             start_tracked('guided', body, run_guided, (
                 body.get("roots", []), body.get("out", ""), bool(body.get("dry_run")), opts))
             self._send(200, "{}")
+        elif self.path == "/api/doctor":
+            self._send(200, json.dumps(doctor(body.get("roots", []), body.get("dest", ""))))
         elif self.path == "/api/save_report":
             self._send(200, json.dumps(save_report_html(body.get("id", ""), body.get("html", ""))))
         elif self.path == "/api/history":
@@ -1966,6 +2002,59 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 #tip{position:fixed;z-index:200;max-width:min(380px,calc(100vw - 20px));background:var(--ink);color:var(--bg);padding:10px 12px;border-radius:10px;font-size:13px;line-height:1.45;box-shadow:0 8px 28px rgba(0,0,0,.28);display:none;pointer-events:none}
 .warn{color:var(--warn);font-size:13px}.rknote{font-size:13px;color:var(--mute);margin:6px 0}.subline{margin:-6px 0 12px;color:var(--mute);font-size:14px}
 .opt>div{line-height:1.35}
+
+/* ---- v2 polish ---- */
+:root{--r:14px;--shadow:0 1px 2px rgba(15,23,42,.05),0 8px 24px -12px rgba(15,23,42,.18);--acc2:#7c5cff;--soft:color-mix(in srgb,var(--acc) 8%,var(--card));--ring:0 0 0 3px color-mix(in srgb,var(--acc) 30%,transparent)}
+@media (prefers-color-scheme:dark){:root{--shadow:0 1px 2px rgba(0,0,0,.4),0 10px 28px -14px rgba(0,0,0,.7);--soft:color-mix(in srgb,var(--acc) 12%,var(--card))}}
+body{font:15px/1.55 -apple-system,BlinkMacSystemFont,"SF Pro Text","Inter","Segoe UI",system-ui,sans-serif;-webkit-font-smoothing:antialiased;letter-spacing:-.003em}
+main{max-width:820px}
+h1,h2{letter-spacing:-.018em}
+.card{border-radius:var(--r);padding:20px 22px;box-shadow:var(--shadow);border-color:color-mix(in srgb,var(--line) 70%,transparent)}
+.ph{font-size:22px;font-weight:700;margin:6px 0 4px}
+.hero{border-radius:20px;box-shadow:var(--shadow);padding:22px 24px 18px;background:radial-gradient(900px 220px at 0% 0%,color-mix(in srgb,var(--acc) 20%,var(--card)),var(--card) 70%)}
+.hero h1{font-size:28px;font-weight:800}
+.logo{filter:drop-shadow(0 6px 14px rgba(79,140,255,.45))}
+#frame{padding-top:12px}
+.tabs{gap:4px;padding:4px;border:1px solid var(--line);border-radius:999px;background:var(--card);box-shadow:var(--shadow);width:100%}
+.tab{flex:1 1 auto;justify-content:center;border:0;background:transparent;padding:9px 12px;font-weight:500;color:var(--mute);transition:background .15s,color .15s}
+.tab:hover{color:var(--ink);background:var(--soft)}
+.tab b{background:none!important;width:auto!important;height:auto!important;font-size:16px;color:inherit!important}
+.tab.on{background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;box-shadow:0 4px 12px -4px color-mix(in srgb,var(--acc) 70%,transparent)}
+.tab.on:hover{color:#fff;background:linear-gradient(135deg,var(--acc),var(--acc2))}
+button{border-radius:10px;transition:background .15s,border-color .15s,box-shadow .15s,transform .05s}
+button:hover:not(:disabled){border-color:var(--acc);background:var(--soft)}
+button:active:not(:disabled){transform:translateY(1px)}
+button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:none;box-shadow:var(--ring)}
+button.p{background:linear-gradient(135deg,var(--acc),var(--acc2));border:0;padding:12px 22px;font-size:16px;border-radius:12px;box-shadow:0 6px 16px -6px color-mix(in srgb,var(--acc) 80%,transparent)}
+button.p:hover:not(:disabled){background:linear-gradient(135deg,var(--acc),var(--acc2));filter:brightness(1.08);border:0}
+input[type=checkbox]{accent-color:var(--acc);width:16px;height:16px;margin-top:3px;flex:none}
+.opt{padding:7px 12px;margin:2px -12px;border-radius:10px;transition:background .12s}
+.opt:hover{background:var(--soft)}
+.sub{padding:3px 0}
+.usef{border-radius:10px;background:var(--soft);border:1px solid color-mix(in srgb,var(--acc) 18%,var(--line));border-style:solid}
+.tiles{gap:12px}
+.tile{border-radius:12px;padding:14px 16px;background:var(--card);box-shadow:var(--shadow);border:1px solid color-mix(in srgb,var(--line) 70%,transparent);position:relative;overflow:hidden}
+.tile::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:linear-gradient(var(--acc),var(--acc2))}
+.tile.ok::before{background:var(--ok)}.tile.bad::before{background:var(--bad)}
+.tile b{font-size:28px;font-weight:700;letter-spacing:-.02em}
+.tile span{font-size:12.5px;text-transform:uppercase;letter-spacing:.04em;font-weight:600}
+table{border-radius:10px;overflow:hidden}
+th{font-size:12px;text-transform:uppercase;letter-spacing:.05em}
+tr:hover td{background:var(--soft)}
+.tip{border-radius:0 10px 10px 0;background:var(--soft);padding:10px 14px}
+.bar{height:24px;border-radius:999px;background:color-mix(in srgb,var(--line) 80%,transparent);box-shadow:inset 0 1px 2px rgba(0,0,0,.08)}
+.bar>i{background:linear-gradient(90deg,var(--acc),var(--acc2));border-radius:999px}
+.status{margin-top:10px}.srow{font-size:13.5px}
+.srow #msg b{color:var(--ink)}
+.badge{font-weight:600}
+.hrun{transition:transform .12s,box-shadow .12s}.hrun:hover{transform:translateY(-1px)}
+.gcheck{display:grid;gap:6px;margin:14px 0 6px}
+.gc{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:10px;background:var(--soft);font-size:14px}
+.gc i{font-style:normal;display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;flex:none;font-size:13px;font-weight:700;background:var(--line);color:var(--mute)}
+a{color:var(--acc)}.gc.ok{color:var(--ink)}.gc.ok i{background:var(--ok);color:#fff}.gc.bad i{background:var(--bad);color:#fff}.gc.opt2 i{background:var(--line)}
+.gc small{margin:0 0 0 auto;font-size:12.5px;display:inline}
+.gc.bad{background:color-mix(in srgb,var(--bad) 10%,var(--card))}
+@media(max-width:620px){.card{padding:16px}.tab{padding:8px 9px;font-size:13px}.tab b{font-size:15px}.hero h1{font-size:23px}}
 </style></head><body><main>
 <div id="upd" style="display:none" class="card"><b>A newer version is available.</b> <span id="updmsg"></span>
 <div style="margin-top:8px"><button class="p" id="updgo">Update now</button> <button id="updno">Not now</button></div></div>
@@ -1995,10 +2084,10 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 <div id="frame">
   <nav class="tabs" role="tablist">
     <button class="tab" data-tab="guided" role="tab"><b>&#10024;</b> Guided</button>
-    <button class="tab" data-tab="fix" role="tab"><b>1</b> Fix metadata</button>
-    <button class="tab" data-tab="merge" role="tab"><b>2</b> Merge folders</button>
-    <button class="tab" data-tab="clean" role="tab"><b>3</b> Clean up</button>
-    <button class="tab" data-tab="convert" role="tab"><b>4</b> Convert videos</button>
+    <button class="tab" data-tab="fix" role="tab"><b>&#128736;&#65039;</b> Fix</button>
+    <button class="tab" data-tab="merge" role="tab"><b>&#128450;&#65039;</b> Merge</button>
+    <button class="tab" data-tab="clean" role="tab"><b>&#129529;</b> Clean up</button>
+    <button class="tab" data-tab="convert" role="tab"><b>&#127902;&#65039;</b> Convert</button>
     <button class="tab" data-tab="history" role="tab"><b>&#128196;</b> History</button>
   </nav>
   <div class="status"><div class="srow"><span id="msg">Ready. Choose a tab, set it up and press Start.</span><a href="#" id="goto" style="display:none">View results &rarr;</a><button id="stopall" class="sm" style="display:none;margin-left:10px">Stop</button></div>
@@ -2007,11 +2096,11 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 <section class="pane" id="pane-guided">
 <h2 class="ph">Fix my Takeout</h2>
 <div class="card"><small style="margin-top:0">The easy way. Add your Google Takeout <b>zip files</b> (or the folders you unzipped) in the bar at the top, choose where the finished library should go, and press the button. Your originals are <b>never changed</b>: a clean, merged copy is made in the Destination, with the real dates, locations and captions put back, duplicates removed and your folder structure kept.</small>
-<div class="usef" style="margin-top:10px"><b>From:</b> <span class="fnote"></span></div>
-<div class="usef"><b>To (the Destination):</b> <span class="dnote" data-empty="none chosen yet. Choose a Destination in the bar at the top"></span></div>
+<div class="gcheck" id="gcheck"></div>
 <div class="opt"><input type="checkbox" id="gdry" checked><div>Preview only<small>On by default. Shows what would happen and changes nothing. Untick to do it for real.</small></div></div>
 <div class="opt"><input type="checkbox" id="gdedupe" checked><div>Merge same-named folders and remove exact duplicates<small>Every <i>Photos from 2012</i> across all your zips becomes one folder, and the same photo repeated in several albums is kept once.</small></div></div>
 <div class="opt"><input type="checkbox" id="glive" checked><div>Re-pair Live Photos<small>Reconnects each Live Photo&#39;s still and video so Apple Photos shows them together.</small></div></div>
+<div class="opt"><input type="checkbox" id="gnd" checked><div>Use the date in the file name when there is no .json<small>Fills in a missing date from names like <i>IMG_20190704_123456</i>. Never changes a date that is already there.</small></div></div>
 <div class="opt"><input type="checkbox" id="gow" checked><div>&#9888;&#65039; Replace location and caption already stored in the photo<small>Google&#39;s values win for location and caption. Dates keep the earlier of the two. Change this in the Fix tab if you want other rules.</small></div></div>
 <div class="opt"><input type="checkbox" id="gext" checked><div>&#9888;&#65039; Repair files with a missing file type<small>Some Takeout photos have no .jpg or .heic ending. Inside zip files they are repaired in the copy automatically. For folders you already unzipped, this renames those files in the source folders.</small></div></div>
 <div class="opt"><input type="checkbox" id="gcv"><div>&#9888;&#65039; Also convert old videos (.avi, .mpg, .wmv...) to MP4 afterwards<small>Runs after the library is built, on the Destination. The old videos are moved into an <i>_original_videos</i> folder, not deleted. Not part of a preview.</small></div></div>
@@ -2032,6 +2121,7 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 <select id="datepol" class="sel"><option value="earlier" selected>Keep the earlier date (recommended)</option><option value="photo">Keep the photo&#39;s own date</option><option value="google">Use Google&#39;s date</option></select>
 <small>Google sometimes records the day a photo was uploaded or re-saved instead of the day it was taken, and that day is always later. Keeping the earlier of the two is usually right. A photo with no date at all always gets Google&#39;s.</small></div></div>
 <div class="opt"><input type="checkbox" id="ow" checked><div>&#9888;&#65039; Replace location and caption already stored in the photo<small>Every photo has hidden facts saved inside the file itself (called EXIF). <b>Off</b>: only fill in a location or caption that is missing. <b>On</b>: replace a different one with Google&#39;s version. Your pictures themselves are never altered.</small></div></div></div>
+<div class="opt"><input type="checkbox" id="ndates" checked><div>Use the date in the file name when there is no .json<small>For photos with no Google info file and no date of their own, reads a date from names like <i>IMG_20190704_123456</i>, <i>PXL_20210512_...</i> or <i>Screenshot 2019-07-04 at 12.34.56</i>. It only fills in a missing date and never changes one that is already there.</small></div></div>
 
 <button class="p" id="go">Start</button>
 
@@ -2128,6 +2218,7 @@ button.sm{padding:4px 10px;font-size:13px;border-radius:8px}
 </section>
 
 <script>
+var docTimer=null,DOC=null;
 const $=id=>document.getElementById(id), esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 async function post(u,b){const r=await fetch(u,{method:'POST',body:JSON.stringify(b||{})});return r.json()}
 
@@ -2169,7 +2260,7 @@ function renderFolders(){
   $('fsum').textContent=FOLDERS.length?FOLDERS.length+(FOLDERS.length===1?' folder':' folders'):'none chosen yet';
   const note=FOLDERS.length?'using the '+(FOLDERS.length===1?'folder':FOLDERS.length+' folders')+' chosen at the top':'none chosen yet. Add folders in the bar at the top';
   document.querySelectorAll('.fnote').forEach(e=>{e.textContent=note});
-  $('fall').value=FOLDERS.join('\n');if(typeof renderDest==='function')renderDest()}
+  $('fall').value=FOLDERS.join('\n');if(typeof renderDest==='function')renderDest();if(typeof scheduleDoctor==='function')scheduleDoctor()}
 function saveFolders(){try{localStorage.setItem('folders',JSON.stringify(FOLDERS))}catch(e){};renderFolders()}
 function addFolders(list){list.forEach(p=>{p=(p||'').trim().replace(/\/+$/,'');if(p&&!FOLDERS.includes(p))FOLDERS.push(p)});saveFolders()}
 $('fadd').onclick=async()=>{const r=await post('/api/choose',{prompt:'Choose one or more folders (hold Cmd to select several)'});if(r.paths)addFolders(r.paths)};
@@ -2187,6 +2278,7 @@ fbar.ondrop=e=>{e.preventDefault();fbar.classList.remove('over');
 let DEST='';try{DEST=localStorage.getItem('dest')||''}catch(e){}
 const dest=()=>$('fdest').value.trim().replace(/\/+$/,'');
 function renderDest(){
+  if(typeof scheduleDoctor==='function')scheduleDoctor();
   document.querySelectorAll('.dnote').forEach(e=>{e.textContent=dest()||e.dataset.empty||'none chosen'});
   const nm=p=>p.split('/').filter(Boolean).pop()||p;
 }
@@ -2203,7 +2295,7 @@ $('go').onclick=async()=>{
   if(!$('dry').checked&&!dest()&&!confirm('No output folder: files will be edited IN PLACE. Continue?'))return;
   if($('move').checked&&!$('dry').checked&&!confirm('MOVE will take files out of your Takeout folders. Make sure you have another backup. Continue?'))return;
   $('sum').style.display='none';
-  const r=await post('/api/start',{roots:roots(),out:dest(),dry_run:$('dry').checked,overwrite:$('ow').checked,pair_live:$('live').checked,dedupe:$('dedupe').checked,move:$('move').checked,date_policy:$('datepol').value});
+  const r=await post('/api/start',{roots:roots(),out:dest(),dry_run:$('dry').checked,overwrite:$('ow').checked,pair_live:$('live').checked,dedupe:$('dedupe').checked,move:$('move').checked,date_policy:$('datepol').value,name_dates:$('ndates').checked});
   if(r.error)alert(r.error);else poll();
 };
 $('rev').onclick=()=>post('/api/reveal');
@@ -2215,7 +2307,7 @@ function showSummary(s){
   if(s.kind==='merge'){showMerge(s);return}
   if(s.kind==='convert'){showConvert(s);return}
   if(s.kind==='guided'){showGuided(s);return}
-  let h=`<div class="tiles">${tile(s.total,'media files')}${tile(s.duplicates,'exact duplicates skipped')}${tile(s.matched,'unique files matched ('+s.pct_matched+'%)','ok')}${tile(s.no_json,'no JSON found',s.no_json?'bad':'ok')}${tile(s.orphans,'JSON with no photo')}</div>`;
+  let h=`<div class="tiles">${tile(s.total,'media files')}${tile(s.duplicates,'exact duplicates skipped')}${tile(s.matched,'unique files matched ('+s.pct_matched+'%)','ok')}${tile(s.no_json,'no JSON found',s.no_json?'bad':'ok')}${tile(s.orphans,'JSON with no photo')}${s.name_dates?tile(s.name_dates,'dates from file names','ok'):''}</div>`;
   h+=s.tips.map(t=>`<div class="tip">${esc(t)}</div>`).join('');
   h+=`<div class="tiles">${tile(s.replaced_files,'files with a value replaced')}${tile((s.live||{}).paired||0,'Live Photos paired')}</div>`;
   const c=s.changes||{},v=s.dry_run?'would change':'changed';
@@ -2284,6 +2376,7 @@ $('goto').onclick=e=>{e.preventDefault();showTab(paneKind());$('results').scroll
 $('stopall').onclick=async()=>{const b=$('stopall');b.disabled=true;b.textContent='Stopping...';await post('/api/cancel')};
 document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
 function placeResults(kind){const pane=$('pane-'+(curGuided?'guided':(kind==='clean'?'fix':tabOf(kind))));if(pane&&$('results').parentNode!==pane)pane.appendChild($('results'))}
+refreshDoctor();
 let startTab='guided';try{startTab=location.hash.slice(1)||localStorage.getItem('tab')||'guided'}catch(e){}
 if(startTab==='sort')startTab='merge';
 showTab(startTab);
@@ -2329,13 +2422,29 @@ function showGuided(s){
   (s.steps||[]).forEach((st,i)=>{showSummary(st.summary);parts.push('<h2 style="margin-top:18px">Step '+(i+1)+': '+esc(st.title)+'</h2>'+$('sumbody').innerHTML)});
   const tips=(s.tips||[]).map(t=>`<div class="tip" style="border-color:var(--acc)">${esc(t)}</div>`).join('');
   $('sumbody').innerHTML=tips+parts.join('');$('sum').style.display='block'}
+
+function fmtB(b){return b>=1e12?(b/1e12).toFixed(1)+' TB':b>=1e9?(b/1e9).toFixed(1)+' GB':(b/1e6).toFixed(0)+' MB'}
+function renderCheck(){
+  const d=DOC||{},items=[];
+  const n=FOLDERS.length;
+  items.push(n?['ok','Takeout added',n+(n===1?' item':' items')+(d.zips?' ('+d.zips+' zip'+(d.zips===1?'':'s')+')':'')]:['','Add your Takeout zip files or folders','use the bar at the top']);
+  if(!dest())items.push(['','Choose where the finished library goes','Destination, in the bar at the top']);
+  else if(d.dest_ok===false)items.push(['bad','Cannot write to the Destination','choose another folder']);
+  else{const low=d.need&&d.free!=null&&d.free<d.need*1.1;items.push([low?'bad':'ok','Destination ready',d.free!=null?fmtB(d.free)+' free'+(d.need?', Takeout is '+fmtB(d.need):''):''])}
+  items.push(d.exiftool?['ok','ExifTool found','version '+d.exiftool]:(DOC?['bad','ExifTool is missing','install it: brew install exiftool']:['','Checking ExifTool...','']));
+  items.push(DOC&&!d.ffmpeg?['opt2','ffmpeg not found','only needed to convert old videos']:['ok','ffmpeg found','for video conversion']);
+  $('gcheck').innerHTML=items.map(i=>`<div class="gc ${i[0]}"><i>${i[0]==='ok'?'&#10003;':i[0]==='bad'?'!':i[0]==='opt2'?'&ndash;':'&middot;'}</i><span>${esc(i[1])}</span><small>${esc(i[2])}</small></div>`).join('');
+}
+async function refreshDoctor(){try{DOC=await post('/api/doctor',{roots:roots(),dest:dest()})}catch(e){}renderCheck()}
+function scheduleDoctor(){renderCheck();clearTimeout(docTimer);docTimer=setTimeout(refreshDoctor,400)}
 $('gst').onclick=async()=>{
+  if(DOC&&!DOC.exiftool){alert('ExifTool is missing. In Terminal run: brew install exiftool');return}
   if(!roots().length){alert('Add your Takeout zip files or folders in the bar at the top first');return}
   if(!dest()){alert('Choose a Destination in the bar at the top. That is where your finished library will be created.');return}
   const real=!$('gdry').checked;
   if(real&&$('gcv').checked&&!confirm('After the library is built, old videos in the Destination will be converted to MP4 and the originals moved into an _original_videos folder. Continue?'))return;
   $('sum').style.display='none';curGuided=true;
-  const r=await post('/api/guided_start',{roots:roots(),out:dest(),dry_run:$('gdry').checked,opts:{fix_ext:$('gext').checked,convert:$('gcv').checked,replace:$('gow').checked,live:$('glive').checked,dedupe:$('gdedupe').checked}});
+  const r=await post('/api/guided_start',{roots:roots(),out:dest(),dry_run:$('gdry').checked,opts:{fix_ext:$('gext').checked,convert:$('gcv').checked,replace:$('gow').checked,live:$('glive').checked,dedupe:$('gdedupe').checked,name_dates:$('gnd').checked}});
   if(r.error){alert(r.error);curGuided=false}else{placeResults('guided');$('prog').style.display='block';poll()}};
 function showMerge(s){
   const w=s.dry_run?'would be ':'';

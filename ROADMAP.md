@@ -28,15 +28,15 @@ Most Takeout tools are one-shot scripts: they fix dates and stop, with no previe
 - **Signed Mac app** (pipeline written): get the first build working, then release v1.0.
 - **Landing page** (GitHub Pages): Download button, 3-step guide, short screen recording, privacy promise.
 - ~~**Guided mode:**~~ DONE (v2026.10.01-z4): one "Fix my Takeout" button that runs Merge, Fix, Clean up in the right order with a single preview and a single summary.
-- **First-run check:** detect missing tools, low disk space, drive problems, and say what to do.
-- **Copy diagnostic info** button, so bug reports are useful.
+- ~~**First-run check:**~~ DONE (Guided checklist): detect missing tools, low disk space, drive problems, and say what to do.
+- ~~**Copy diagnostic info** button~~ DONE (History tab).
 - **Windows build** with the same pipeline (needs a code-signing certificate or SmartScreen will warn).
 
 ### Next: close the gaps people hit (2-3 months)
 - ~~**Takeout zip support:**~~ DONE (v2026.10.01-z4): read `.zip` files directly and extract as it goes, so users never unzip 50 GB first. Biggest ease-of-use win.
 - **Album preservation:** Takeout turns albums into folders and duplicates photos into them. Keep one copy, and write albums out as a list or as keywords so they are not lost.
 - **Google edits handling:** pair `-edited` versions with originals; choose keep both, keep edited or keep original.
-- **Missing and broken sidecars report:** list photos with no `.json`, and offer a date from the filename (`IMG_20190704_...`, `PXL_...`, `Screenshot ...`) when there is nothing else.
+- **Missing and broken sidecars report:** list photos with no `.json`, ~~and offer a date from the filename~~ DONE (dates from file names) (`IMG_20190704_...`, `PXL_...`, `Screenshot ...`) when there is nothing else.
 - **Time zone care:** use the photo's location to put the right local time, not just UTC.
 - **Review screen for near-duplicates:** same photo at different sizes or re-saved versions, shown side by side, with a keep-best suggestion. Never automatic deletion.
 - **Undo:** one-click "put everything back" from the manifest for copy and move runs.
