@@ -110,6 +110,12 @@
     "action": "health"
    },
    {
+    "who": "shoebox",
+    "text": "Convert videos Photos cannot read (set up for you, preview first).",
+    "action": "convert",
+    "risk": "safe"
+   },
+   {
     "who": "you",
     "text": "Delete the originals from Photos, empty Recently Deleted, then import the exported files again.",
     "risk": "destructive",
@@ -226,6 +232,12 @@
     "risk": "safe"
    },
    {
+    "who": "shoebox",
+    "text": "Repair wrong file endings in bulk (preview first).",
+    "action": "wrongext",
+    "risk": "caution"
+   },
+   {
     "who": "you",
     "text": "For unsupported RAW or video, convert it (Preview, ffmpeg, or the camera maker's tool) and import the converted copy; keep the original.",
     "risk": "safe"
@@ -293,6 +305,12 @@
     "text": "Watch the Photos log while retrying; Shoebox explains each error.",
     "risk": "safe",
     "action": "monitor"
+   },
+   {
+    "who": "shoebox",
+    "text": "Retry sending in small, verified batches (set up for you, preview first).",
+    "action": "slowsend",
+    "risk": "safe"
    }
   ],
   "identify": [

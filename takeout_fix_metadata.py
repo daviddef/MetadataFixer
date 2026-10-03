@@ -5467,6 +5467,126 @@ class LiveWatcher:
 
 LIVE = LiveWatcher()
 
+SYNC_PROCS = ("cloudphotod", "photolibraryd", "cloudd", "nsurlsessiond", "Photos", "bird", "assetsd")
+
+
+def parse_nettop(text):
+    """nettop CSV (bytes_in, bytes_out per process) -> {process name: (bytes_in, bytes_out)} summed over pids. Unknown lines are skipped."""
+    out = {}
+    for ln in text.splitlines():
+        f = ln.split(",")
+        if len(f) < 4 or not f[1] or f[0].strip() == "time":
+            continue
+        name = re.sub(r"\.\d+$", "", f[1].strip())
+        try:
+            bi, bo = int(f[2]), int(f[3])
+        except ValueError:
+            continue
+        a = out.get(name, (0, 0))
+        out[name] = (a[0] + bi, a[1] + bo)
+    return out
+
+
+class SyncMeter:
+    """Live iCloud sync meter: network bytes per second in and out for the Photos/iCloud processes (macOS nettop), plus the library's
+    own count of items waiting to upload, giving items per minute and a rough finish time."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.stop_ev = threading.Event()
+        self.thread = None
+        self.reset()
+
+    def reset(self):
+        self.net, self.prog, self.note, self.procs, self.running, self.lib = [], [], "", {}, False, ""
+
+    def start(self, lib="", net_every=3.0, db_every=30.0):
+        self.stop()
+        env = os.environ.get("BACKSTORY_NETTOP_CMD")
+        if env:
+            import shlex
+            cmd = shlex.split(env)
+        elif sys.platform == "darwin" and shutil.which("nettop"):
+            cmd = ["nettop", "-P", "-L", "1", "-J", "bytes_in,bytes_out"]
+        else:
+            cmd = None
+        self.stop_ev = threading.Event()
+        with self.lock:
+            self.reset()
+            self.running, self.lib = True, lib
+            if cmd is None:
+                self.note = "Network speed needs a Mac (it uses the macOS nettop tool). The upload count below still works if a library is found."
+        self.thread = threading.Thread(target=self._loop, args=(cmd, net_every, db_every, self.stop_ev), daemon=True)
+        self.thread.start()
+        return True
+
+    def stop(self):
+        self.stop_ev.set()
+        with self.lock:
+            self.running = False
+
+    def _loop(self, cmd, net_every, db_every, ev):
+        last, last_t, next_db = None, None, 0.0
+        while not ev.is_set():
+            now = time.time()
+            if cmd:
+                try:
+                    r = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+                    cur = {k: v for k, v in parse_nettop(r.stdout).items() if k in SYNC_PROCS}
+                    if last is not None and now > last_t:
+                        dt = now - last_t
+                        procs, tin, tout = {}, 0, 0
+                        for k, (bi, bo) in cur.items():
+                            pi, po = last.get(k, (bi, bo))
+                            di, do = max(0, bi - pi) / dt, max(0, bo - po) / dt
+                            tin += di
+                            tout += do
+                            if di + do > 1024:
+                                procs[k] = (int(di), int(do))
+                        with self.lock:
+                            self.net.append((now, int(tin), int(tout)))
+                            del self.net[:-240]
+                            self.procs = procs
+                    last, last_t = cur, now
+                except (OSError, subprocess.SubprocessError) as ex:
+                    with self.lock:
+                        self.note = "Could not read network use: %s" % str(ex)[:80]
+            if self.lib and now >= next_db:
+                next_db = now + db_every
+                st = photos_upload_status(self.lib)
+                if st.get("ok") and st.get("pending") is not None:
+                    with self.lock:
+                        self.prog.append((now, st["pending"], st["uploaded"], st["total"]))
+                        del self.prog[:-200]
+                elif not st.get("ok"):
+                    with self.lock:
+                        self.note = (self.note + " " if self.note else "") + st.get("why", "")[:80]
+            ev.wait(net_every)
+
+    def poll(self):
+        with self.lock:
+            net, prog = list(self.net[-90:]), list(self.prog[-60:])
+            out = {"running": self.running, "note": self.note, "net": net, "prog": prog, "procs": dict(self.procs)}
+        rate = eta = None
+        if len(prog) >= 2:
+            (t0, p0, u0, _), (t1, p1, u1, _) = prog[0], prog[-1]
+            if t1 - t0 >= 20:
+                rate = (u1 - u0) / ((t1 - t0) / 60.0)                      # items per minute (net of new pictures arriving)
+                if rate > 0 and p1 > 0:
+                    eta = p1 / rate
+        out["items_per_min"], out["eta_min"] = rate, eta
+        recent = [n for n in net if n[0] > time.time() - 60]
+        avg = (sum(n[1] + n[2] for n in recent) / len(recent)) if recent else None
+        pend = prog[-1][1] if prog else None
+        if avg is not None and pend:
+            out["verdict"] = "idle" if avg < 10 * 1024 else "moving"
+        elif avg is not None:
+            out["verdict"] = "quiet" if avg < 10 * 1024 else "busy"
+        return out
+
+
+SYNC = SyncMeter()
+
 
 PLAYBOOKS_FILE = Path(__file__).resolve().parent / "photos_playbooks.json"
 

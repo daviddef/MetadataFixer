@@ -3615,6 +3615,14 @@ class Handler(BaseHTTPRequestHandler):
             except (OSError, subprocess.TimeoutExpired) as ex:
                 return self._send(200, json.dumps({"ok": False, "why": str(ex)[:120]}))
             self._send(200, json.dumps({"ok": r.returncode == 0, "why": (r.stderr or "").strip()[:160] or "Photos could not show it. Search its file name in Photos instead."}))
+        elif path == "/api/sync_start":
+            fx.SYNC.start(_library_or_first(body))
+            self._send(200, "{}")
+        elif path == "/api/sync_poll":
+            self._send(200, json.dumps(fx.SYNC.poll()))
+        elif path == "/api/sync_stop":
+            fx.SYNC.stop()
+            self._send(200, "{}")
         elif path == "/api/live_start":
             ok = fx.LIVE.start(_library_or_first(body))
             self._send(200, json.dumps({"ok": ok, **{k: v for k, v in fx.LIVE.poll(0).items() if k == "note"}}))
@@ -4421,6 +4429,9 @@ body[data-tab=history] .route,body[data-tab=help] .route{display:none}
 <div class="hbtns"><button class="p" id="mongo">Check the logs</button></div>
 <div class="opt"><div style="flex:1"><label for="mpaste" style="font-weight:600">Or paste log text</label><textarea id="mpaste" placeholder="Paste lines from Console or a crash report here" spellcheck="false" style="min-height:70px"></textarea></div></div>
 <div class="hbtns"><button id="mpastego">Interpret the pasted text</button></div></div>
+<div class="card" id="synccard"><b>&#128260; Sync meter</b> <span class="mutes" id="syncstat"></span>
+<small style="margin:4px 0">How fast Photos is talking to iCloud right now, and how the upload queue is moving. Reads network use of the Photos and iCloud background processes (Mac only) and the library's own upload count.</small>
+<div class="hbtns"><button class="sm p" id="syncgo">&#9654; Start the meter</button></div><div id="syncbody"></div></div>
 <div class="card" id="lkcard"><b>&#128269; Look up a photo</b>
 <small style="margin:4px 0">Paste a long Photos id from a log (or part of one), or part of a file name. Shoebox shows the real photo: file name, date and albums.</small>
 <div style="display:flex;gap:6px"><input id="lkq" placeholder="e.g. 3F2A9C1E-… or IMG_1234" style="flex:1;min-width:0"><button class="sm p" id="lkgo">Look up</button></div><div id="lkres"></div></div>
@@ -5045,7 +5056,7 @@ $('cmpgo').onclick=async()=>{
 
 function issuesHTML(issues,other){
   let h=(issues||[]).map(i=>`<div class="card"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="font-size:16px">${esc(i.title)}</b><span class="badge ${i.sev==='bad'?'badb':i.sev==='warn'?'warnb':''}">${i.sev==='bad'?'Fix':i.sev==='warn'?'Worth fixing':'For your information'}</span>${i.new?'<span class="badge okb">New</span>':''}<span class="mutes">${i.count.toLocaleString()} time${i.count===1?'':'s'}${i.last&&i.last!==i.first?' &middot; last '+esc(i.last):''}</span></div>
-  <div class="why" style="margin:6px 0">${esc(i.meaning)}</div>${(i.causes||[]).length?'<b style="font-size:13px">Likely causes</b><ul style="margin:4px 0 8px;padding-left:20px">'+i.causes.map(f=>'<li>'+esc(f)+'</li>').join('')+'</ul>':''}<b style="font-size:13px">What to do</b><ol style="margin:4px 0 8px;padding-left:20px">${i.fixes.map(f=>'<li>'+esc(f)+'</li>').join('')}</ol>${i.files?'<b style="font-size:13px">Files named in the log</b><ul style="margin:4px 0 8px;padding-left:20px">'+i.files.resolved.map(f=>'<li>'+fileLine(f)+'</li>').join('')+i.files.paths.map(f=>'<li><code>'+esc(f)+'</code></li>').join('')+(i.files.unresolved_uuids.length?'<li class="mutes">'+i.files.unresolved_uuids.length+' item id(s) not found in this library</li>':'')+'</ul>':''}${i.confidence?'<small>Confidence: <b>'+esc(i.confidence)+'</b> &middot; riskiest step: <b>'+esc(i.risk||'')+'</b></small>':''}
+  <div class="why" style="margin:6px 0">${esc(i.meaning)}</div>${(i.causes||[]).length?'<b style="font-size:13px">Likely causes</b><ul style="margin:4px 0 8px;padding-left:20px">'+i.causes.map(f=>'<li>'+esc(f)+'</li>').join('')+'</ul>':''}<b style="font-size:13px">What to do</b><ol style="margin:4px 0 8px;padding-left:20px">${i.fixes.map(f=>'<li>'+esc(f)+'</li>').join('')}</ol>${i.files?'<b style="font-size:13px">Files named in the log</b><ul style="margin:4px 0 8px;padding-left:20px">'+i.files.resolved.map(f=>'<li>'+fileLine(f)+'</li>').join('')+i.files.paths.map(f=>'<li><code>'+esc(f)+'</code></li>').join('')+(i.files.unresolved_uuids.length?'<li class="mutes">'+i.files.unresolved_uuids.length+' item id(s) not found in this library</li>':'')+'</ul>':''}${i.confidence?'<small>Confidence: <b>'+esc(i.confidence)+'</b> &middot; riskiest step: <b>'+esc(i.risk||'')+'</b></small>':''}${fixBtn(i.id)?'<div class="hbtns">'+fixBtn(i.id)+'</div>':''}
   <details><summary class="mutes">Show the log lines</summary><pre style="white-space:pre-wrap;font-size:11.5px;margin:6px 0">${i.examples.map(esc).join('\n')}</pre></details></div>`).join('');
   if((other||[]).length)h+='<h2>Errors Shoebox does not recognise</h2><small style="margin-top:0">These are errors without a known explanation. If something is not working, copy them into an email to support.</small><pre style="white-space:pre-wrap;font-size:11.5px">'+other.map(o=>esc(o.text)+'  (x'+o.count+')').join('\n')+'</pre>';
   return h}
@@ -5377,7 +5388,7 @@ function renderKB(){const q=($('kbq').value||'').toLowerCase().trim(),c=$('kbcat
    ${e.codes.length?'<small>Codes: '+e.codes.map(x=>'<code>'+esc(x)+'</code>').join(' ')+'</small>':''}${e.processes.length?'<small>Seen from: '+e.processes.map(esc).join(', ')+'</small>':''}
    ${e.causes.length?'<b style="font-size:13px">Likely causes</b><ul style="margin:3px 0 6px;padding-left:20px">'+e.causes.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>':''}
    ${e.fixes.length?'<b style="font-size:13px">What to try (in order)</b><ol style="margin:3px 0 6px;padding-left:20px">'+e.fixes.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ol>':''}
-   ${e.identify?'<b style="font-size:13px">Finding the exact files</b><div class="why">'+esc(e.identify)+'</div>':''}${(e.prevention||[]).length?'<b style="font-size:13px">Next time</b><ul style="margin:3px 0 6px;padding-left:20px">'+e.prevention.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>':''}<small>Riskiest step: <b>${esc(e.risk)}</b> &middot; Confidence: <b>${esc(e.confidence)}</b>${e.verified?' &middot; checked against its sources':' &middot; <i>draft: not yet checked against its sources</i>'}${e.confidence==='low'?' (treat as a lead, not a fact)':''}</small>
+   ${e.identify?'<b style="font-size:13px">Finding the exact files</b><div class="why">'+esc(e.identify)+'</div>':''}${(e.prevention||[]).length?'<b style="font-size:13px">Next time</b><ul style="margin:3px 0 6px;padding-left:20px">'+e.prevention.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>':''}${fixBtn(e.id)?'<div class="hbtns">'+fixBtn(e.id)+'</div>':''}<small>Riskiest step: <b>${esc(e.risk)}</b> &middot; Confidence: <b>${esc(e.confidence)}</b>${e.verified?' &middot; checked against its sources':' &middot; <i>draft: not yet checked against its sources</i>'}${e.confidence==='low'?' (treat as a lead, not a fact)':''}</small>
    ${e.sources.length?'<small>Sources: '+e.sources.map(esc).join('; ')+'</small>':''}</div></details>`).join(''):'<small>Nothing matches. Try fewer words, or just the error number.</small>'}
 $('kbdet').addEventListener('toggle',()=>{if($('kbdet').open)loadKB()});$('kbq').oninput=()=>{if(KB)renderKB()};$('kbcat').onchange=()=>{if(KB)renderKB()};
 
@@ -5398,7 +5409,7 @@ function renderPB(){const L=PB||[];const kbById={};(KB||[]).forEach(e=>kbById[e.
   ${p.issue_ids.length?'<small>Related errors: '+p.issue_ids.map(id=>esc(kbById[id]?kbById[id].title:id)).join(' &middot; ')+'</small>':''}
   <small>Confidence: <b>${esc(p.confidence)}</b> &middot; <i>draft: ${esc(p.provenance||'not yet checked')}</i></small>
   <div class="hbtns"><button type="button" class="sm" data-pbcopy="${esc(p.id)}">Copy as checklist</button><button type="button" class="sm" data-pbreset="${esc(p.id)}">Clear ticks</button></div></div></details>`}).join('')||'<small>No guides found.</small>'}
-function pbAct(a){if(a==='audit')runAudit();else if(a==='pending')runPending();else if(a==='monitor')showTab('monitor');else if(a==='health')showTab('health');else if(a==='guide')showTab('merge')}
+function pbAct(a){if(FIXES[a]&&a!=='audit'&&a!=='pending'){applyFix(a);return}if(a==='audit')runAudit();else if(a==='pending')runPending();else if(a==='monitor')showTab('monitor');else if(a==='health')showTab('health');else if(a==='guide')showTab('merge')}
 $('pblist').addEventListener('change',e=>{const c=e.target;if(c.dataset&&c.dataset.k){pbSet(c.dataset.k,c.checked);const det=c.closest('details');const p=PB.find(x=>x.id===det.dataset.pb);const [d,n]=pbProgress(p);det.querySelector('.pbprog').textContent=d+'/'+n}});
 $('pblist').addEventListener('click',async e=>{const b=e.target.closest('button');if(!b)return;
   if(b.dataset.copy){const ok=await copyTxt(b.dataset.copy);b.textContent=ok?'Copied':'Copy';setTimeout(()=>b.textContent='Copy',1500)}
@@ -5430,7 +5441,7 @@ function fileLine(f){const d=f.date?new Date(f.date*1000).toISOString().slice(0,
 function liveRender(){const L=Object.values(LIVEEV).sort((a,b)=>b.seq-a.seq).slice(0,40);
   $('livelist').innerHTML=L.length?L.map(e=>`<div class="rec" style="display:block"><b>${esc(e.title)}</b> <span class="badge ${e.sev==='bad'?'badb':e.sev==='warn'?'warnb':''}">${e.sev==='bad'?'Fix':e.sev==='warn'?'Worth a look':'Info'}</span> <span class="mutes">${new Date(e.t*1000).toTimeString().slice(0,8)}${e.count>1?' &middot; x'+e.count:''}</span>
    ${e.meaning?'<div class="why">'+esc(e.meaning)+'</div>':''}${e.files.length?'<div style="margin:4px 0">'+e.files.map(f=>'&#128247; '+fileLine(f)).join('<br>')+'</div>':''}${e.paths.length?'<div class="mutes">'+e.paths.map(esc).join('<br>')+'</div>':''}${e.unknown_ids?'<small>'+e.unknown_ids+' item id(s) not found in the chosen library</small>':''}
-   ${e.fix?'<div>&#128161; '+esc(e.fix)+'</div>':''}<details><summary class="mutes">Raw log line</summary><pre style="white-space:pre-wrap;font-size:11px">${esc(e.raw)}</pre></details></div>`).join(''):'<small>'+(LIVEON?'Watching. Nothing wrong so far.':'')+'</small>'}
+   ${e.fix?'<div>&#128161; '+esc(e.fix)+'</div>':''}${fixBtn(e.issue_id)?'<div class="hbtns">'+fixBtn(e.issue_id)+'</div>':''}<details><summary class="mutes">Raw log line</summary><pre style="white-space:pre-wrap;font-size:11px">${esc(e.raw)}</pre></details></div>`).join(''):'<small>'+(LIVEON?'Watching. Nothing wrong so far.':'')+'</small>'}
 async function livePoll(){if(!LIVEON)return;try{const r=await post('/api/live_poll',{since:LIVESEQ});if(!LIVEON)return;LIVESEQ=Math.max(LIVESEQ,r.seq);r.events.forEach(e=>LIVEEV[e.eid]=e);
   $('livestat').textContent=r.running?'watching · '+r.lines_seen.toLocaleString()+' messages read':'stopped'+(r.note?' ('+r.note+')':'');liveRender();if(!r.running){LIVEON=false;$('livego').innerHTML='&#9654; Start watching';return}}catch(e){}
   LIVET=setTimeout(livePoll,1500)}
@@ -5447,6 +5458,49 @@ $('lkgo').onclick=doLookup;$('lkq').onkeydown=e=>{if(e.key==='Enter')doLookup()}
 $('lkres').addEventListener('click',async e=>{const b=e.target.closest('button');if(!b)return;
   if(b.dataset.cp){await copyTxt(b.dataset.cp);b.textContent='Copied';setTimeout(()=>b.textContent='Copy file name',1500)}
   else if(b.dataset.show){const r=await post('/api/show_in_photos',{uuid:b.dataset.show});b.textContent=r.ok?'Shown':'Could not: '+r.why;setTimeout(()=>b.textContent='Show in Photos',4000)}});
+
+// ---- Sync meter ----
+let SYNCON=false,SYNCT=null;
+function fmtRate(b){return b>=1048576?(b/1048576).toFixed(1)+' MB/s':b>=1024?Math.round(b/1024)+' KB/s':b+' B/s'}
+function svgSpark(vals,col){if(vals.length<2)return '';const mx=Math.max(1024,...vals),w=300,h=36;const pts=vals.map((v,i)=>(i*w/(vals.length-1)).toFixed(1)+','+(h-2-(h-4)*v/mx).toFixed(1)).join(' ');return '<svg viewBox="0 0 '+w+' '+h+'" style="width:100%;height:36px"><polyline fill="none" stroke="'+col+'" stroke-width="2" points="'+pts+'"/></svg>'}
+async function syncPoll(){if(!SYNCON)return;try{const r=await post('/api/sync_poll');if(!SYNCON)return;
+  const n=r.net||[],last=n[n.length-1]||[0,0,0],pg=r.prog||[],pl=pg[pg.length-1];
+  let h='<div style="display:flex;gap:10px;margin:6px 0"><div style="flex:1"><div class="mutes">&#11015;&#65039; From iCloud</div><b style="font-size:20px">'+fmtRate(last[1])+'</b>'+svgSpark(n.map(x=>x[1]),'var(--acc)')+'</div><div style="flex:1"><div class="mutes">&#11014;&#65039; To iCloud</div><b style="font-size:20px">'+fmtRate(last[2])+'</b>'+svgSpark(n.map(x=>x[2]),'var(--ok)')+'</div></div>';
+  if(!n.length)h='<small>'+esc(r.note||'Measuring&hellip; the first numbers appear in a few seconds.')+'</small>';
+  if(pl)h+='<div><b>'+pl[1].toLocaleString()+'</b> waiting to upload &middot; '+pl[2].toLocaleString()+' of '+pl[3].toLocaleString()+' in iCloud'+(r.items_per_min!=null?' &middot; about <b>'+Math.round(r.items_per_min)+'</b> items a minute':'')+(r.eta_min?' &middot; roughly '+(r.eta_min>120?Math.round(r.eta_min/60)+' hours':Math.round(r.eta_min)+' minutes')+' left':'')+'</div>';
+  const pr=Object.entries(r.procs||{});if(pr.length)h+='<small>Busy now: '+pr.map(([k,v])=>esc(k)+' ('+fmtRate(v[0])+' down, '+fmtRate(v[1])+' up)').join(', ')+'</small>';
+  if(r.verdict==='idle')h+='<div class="tip">&#9888;&#65039; Items are waiting but almost nothing is moving over the network. That usually means paused (Low Power Mode, no Wi-Fi, no power), signed out, or stuck on one file. <a href="#" data-fixguide="sync-stuck">Open the &ldquo;stuck&rdquo; guide</a> or <a href="#" data-fix="pending">list the files that have not uploaded</a>.</div>';
+  else if(r.verdict==='moving')h+='<small>Moving normally. Large imports can take hours or days.</small>';
+  try{const s=await (await fetch('/api/status')).json();if(s.state==='running'||s.state==='scanning')h+='<div class="mutes" style="margin-top:4px">Shoebox is working: '+esc(s.message||s.state)+(s.total?' ('+(s.done||0).toLocaleString()+' of '+s.total.toLocaleString()+')':'')+'</div>'}catch(e){}
+  $('syncbody').innerHTML=h;$('syncstat').textContent=r.running?'watching':'stopped'}catch(e){}
+  SYNCT=setTimeout(syncPoll,3000)}
+$('syncgo').onclick=async()=>{if(SYNCON){SYNCON=false;clearTimeout(SYNCT);await post('/api/sync_stop');$('syncgo').innerHTML='&#9654; Start the meter';$('syncstat').textContent='stopped';return}
+  await post('/api/sync_start',{library:$('uplib').value});SYNCON=true;$('syncgo').innerHTML='&#9632; Stop the meter';$('syncstat').textContent='starting…';syncPoll()};
+
+// ---- One-click "set it up for me" ----
+const ISSUE_FIX={'import-wrong-extension':'wrongext','phphotos-3302-invalid-resource':'wrongext','zero-byte-assets':'health','import-zero-byte-damaged':'health','imageio-decode-failure':'health','import-file-not-supported':'health',
+ 'preparing-to-upload-large-import':'slowsend','photos-waiting-to-upload':'slowsend','phphotos-3300-change-not-supported':'slowsend','phphotos-3312-limit-exceeded':'slowsend','import-huge-file':'slowsend','phphotos-3301-operation-interrupted':'slowsend','large-file-limit':'slowsend',
+ 'import-hevc-prores':'convert','import-legacy-video-containers':'convert','avfoundation-11821':'convert','ghost-orphan-files':'audit','missing-originals':'audit','unable-to-upload-album':'pending','cloud-sync-stalled-generic':'pending','ck-asset-file-not-found':'pending'};
+const FIXES={
+ wrongext:{label:'Set up: repair wrong file types',tab:'guided',set:{gext:1,gdry:1},names:{gext:'Repair files with a missing or wrong file type: on',gdry:'Preview only: on'},why:'Repairs files whose ending does not match what they really are, as a preview first.',needsSource:true},
+ health:{label:'Check these files for damage',tab:'health',set:{},why:'Reads your source folders and lists empty, broken and mis-named files. Changes nothing.',needsSource:true,run:()=>{if(FOLDERS.length&&$('hgo'))$('hgo').click()}},
+ slowsend:{label:'Set up: send in small safe batches',tab:'photos',set:{pbatch:2,ppace:'verify',padapt:1,pfree:30,pdry:1},names:{pbatch:'Batch size: about 2 GB',ppace:'Between batches: wait until Photos shows each as uploaded',padapt:'Adapt the batch size: on',pfree:'Keep at least 30 GB free',pdry:'Preview only: on'},why:'Small batches, waiting for iCloud to confirm each one, with the preview ticked so nothing is sent yet.',needsSource:true},
+ convert:{label:'Set up: convert videos Photos cannot read',tab:'convert',set:{vdry:1,vact:'move'},names:{vdry:'Preview only: on',vact:'Original videos: move to _original_videos (safe)'},why:'Preview only; originals are moved aside, not deleted.',needsSource:true},
+ audit:{label:'Run the library audit',run:()=>runAudit()},
+ pending:{label:'List the files that have not uploaded',run:()=>runPending()}};
+let FIXUNDO=null;
+function fixBtn(id){const k=ISSUE_FIX[id];return k?'<button type="button" class="sm p" data-fix="'+k+'">&#9889; '+esc(FIXES[k].label)+'</button>':''}
+function applyFix(k){const f=FIXES[k];if(!f)return;const prev={},notes=[];
+  if(f.tab)showTab(f.tab);
+  Object.entries(f.set||{}).forEach(([id,v])=>{const el=document.getElementById(id);if(!el)return;prev[id]=el.type==='checkbox'?el.checked:el.value;setOpt(id,v);
+    notes.push((f.names&&f.names[id])||id)});
+  if(f.needsSource)notes.push(FOLDERS.length?'Source: your '+FOLDERS.length+' folder'+(FOLDERS.length>1?'s':'')+' in the Source list':'Source list is empty: add the folder with the files first');
+  if(f.run)f.run();
+  FIXUNDO=prev;let b=$('fixnote');if(!b){b=document.createElement('div');b.id='fixnote';b.className='card';b.style.cssText='position:fixed;left:10px;right:10px;bottom:10px;z-index:60;max-height:50vh;overflow:auto;box-shadow:0 6px 24px rgba(0,0,0,.25)';document.body.appendChild(b)}
+  b.innerHTML='<b>&#9889; Set up for you</b><div class="why">'+esc(f.why||'')+'</div><ul style="margin:4px 0;padding-left:20px">'+notes.map(n=>'<li>'+esc(n)+'</li>').join('')+'</ul><small>Nothing has been changed on your files. Check the options, then press the button yourself.</small><div class="hbtns"><button class="sm" id="fixundo">Undo these settings</button><button class="sm" id="fixclose">Close</button></div>';
+  $('fixclose').onclick=()=>b.remove();$('fixundo').onclick=()=>{Object.entries(FIXUNDO||{}).forEach(([id,v])=>setOpt(id,v));b.remove()}}
+document.addEventListener('click',e=>{const a=e.target.closest('[data-fix],[data-fixguide]');if(!a)return;e.preventDefault();
+  if(a.dataset.fix)applyFix(a.dataset.fix);else{showTab('monitor');$('pbdet').open=true;loadPB().then(()=>{const d=document.querySelector('[data-pb="'+a.dataset.fixguide+'"]');if(d){d.open=true;d.scrollIntoView({behavior:'smooth'})}})}});
 </script></main></body></html>"""
 
 
@@ -5458,6 +5512,7 @@ def main():
     a = ap.parse_args()
     import atexit
     atexit.register(fx.LIVE.stop)
+    atexit.register(fx.SYNC.stop)
     srv = ThreadingHTTPServer(("127.0.0.1", a.port), Handler)
     url = f"http://127.0.0.1:{a.port}"
     if not a.no_update_check:

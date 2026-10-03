@@ -2,6 +2,7 @@
 Everything runs in a scratch folder with mock Takeouts, mock Photos libraries and a fake osascript."""
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -1186,7 +1187,12 @@ def t_audit_pending_playbooks():
     for p in raw:
         assert all(i in known for i in p["issue_ids"]), p["id"]
         assert all(st["who"] in ("shoebox", "you", "terminal") for st in p["steps"]), p["id"]
-        assert not any(st.get("action") and st["action"] not in ("audit", "pending", "monitor", "health", "guide") for st in p["steps"]), p["id"]
+        assert not any(st.get("action") and st["action"] not in ("audit", "pending", "monitor", "health", "guide", "wrongext", "slowsend", "convert") for st in p["steps"]), p["id"]
+    page = g.PAGE
+    m = re.search(r"const ISSUE_FIX=\{(.*?)\};", page, re.S)
+    fixes = re.findall(r"'([a-z0-9-]+)':'([a-z]+)'", m.group(1))
+    keys = set(re.findall(r"^ (\w+):\{label:", page.split("const FIXES={")[1], re.M))
+    assert len(fixes) >= 15 and all(i in known for i, _ in fixes) and all(k in keys for _, k in fixes), [i for i, _ in fixes if i not in known]
     sup = [e for e in fx.load_issues() if e.get("provenance", "").startswith("supplied")]
     assert len(sup) >= 10 and all(not e["verified"] and e["confidence"] != "high" for e in sup)
     shutil.rmtree(base, ignore_errors=True)
@@ -1233,12 +1239,40 @@ def t_live_watch_and_albums():
     return "events=%d" % len(ev)
 
 
+def t_sync_meter():
+    base = Path(tempfile.mkdtemp(prefix="syncm_"))
+    lib = make_photos_library(base / "S.photoslibrary", [("a.jpg", 10, False), ("b.jpg", 10, True), ("c.jpg", 10, False)])
+    cnt = base / "n"
+    cnt.write_text("0")
+    sc = base / "fakenettop.sh"
+    sc.write_text("#!/bin/sh\nn=$(cat %s); n=$((n+1)); echo $n > %s\necho 'time,,bytes_in,bytes_out,'\necho \"12:00:00.1,cloudphotod.5,$((n*1000000)),$((n*500000)),\"\necho \"12:00:00.1,Safari.9,1,1,\"\n" % (cnt, cnt))
+    sc.chmod(0o755)
+    os.environ["BACKSTORY_NETTOP_CMD"] = str(sc)
+    try:
+        m = fx.SyncMeter()
+        m.start(str(lib), net_every=0.3, db_every=0.3)
+        t0 = time.time()
+        while time.time() - t0 < 6:
+            p = m.poll()
+            if len(p["net"]) >= 2 and p["prog"]:
+                break
+            time.sleep(0.1)
+        m.stop()
+    finally:
+        os.environ.pop("BACKSTORY_NETTOP_CMD", None)
+    assert len(p["net"]) >= 2 and p["net"][-1][1] > 500000 and p["net"][-1][2] > 200000, p["net"]
+    assert "cloudphotod" in p["procs"] and "Safari" not in p["procs"]
+    assert p["prog"][-1][1] == 2 and p["prog"][-1][2] == 1 and p["verdict"] == "moving", p
+    shutil.rmtree(base, ignore_errors=True)
+    return "net points=%d" % len(p["net"])
+
+
 ORDER = ["t_fix_copy", "t_fix_namedate", "t_fix_inplace", "t_fix_move", "t_fix_dryrun_changes_nothing", "t_fix_zip", "t_zip_resume", "t_zip_needs_dest", "t_zip_corrupt",
          "t_edited_policies", "t_cancel_mid_run", "t_unreadable_and_zero", "t_dest_not_writable", "t_exiftool_missing", "t_low_disk_zip", "t_assess_and_recommend",
          "t_assess_multi_and_photoslib", "t_guided_end_to_end", "t_guided_no_dest", "t_merge_variants", "t_merge_refuses_unsafe", "t_merge_move_in_place", "t_cleanup_all",
          "t_cleanup_refuses_broad", "t_consolidate", "t_convert", "t_convert_stop", "t_similar_apply_undo", "t_health_and_formats", "t_undo_copy_run", "t_photos_plan_and_run",
          "t_photos_applescript_injection_safe", "t_photos_errors", "t_monitor_rules", "t_monitor_job_paste", "t_compare_and_near", "t_diagnostics", "t_history_report",
-         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs", "t_audit_regressions", "t_dates_and_places", "t_resilient_copy", "t_rerun_over_http", "t_keeper_rules_and_matching", "t_bursts_and_compare_rules", "t_qa_hunt_regressions", "t_timezone_correct_dates", "t_preflight_report", "t_albums_and_live_arrival", "t_receipt", "t_context_dates_and_locations", "t_blur_and_screenshots", "t_motion_photo_extract", "t_offline_place_names", "t_issue_catalog", "t_audit_pending_playbooks", "t_live_watch_and_albums"]
+         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs", "t_audit_regressions", "t_dates_and_places", "t_resilient_copy", "t_rerun_over_http", "t_keeper_rules_and_matching", "t_bursts_and_compare_rules", "t_qa_hunt_regressions", "t_timezone_correct_dates", "t_preflight_report", "t_albums_and_live_arrival", "t_receipt", "t_context_dates_and_locations", "t_blur_and_screenshots", "t_motion_photo_extract", "t_offline_place_names", "t_issue_catalog", "t_audit_pending_playbooks", "t_live_watch_and_albums", "t_sync_meter"]
 if __name__ == "__main__":
     only = sys.argv[1:]
     for n in ORDER:
