@@ -469,7 +469,7 @@ def t_monitor_rules():
              "2026-10-02 10:00:07.000 E Photos[1:2] strange unknown failure 77"]
     issues, other = fx.interpret_log_lines(lines)
     ids = {i["id"] for i in issues}
-    assert {"disk_full", "icloud_quota", "network", "db_corrupt"} <= ids, ids
+    assert {"disk-full-import", "icloud_quota", "network", "sqlite-corrupt"} <= ids, ids
     assert other and other[0]["count"] == 1
     t0 = time.time(); fx.interpret_log_lines(["2026-10-02 10:00:00 E x " + "a" * 150 + " failed"] * 50000); dt = time.time() - t0
     assert dt < 20, "rules too slow: %.1fs" % dt
@@ -479,7 +479,7 @@ def t_monitor_rules():
 def t_monitor_job_paste():
     g.run_monitor(6, "2026-10-02 10:00:01.123 E photolibraryd[1:2] write failed: No space left on device")
     sm = state_ok()
-    assert sm["issues"][0]["id"] == "disk_full" and sm["issues"][0]["fixes"]
+    assert sm["issues"][0]["id"] == "disk-full-import" and sm["issues"][0]["fixes"]
 
 
 def t_compare_and_near():
