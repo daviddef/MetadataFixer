@@ -30,7 +30,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.04-b"
+VERSION = "2026.10.04-c"
 class Cancelled(Exception):
     pass
 
@@ -5163,7 +5163,7 @@ renderProfile();if(PROF!=='balanced')applyProfile(PROF);
   function setDS(v){DS=v;try{localStorage.setItem('dock',v)}catch(e){}render()}
   function render(){const d=el('dock');if(!d)return;const running=window.__dockRunning,has=LOGF.length>0;
     const show=DS!=='off'&&(running||DS==='open'||DS==='min'||(DS==='auto'&&has&&window.__dockRecent));
-    d.classList.toggle('on',!!show);d.classList.toggle('min',DS==='min');
+    const narrow=window.matchMedia&&matchMedia('(max-width:560px)').matches;d.classList.toggle('on',!!show);d.classList.toggle('min',DS==='min'||(narrow&&DS==='auto'));document.body.style.paddingBottom=show?(d.classList.contains('min')?'64px':'220px'):'';
     el('dtoggle').classList.toggle('on',!show&&(running||has));el('actbtn').textContent=show&&DS!=='min'?'Hide activity':'Show activity'}
   function push(t,c){LOGF.push({t:new Date(),x:t,c:c||''});if(LOGF.length>300)LOGF.shift()}
   window.dockUpdate=function(s){const running=s.state==='scanning'||s.state==='running';window.__dockRunning=running;
@@ -5184,7 +5184,7 @@ renderProfile();if(PROF!=='balanced')applyProfile(PROF);
     const lg=el('dlog'),atEnd=lg.scrollHeight-lg.scrollTop-lg.clientHeight<30;
     lg.innerHTML=LOGF.slice(-60).map(l=>'<div class="'+l.c+'">'+l.t.toTimeString().slice(0,8)+'  '+l.x.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))+'</div>').join('');if(atEnd)lg.scrollTop=lg.scrollHeight;
     el('dstop').style.display=running?'inline-block':'none';el('dview').style.display=(s.state==='done'||s.state==='error')?'inline':'none';render()};
-  el('dmin').onclick=()=>setDS(DS==='min'?'open':'min');el('dhide').onclick=()=>setDS('off');el('dtoggle').onclick=()=>setDS('open');
+  el('dmin').onclick=()=>{const d=el('dock');setDS(d.classList.contains('min')?'open':'min')};el('dhide').onclick=()=>setDS('off');el('dtoggle').onclick=()=>setDS('open');
   el('actbtn').onclick=()=>{const d=el('dock');setDS(d.classList.contains('on')&&DS!=='min'?'off':'open')};
   el('dstop').onclick=()=>{const b=el('stopall');if(b)b.click()};
   el('dview').onclick=e=>{e.preventDefault();const g=el('goto');if(g)g.click()};
