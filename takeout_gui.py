@@ -30,7 +30,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.04-e"
+VERSION = "2026.10.04-f"
 class Cancelled(Exception):
     pass
 
@@ -4012,6 +4012,24 @@ body[data-tab=history] .route,body[data-tab=help] .route{display:none}
 .rt-acts .ic{width:34px;height:32px;padding:0;font-size:16px;line-height:1;display:grid;place-items:center;border-radius:10px;position:relative}
 .rt-acts .ic sup{position:absolute;right:3px;top:1px;font-size:11px;font-weight:800;color:var(--acc)}
 .rt-acts .ic:hover{transform:translateY(-1px)}
+
+/* ---- v6 slim header ---- */
+.hero{padding:8px 12px 8px!important;margin-bottom:8px!important;border-radius:14px!important;animation:none!important}
+.hero .brand{display:flex;align-items:center;gap:8px;flex-wrap:nowrap}
+.hero .logo{width:30px!important;height:30px!important;filter:none!important;animation:none!important}
+.hero h1{font-size:19px!important;margin:0!important;line-height:1}
+.hname{flex:1;min-width:0}
+.hmeta{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--mute);white-space:nowrap}
+.hmeta #ver::before{content:"v"}
+.hmeta a{text-decoration:none;font-size:16px;line-height:1;padding:2px 4px;border-radius:6px}
+.hmeta a:hover{background:var(--soft)}
+.hmeta #vermsg{color:var(--ok)}
+.hero .route{margin-top:6px!important;padding-top:8px!important}
+.updbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 12px;margin:0 0 8px;border-radius:12px;background:color-mix(in srgb,var(--acc) 12%,var(--card));border:1px solid color-mix(in srgb,var(--acc) 35%,var(--line));font-size:13.5px}
+.updbar .mutes{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+.updbar button.p{padding:5px 12px;font-size:13px}
+.updbar .mutes{display:none}.updbar>span:first-child{white-space:nowrap;flex:1}.hmeta #vermsg{display:none}
+.updbar{flex-wrap:nowrap!important}.updbar .rt-acts{margin-left:0}
 </style></head><body><div id="ack" style="display:none"><div class="ackbox" role="dialog" aria-modal="true" aria-labelledby="acktitle">
 <h2 id="acktitle">Before you start</h2>
 <p>Backstory changes, copies, moves and (if you choose) deletes files. Please read this once:</p>
@@ -4026,10 +4044,9 @@ body[data-tab=history] .route,body[data-tab=help] .route{display:none}
 <small>Support: thestocksoup@gmail.com</small>
 </div></div>
 <main>
-<div id="upd" style="display:none" class="card"><b>A newer version is available.</b> <span id="updmsg"></span>
-<div style="margin-top:8px"><button class="p" id="updgo">Update now</button> <button id="updno">Not now</button></div></div>
+<div id="upd" style="display:none" class="updbar"><span>&#11014;&#65039; <b>Update available</b></span><span id="updmsg" class="mutes"></span><span class="rt-acts"><button class="p sm" id="updgo">Update now</button><button class="sm" id="updno">Not now</button></span></div>
 <header class="hero">
-  <div class="floaties" aria-hidden="true"><span>&#128247;</span><span>&#127757;</span><span>&#128197;</span><span>&#10024;</span><span>&#128444;&#65039;</span></div>
+  
   <div class="brand">
     <svg class="logo" viewBox="0 0 1024 1024" role="img" aria-label="Backstory logo"><defs>
 <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5b5bf0"/><stop offset=".55" stop-color="#7a4df0"/><stop offset="1" stop-color="#14b8c4"/></linearGradient>
@@ -4054,10 +4071,8 @@ body[data-tab=history] .route,body[data-tab=help] .route{display:none}
   <path d="M-26 -8 l20 22 l38 -46" fill="none" stroke="#ff5a4e" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
 </g>
 </svg>
-    <div>
-      <h1>Backstory</h1>
-      <p class="tag">Give every photo its backstory back: real dates, places and captions from your Google Photos export. <span id="ver" style="opacity:.6;white-space:nowrap"></span> <a href="#" id="vercheck" style="font-size:13px;white-space:nowrap">Check for updates</a> <span id="vermsg" style="font-size:13px;white-space:nowrap"></span></p>
-    </div>
+    <div class="hname"><h1 title="Give every photo its backstory back: real dates, places and captions from your Google Photos export.">Backstory</h1></div>
+    <div class="hmeta"><span id="ver"></span><a href="#" id="vercheck" title="Check for updates" aria-label="Check for updates">&#8635;</a><span id="vermsg"></span></div>
   </div>
   <div class="fbar route" id="fbar">
     <div class="rt rt-from" id="frs">
@@ -4471,7 +4486,7 @@ function setBar(barId,fillId,pctId,pct,indet){
 (async function(){
   let boot=null;
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-  async function st(){try{const j=await (await fetch('/api/status')).json();if(j&&j.version)$('ver').textContent='Version '+j.version;return j}catch(e){return null}}
+  async function st(){try{const j=await (await fetch('/api/status')).json();if(j&&j.version)$('ver').textContent=j.version;return j}catch(e){return null}}
   async function checkNow(manual){
     if(manual)$('vermsg').textContent='Checking...';
     try{await post('/api/update_check')}catch(e){}

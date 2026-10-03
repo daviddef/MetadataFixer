@@ -83,6 +83,10 @@ Options marked with a warning sign (⚠️) can delete, overwrite, merge, rename
 
 Every job (preview or real) has a **Stop** button in the status bar at the top. Stopping is safe: files already handled stay done, nothing is left half-written, and running the same settings again carries on where it stopped. Stopping a preview changes nothing.
 
+## The header
+
+The top of the screen is one slim line: the logo, the name, the version, and a ↻ button to check for updates. When an update is waiting, a thin bar above it says so, with **Update now** and **Not now**. The one-line description of the app is in this guide's first paragraph.
+
 ## Choosing your folders (once, for every tab)
 
 The bar at the top is one simple route: **FROM** your photos **TO** where the finished library goes.
