@@ -1193,12 +1193,48 @@ def t_audit_pending_playbooks():
     return "%d playbooks, %d supplied entries" % (len(pbs), len(sup))
 
 
+def t_live_watch_and_albums():
+    import sqlite3
+    base = Path(tempfile.mkdtemp(prefix="livelib_"))
+    lib = make_photos_library(base / "L.photoslibrary", [("beach.jpg", 10, False), ("cat.jpg", 10, True)])
+    c = sqlite3.connect(lib / "database" / "Photos.sqlite")
+    c.execute("alter table ZASSET add column ZUUID text"); c.execute("alter table ZASSET add column ZDATECREATED real")
+    c.execute("update ZASSET set ZUUID='AAAAAAAA-1111-2222-3333-444444444444', ZDATECREATED=700000000 where Z_PK=1")
+    c.execute("create table ZGENERICALBUM (Z_PK integer primary key, ZTITLE text, ZTRASHEDSTATE integer)")
+    c.execute("create table Z_26ASSETS (Z_26ALBUMS integer, Z_3ASSETS integer)")
+    c.execute("insert into ZGENERICALBUM values (1,'Japan 2025',0)"); c.execute("insert into Z_26ASSETS values (1,1)")
+    c.commit(); c.close()
+    r = fx.resolve_uuids(lib, ["AAAAAAAA-1111-2222-3333-444444444444"])
+    f = r["found"][0]
+    assert f["file"] == "beach.jpg" and f["albums"] == ["Japan 2025"] and f["date"] == 700000000 + 978307200, f
+    script = base / "fakelog.sh"
+    script.write_text("#!/bin/sh\necho 'ts cloudphotod: Upload failed for assetID=AAAAAAAA-1111-2222-3333-444444444444 CKErrorDomain Code=25'\n"
+                      "echo 'ts cloudphotod: Upload failed for assetID=AAAAAAAA-1111-2222-3333-444444444444 CKErrorDomain Code=25'\n"
+                      "echo 'ts photolibraryd: all fine'\n"
+                      "echo 'ts cloudphotod: something exploded badly with error 12345'\nsleep 5\n")
+    script.chmod(0o755)
+    w = fx.LiveWatcher()
+    assert w.start(str(lib), cmd=[str(script)])
+    t0 = time.time()
+    while time.time() - t0 < 4 and len(w.poll(0)["events"]) < 2:
+        time.sleep(0.1)
+    p = w.poll(0)
+    w.stop()
+    ev = p["events"]
+    assert len(ev) >= 2 and ev[0]["count"] == 2, ev
+    assert ev[0]["files"] and ev[0]["files"][0]["file"] == "beach.jpg" and ev[0]["files"][0]["albums"] == ["Japan 2025"], ev[0]
+    assert any(not e["known"] for e in ev) and p["lines_seen"] >= 4
+    assert fx.LiveWatcher().start("", cmd=["/nonexistent/cmd"]) is False
+    shutil.rmtree(base, ignore_errors=True)
+    return "events=%d" % len(ev)
+
+
 ORDER = ["t_fix_copy", "t_fix_namedate", "t_fix_inplace", "t_fix_move", "t_fix_dryrun_changes_nothing", "t_fix_zip", "t_zip_resume", "t_zip_needs_dest", "t_zip_corrupt",
          "t_edited_policies", "t_cancel_mid_run", "t_unreadable_and_zero", "t_dest_not_writable", "t_exiftool_missing", "t_low_disk_zip", "t_assess_and_recommend",
          "t_assess_multi_and_photoslib", "t_guided_end_to_end", "t_guided_no_dest", "t_merge_variants", "t_merge_refuses_unsafe", "t_merge_move_in_place", "t_cleanup_all",
          "t_cleanup_refuses_broad", "t_consolidate", "t_convert", "t_convert_stop", "t_similar_apply_undo", "t_health_and_formats", "t_undo_copy_run", "t_photos_plan_and_run",
          "t_photos_applescript_injection_safe", "t_photos_errors", "t_monitor_rules", "t_monitor_job_paste", "t_compare_and_near", "t_diagnostics", "t_history_report",
-         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs", "t_audit_regressions", "t_dates_and_places", "t_resilient_copy", "t_rerun_over_http", "t_keeper_rules_and_matching", "t_bursts_and_compare_rules", "t_qa_hunt_regressions", "t_timezone_correct_dates", "t_preflight_report", "t_albums_and_live_arrival", "t_receipt", "t_context_dates_and_locations", "t_blur_and_screenshots", "t_motion_photo_extract", "t_offline_place_names", "t_issue_catalog", "t_audit_pending_playbooks"]
+         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs", "t_audit_regressions", "t_dates_and_places", "t_resilient_copy", "t_rerun_over_http", "t_keeper_rules_and_matching", "t_bursts_and_compare_rules", "t_qa_hunt_regressions", "t_timezone_correct_dates", "t_preflight_report", "t_albums_and_live_arrival", "t_receipt", "t_context_dates_and_locations", "t_blur_and_screenshots", "t_motion_photo_extract", "t_offline_place_names", "t_issue_catalog", "t_audit_pending_playbooks", "t_live_watch_and_albums"]
 if __name__ == "__main__":
     only = sys.argv[1:]
     for n in ORDER:

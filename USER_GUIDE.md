@@ -292,11 +292,13 @@ The **Fix guides and checklists** box on the Monitor tab has about a dozen step-
 
 Each guide is an ordered checklist. Every step is tagged with who does it: 🧰 **Shoebox** (an Open button jumps to the right tool), 🙋 **You** (do it in Photos or Finder) or ⌨️ **Terminal** (a command you can copy). Risky steps carry a warning. Your ticks are remembered on this Mac, and **Copy as checklist** gives you the whole thing as text to paste into notes or an email.
 
+**Live watch.** The **Live watch** box on the Monitor tab streams the Photos and iCloud messages from the Mac as they happen (Mac only). Each interesting message becomes a plain-language card: what it means, the first thing to try, and, when the message names a picture, the **real file name, its date and the albums it is in** instead of the long id. Repeats are merged into one card with a count. Pictures are looked up in the library chosen on the Photos tab (or the first one found); an id that is not in that library is reported as not found. Nothing is changed. Press Stop, or quit Shoebox, to end the stream.
+
 Two buttons find the **exact files**, read-only (they read a copy of the Photos database and change nothing):
 - **Library audit** lists files that are inside the library but unknown to Photos (orphans, ghost files), pictures Photos expects but cannot find on disk and not in iCloud, empty files, and files whose extension does not match what they really are. Pictures that are only in iCloud (normal with Optimize Storage) are counted separately, not as missing.
 - **Which files have not uploaded?** lists every picture still waiting for iCloud with its size and date, and flags the likely cause (empty file, wrong extension, unusual type, huge file, original missing). Both can save the full list as a spreadsheet.
 
-When **Log issues** finds an error that mentions a picture's id or path, Shoebox looks the id up in your library and shows the real file name under **Files named in the log**.
+When **Log issues** finds an error that mentions a picture's id or path, Shoebox looks the id up in your library and shows the real file name, date and albums under **Files named in the log**.
 
 The error catalog now also lists, for each entry where it applies, how to find the exact files and how to avoid the problem next time. About 14 entries came from two spreadsheets of AI-generated notes you supplied; they are marked as supplied, unverified and low confidence, and their quoted log messages are leads to check, not facts.
 

@@ -2666,7 +2666,7 @@ def attach_log_files(issues, lib):
         names = {x["uuid"].upper(): x for x in r.get("found", [])} if r.get("ok") else {}
     for i in issues:
         f = per[i["id"]]
-        files = [{"uuid": u, "file": names[u]["file"], "in_cloud": names[u]["in_cloud"]} for u in f["uuids"] if u in names]
+        files = [{"uuid": u, "file": names[u]["file"], "in_cloud": names[u]["in_cloud"], "date": names[u]["date"], "albums": names[u].get("albums", [])} for u in f["uuids"] if u in names]
         if files or f["paths"]:
             i["files"] = {"resolved": files[:20], "unresolved_uuids": [u for u in f["uuids"] if u not in names][:10], "paths": f["paths"][:20]}
 
@@ -3598,6 +3598,14 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps(open_path(body.get("id", ""), body.get("what", "report"))))
         elif path == "/api/issues":
             self._send(200, json.dumps({"issues": fx.issue_catalog()}))
+        elif path == "/api/live_start":
+            ok = fx.LIVE.start(_library_or_first(body))
+            self._send(200, json.dumps({"ok": ok, **{k: v for k, v in fx.LIVE.poll(0).items() if k == "note"}}))
+        elif path == "/api/live_poll":
+            self._send(200, json.dumps(fx.LIVE.poll(int(body.get("since") or 0))))
+        elif path == "/api/live_stop":
+            fx.LIVE.stop()
+            self._send(200, "{}")
         elif path == "/api/playbooks":
             self._send(200, json.dumps({"playbooks": fx.load_playbooks()}))
         elif path in ("/api/library_audit", "/api/pending_files"):
@@ -4396,6 +4404,9 @@ body[data-tab=history] .route,body[data-tab=help] .route{display:none}
 <div class="hbtns"><button class="p" id="mongo">Check the logs</button></div>
 <div class="opt"><div style="flex:1"><label for="mpaste" style="font-weight:600">Or paste log text</label><textarea id="mpaste" placeholder="Paste lines from Console or a crash report here" spellcheck="false" style="min-height:70px"></textarea></div></div>
 <div class="hbtns"><button id="mpastego">Interpret the pasted text</button></div></div>
+<div class="card" id="livecard"><b>&#128225; Live watch</b> <span class="mutes" id="livestat"></span>
+<small style="margin:4px 0">Streams the Photos and iCloud messages as they happen and explains each one in plain language, with the real file name, date and albums of the picture it mentions.</small>
+<div class="hbtns"><button class="sm p" id="livego">&#9654; Start watching</button></div><div id="livelist"></div></div>
 <div class="card" id="pbcard"><details id="pbdet"><summary style="cursor:pointer;font-weight:700">&#129521; Fix guides and checklists <span class="mutes" id="pbcount"></span></summary>
 <div class="secbody"><small style="margin-top:0">Pick what you are seeing. Each guide is an ordered checklist: some steps are buttons in Shoebox, some you do in Photos or Finder, some are a Terminal command you can copy. Ticks are remembered on this Mac.</small>
 <div class="hbtns"><button class="sm" id="pbaudit">&#128269; Library audit: orphan and missing files</button><button class="sm" id="pbpend">&#9729;&#65039; Which files have not uploaded?</button></div>
@@ -5014,7 +5025,7 @@ $('cmpgo').onclick=async()=>{
 
 function issuesHTML(issues,other){
   let h=(issues||[]).map(i=>`<div class="card"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="font-size:16px">${esc(i.title)}</b><span class="badge ${i.sev==='bad'?'badb':i.sev==='warn'?'warnb':''}">${i.sev==='bad'?'Fix':i.sev==='warn'?'Worth fixing':'For your information'}</span>${i.new?'<span class="badge okb">New</span>':''}<span class="mutes">${i.count.toLocaleString()} time${i.count===1?'':'s'}${i.last&&i.last!==i.first?' &middot; last '+esc(i.last):''}</span></div>
-  <div class="why" style="margin:6px 0">${esc(i.meaning)}</div>${(i.causes||[]).length?'<b style="font-size:13px">Likely causes</b><ul style="margin:4px 0 8px;padding-left:20px">'+i.causes.map(f=>'<li>'+esc(f)+'</li>').join('')+'</ul>':''}<b style="font-size:13px">What to do</b><ol style="margin:4px 0 8px;padding-left:20px">${i.fixes.map(f=>'<li>'+esc(f)+'</li>').join('')}</ol>${i.files?'<b style="font-size:13px">Files named in the log</b><ul style="margin:4px 0 8px;padding-left:20px">'+i.files.resolved.map(f=>'<li>'+esc(f.file)+(f.in_cloud?' <span class="mutes">(in iCloud)</span>':'')+'</li>').join('')+i.files.paths.map(f=>'<li><code>'+esc(f)+'</code></li>').join('')+(i.files.unresolved_uuids.length?'<li class="mutes">'+i.files.unresolved_uuids.length+' item id(s) not found in this library</li>':'')+'</ul>':''}${i.confidence?'<small>Confidence: <b>'+esc(i.confidence)+'</b> &middot; riskiest step: <b>'+esc(i.risk||'')+'</b></small>':''}
+  <div class="why" style="margin:6px 0">${esc(i.meaning)}</div>${(i.causes||[]).length?'<b style="font-size:13px">Likely causes</b><ul style="margin:4px 0 8px;padding-left:20px">'+i.causes.map(f=>'<li>'+esc(f)+'</li>').join('')+'</ul>':''}<b style="font-size:13px">What to do</b><ol style="margin:4px 0 8px;padding-left:20px">${i.fixes.map(f=>'<li>'+esc(f)+'</li>').join('')}</ol>${i.files?'<b style="font-size:13px">Files named in the log</b><ul style="margin:4px 0 8px;padding-left:20px">'+i.files.resolved.map(f=>'<li>'+fileLine(f)+'</li>').join('')+i.files.paths.map(f=>'<li><code>'+esc(f)+'</code></li>').join('')+(i.files.unresolved_uuids.length?'<li class="mutes">'+i.files.unresolved_uuids.length+' item id(s) not found in this library</li>':'')+'</ul>':''}${i.confidence?'<small>Confidence: <b>'+esc(i.confidence)+'</b> &middot; riskiest step: <b>'+esc(i.risk||'')+'</b></small>':''}
   <details><summary class="mutes">Show the log lines</summary><pre style="white-space:pre-wrap;font-size:11.5px;margin:6px 0">${i.examples.map(esc).join('\n')}</pre></details></div>`).join('');
   if((other||[]).length)h+='<h2>Errors Shoebox does not recognise</h2><small style="margin-top:0">These are errors without a known explanation. If something is not working, copy them into an email to support.</small><pre style="white-space:pre-wrap;font-size:11.5px">'+other.map(o=>esc(o.text)+'  (x'+o.count+')').join('\n')+'</pre>';
   return h}
@@ -5392,6 +5403,20 @@ async function runPending(){showTab('monitor');$('pbdet').open=true;await loadPB
    +(r.pending_total?'<small>A big queue with no likely causes is usually just waiting for the network. Ones with a cause are the ones to fix first.</small><div class="hbtns"><button class="sm" id="pbcsv">Save the full list as a spreadsheet</button></div><div id="pbcsvres"></div>':'')+'</div>';
   if($('pbcsv'))$('pbcsv').onclick=async()=>{const x=await post('/api/pending_files',{library:lib,csv:true});$('pbcsvres').innerHTML=csvLine(x);if($('pbfolder'))$('pbfolder').onclick=()=>post('/api/open_reports')}}
 $('pbaudit').onclick=runAudit;$('pbpend').onclick=runPending;$('pbdet').addEventListener('toggle',()=>{if($('pbdet').open)loadPB()});
+
+// ---- Live watch ----
+let LIVEON=false,LIVESEQ=0,LIVET=null,LIVEEV={};
+function fileLine(f){const d=f.date?new Date(f.date*1000).toISOString().slice(0,10):'';return '<b>'+esc(f.file||'?')+'</b>'+(d?' <span class="mutes">'+d+'</span>':'')+(f.albums&&f.albums.length?' <span class="mutes">in album'+(f.albums.length>1?'s':'')+': '+f.albums.map(esc).join(', ')+'</span>':' <span class="mutes">(in no album)</span>')+(f.in_cloud?' <span class="mutes">&middot; in iCloud</span>':'')}
+function liveRender(){const L=Object.values(LIVEEV).sort((a,b)=>b.seq-a.seq).slice(0,40);
+  $('livelist').innerHTML=L.length?L.map(e=>`<div class="rec" style="display:block"><b>${esc(e.title)}</b> <span class="badge ${e.sev==='bad'?'badb':e.sev==='warn'?'warnb':''}">${e.sev==='bad'?'Fix':e.sev==='warn'?'Worth a look':'Info'}</span> <span class="mutes">${new Date(e.t*1000).toTimeString().slice(0,8)}${e.count>1?' &middot; x'+e.count:''}</span>
+   ${e.meaning?'<div class="why">'+esc(e.meaning)+'</div>':''}${e.files.length?'<div style="margin:4px 0">'+e.files.map(f=>'&#128247; '+fileLine(f)).join('<br>')+'</div>':''}${e.paths.length?'<div class="mutes">'+e.paths.map(esc).join('<br>')+'</div>':''}${e.unknown_ids?'<small>'+e.unknown_ids+' item id(s) not found in the chosen library</small>':''}
+   ${e.fix?'<div>&#128161; '+esc(e.fix)+'</div>':''}<details><summary class="mutes">Raw log line</summary><pre style="white-space:pre-wrap;font-size:11px">${esc(e.raw)}</pre></details></div>`).join(''):'<small>'+(LIVEON?'Watching. Nothing wrong so far.':'')+'</small>'}
+async function livePoll(){if(!LIVEON)return;try{const r=await post('/api/live_poll',{since:LIVESEQ});if(!LIVEON)return;LIVESEQ=Math.max(LIVESEQ,r.seq);r.events.forEach(e=>LIVEEV[e.eid]=e);
+  $('livestat').textContent=r.running?'watching · '+r.lines_seen.toLocaleString()+' messages read':'stopped'+(r.note?' ('+r.note+')':'');liveRender();if(!r.running){LIVEON=false;$('livego').innerHTML='&#9654; Start watching';return}}catch(e){}
+  LIVET=setTimeout(livePoll,1500)}
+$('livego').onclick=async()=>{if(LIVEON){LIVEON=false;clearTimeout(LIVET);await post('/api/live_stop');$('livego').innerHTML='&#9654; Start watching';$('livestat').textContent='stopped';return}
+  const r=await post('/api/live_start',{library:$('uplib').value});if(!r.ok){$('livestat').textContent=r.note||'could not start';return}
+  LIVEON=true;LIVESEQ=0;LIVEEV={};$('livego').innerHTML='&#9632; Stop watching';$('livestat').textContent='starting…';liveRender();livePoll()};
 </script></main></body></html>"""
 
 
@@ -5401,6 +5426,8 @@ def main():
     ap.add_argument("--no-browser", action="store_true")
     ap.add_argument("--no-update-check", action="store_true", help="do not look for a newer version at startup")
     a = ap.parse_args()
+    import atexit
+    atexit.register(fx.LIVE.stop)
     srv = ThreadingHTTPServer(("127.0.0.1", a.port), Handler)
     url = f"http://127.0.0.1:{a.port}"
     if not a.no_update_check:

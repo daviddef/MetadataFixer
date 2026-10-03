@@ -5261,22 +5261,46 @@ def files_in_lines(lines, cap=400):
     return {"uuids": sorted(uu, key=lambda k: -uu[k])[:cap], "paths": sorted(pp, key=lambda k: -pp[k])[:cap]}
 
 
-def resolve_uuids(lib, uuids):
-    """Map Photos asset UUIDs (as seen in logs) to the real file names. Returns {"ok", "found": [...], "unknown": n}."""
-    want = {u.upper() for u in uuids if _UUID_RX.fullmatch(u or "")}
-    if not want:
-        return {"ok": True, "found": [], "unknown": 0}
+def _album_join(con):
+    tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if "ZGENERICALBUM" not in tables:
+        return None
+    gcols = {r[1] for r in con.execute("PRAGMA table_info(ZGENERICALBUM)")}
+    if "ZTITLE" not in gcols:
+        return None
+    for t in sorted(tables):
+        if re.fullmatch(r"Z_\d+ASSETS", t):
+            cols = {r[1] for r in con.execute("PRAGMA table_info(%s)" % t)}
+            ac = next((c for c in cols if re.fullmatch(r"Z_\d+ALBUMS", c)), None)
+            sc = next((c for c in cols if re.fullmatch(r"Z_\d+ASSETS", c)), None)
+            if ac and sc:
+                return t, ac, sc, ("ZTRASHEDSTATE" in gcols)
+    return None
+
+
+def asset_index(lib):
+    """Every asset in a library keyed by upper-case UUID: file name, date, albums, iCloud state. Read from a copy of the database.
+    Returns {"ok", "by_uuid": {...}} (or "why")."""
     try:
         con, tmp, cols = _photos_db_open(lib)
     except Exception as ex:
         return {"ok": False, "why": str(ex)[:140]}
     try:
-        found = []
+        albums = {}
+        try:
+            j = _album_join(con)
+            if j:
+                t, ac, sc, gtr = j
+                for pk, title in con.execute("SELECT j.%s, g.ZTITLE FROM %s j JOIN ZGENERICALBUM g ON g.Z_PK = j.%s WHERE g.ZTITLE IS NOT NULL%s" % (sc, t, ac, " AND g.ZTRASHEDSTATE = 0" if gtr else "")):
+                    albums.setdefault(pk, []).append(title)
+        except Exception:
+            albums = {}
+        by = {}
         for r in _asset_rows(con, cols):
-            if (r["uuid"] or "").upper() in want:
-                found.append({"uuid": r["uuid"], "file": r["orig_name"] or r["file"], "stored_as": "originals/%s/%s" % (r["dir"], r["file"]) if r["dir"] else "", "date": r["created"],
-                              "in_cloud": r["cloud_state"] == 1, "trashed": r["trashed"]})
-        return {"ok": True, "found": found, "unknown": len(want) - len(found)}
+            if r["uuid"]:
+                by[r["uuid"].upper()] = {"uuid": r["uuid"], "file": r["orig_name"] or r["file"], "stored_as": ("originals/%s/%s" % (r["dir"], r["file"])) if r["dir"] else "",
+                                         "date": r["created"], "in_cloud": r["cloud_state"] == 1, "trashed": r["trashed"], "video": r["kind"] == 1, "albums": sorted(set(albums.get(r["pk"], [])))[:8]}
+        return {"ok": True, "by_uuid": by}
     except Exception as ex:
         return {"ok": False, "why": str(ex)[:140]}
     finally:
@@ -5285,6 +5309,131 @@ def resolve_uuids(lib, uuids):
         except Exception:
             pass
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def resolve_uuids(lib, uuids):
+    """Map Photos asset UUIDs (as seen in logs) to real file names, dates and albums. Returns {"ok", "found": [...], "unknown": n}."""
+    want = {u.upper() for u in uuids if _UUID_RX.fullmatch(u or "")}
+    if not want:
+        return {"ok": True, "found": [], "unknown": 0}
+    idx = asset_index(lib)
+    if not idx.get("ok"):
+        return idx
+    found = [idx["by_uuid"][u] for u in want if u in idx["by_uuid"]]
+    return {"ok": True, "found": found, "unknown": len(want) - len(found)}
+
+
+def photos_log_predicate():
+    procs = " OR ".join('process == "%s"' % p for p in sorted(set(MAC_LOG_PROCS)))
+    key = " OR ".join('eventMessage CONTAINS[c] "%s"' % w for w in ("paused", "quota", "low power", "no space", "not authenticated", "corrupt", "rebuild", "unsupported", "timed out", "not connected", "upload failed"))
+    return "(%s) AND (messageType == error OR messageType == fault OR %s)" % (procs, key)
+
+
+class LiveWatcher:
+    """Streams the macOS log for Photos and iCloud and turns each interesting line into a plain-language event with the real file name,
+    date and albums of any picture it mentions. One instance per app; start/poll/stop."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.proc = None
+        self.events, self.seq, self.lines_seen = [], 0, 0
+        self.running, self.note, self.lib, self.index, self.index_at = False, "", "", None, 0.0
+
+    def start(self, lib="", cmd=None):
+        self.stop()
+        if cmd is None:
+            env = os.environ.get("BACKSTORY_LOG_STREAM_CMD")
+            if env:
+                import shlex
+                cmd = shlex.split(env)
+            elif sys.platform == "darwin" and shutil.which("log"):
+                cmd = ["log", "stream", "--style", "compact", "--level", "info", "--predicate", photos_log_predicate()]
+            else:
+                with self.lock:
+                    self.note = "Live watching needs a Mac (it reads the macOS log)."
+                return False
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, errors="replace", bufsize=1)
+        except OSError as ex:
+            with self.lock:
+                self.note = "Could not start the log stream: %s" % ex
+            return False
+        with self.lock:
+            self.proc, self.running, self.note, self.lib = proc, True, "", lib
+            self.events, self.seq, self.lines_seen, self.index, self.index_at = [], 0, 0, None, 0.0
+        threading.Thread(target=self._read, args=(proc,), daemon=True).start()
+        return True
+
+    def stop(self):
+        with self.lock:
+            proc, self.proc, self.running = self.proc, None, False
+        if proc:
+            try:
+                proc.terminate()
+                proc.wait(timeout=3)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+
+    def _lookup(self, uuids):
+        if not (self.lib and uuids):
+            return {}
+        now = time.time()
+        miss = self.index is None or (any(u not in self.index for u in uuids) and now - self.index_at > 60)
+        if miss:
+            r = asset_index(self.lib)
+            self.index = r["by_uuid"] if r.get("ok") else (self.index or {})
+            self.index_at = now
+        return {u: self.index[u] for u in uuids if self.index and u in self.index}
+
+    def _read(self, proc):
+        try:
+            for raw in proc.stdout:
+                if proc is not self.proc:
+                    break
+                line = raw.strip()[:1500]
+                if not line:
+                    continue
+                with self.lock:
+                    self.lines_seen += 1
+                issues, other = interpret_log_lines([line], max_examples=1)
+                if not issues and not other:
+                    continue
+                ids = files_in_lines([line], cap=10)
+                found = self._lookup(ids["uuids"])
+                files = [{"file": f["file"], "date": f["date"], "albums": f["albums"], "in_cloud": f["in_cloud"], "uuid": f["uuid"]} for f in found.values()]
+                if issues:
+                    i = issues[0]
+                    ev = {"title": i["title"], "sev": i["sev"], "meaning": i["meaning"], "fix": (i["fixes"] or [""])[0], "issue_id": i["id"], "known": True}
+                else:
+                    ev = {"title": "An error Shoebox does not recognise yet", "sev": "warn", "meaning": "", "fix": "", "issue_id": "", "known": False}
+                ev.update(raw=line[:300], files=files[:5], unknown_ids=len([u for u in ids["uuids"] if u not in found]), paths=ids["paths"][:3], count=1, t=time.time())
+                with self.lock:
+                    last = self.events[-1] if self.events else None
+                    if last and last["issue_id"] == ev["issue_id"] and last["title"] == ev["title"] and [f["uuid"] for f in last["files"]] == [f["uuid"] for f in ev["files"]] and ev["t"] - last["t"] < 120:
+                        last["count"] += 1
+                        last["t"] = ev["t"]
+                        last["seq"] = self.seq = self.seq + 1
+                    else:
+                        self.seq += 1
+                        ev["seq"] = ev["eid"] = self.seq
+                        self.events.append(ev)
+                        del self.events[:-300]
+        finally:
+            with self.lock:
+                if proc is self.proc:
+                    self.running = False
+                    if not self.note:
+                        self.note = "The log stream ended."
+
+    def poll(self, since=0):
+        with self.lock:
+            return {"running": self.running, "note": self.note, "lines_seen": self.lines_seen, "seq": self.seq, "events": [e for e in self.events if e["seq"] > since][-100:]}
+
+
+LIVE = LiveWatcher()
 
 
 PLAYBOOKS_FILE = Path(__file__).resolve().parent / "photos_playbooks.json"

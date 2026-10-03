@@ -7,5 +7,6 @@
 
 Start a private copy of the app for the UI scripts with `METADATAFIXER_HOME=/tmp/x python3 takeout_gui.py --port 8801 --no-browser --no-update-check`.
 - `ui_route.js PORT`: checks the FROM/TO bar (empty hint, chip folding, status line, which tabs show TO, remembered destinations).
+- `live_ui.js PORT [shot.png]`: needs the server started with `BACKSTORY_LOG_STREAM_CMD=<script that prints a log line>`; starts Live watch and checks an event card appears.
 - `pb_ui.js PORT [shot.png]`: opens the Fix guides box on the Monitor tab, ticks a step and runs the library audit.
 - `ui_kb.js PORT`: opens the Known Photos problems box on the Monitor tab and checks the list, search and filter.
