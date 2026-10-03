@@ -3598,6 +3598,23 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps(open_path(body.get("id", ""), body.get("what", "report"))))
         elif path == "/api/issues":
             self._send(200, json.dumps({"issues": fx.issue_catalog()}))
+        elif path == "/api/lookup":
+            lib = _library_or_first(body)
+            if not lib:
+                return self._send(200, json.dumps({"ok": False, "why": "no Photos library found"}))
+            self._send(200, json.dumps(fx.lookup_photos(lib, str(body.get("q") or "")[:5000])))
+        elif path == "/api/show_in_photos":
+            u = str(body.get("uuid") or "")
+            if not fx._UUID_RX.fullmatch(u):
+                return self._send(200, json.dumps({"ok": False, "why": "not a valid id"}))
+            if not (sys.platform == "darwin" or os.environ.get("BACKSTORY_OSASCRIPT")):
+                return self._send(200, json.dumps({"ok": False, "why": "Showing a photo in Photos only works on a Mac."}))
+            try:
+                r = subprocess.run([OSA, "-e", 'tell application "Photos" to activate', "-e", 'tell application "Photos" to spotlight media item id "%s/L0/001"' % u.upper()],
+                                   capture_output=True, text=True, timeout=30)
+            except (OSError, subprocess.TimeoutExpired) as ex:
+                return self._send(200, json.dumps({"ok": False, "why": str(ex)[:120]}))
+            self._send(200, json.dumps({"ok": r.returncode == 0, "why": (r.stderr or "").strip()[:160] or "Photos could not show it. Search its file name in Photos instead."}))
         elif path == "/api/live_start":
             ok = fx.LIVE.start(_library_or_first(body))
             self._send(200, json.dumps({"ok": ok, **{k: v for k, v in fx.LIVE.poll(0).items() if k == "note"}}))
@@ -4404,6 +4421,9 @@ body[data-tab=history] .route,body[data-tab=help] .route{display:none}
 <div class="hbtns"><button class="p" id="mongo">Check the logs</button></div>
 <div class="opt"><div style="flex:1"><label for="mpaste" style="font-weight:600">Or paste log text</label><textarea id="mpaste" placeholder="Paste lines from Console or a crash report here" spellcheck="false" style="min-height:70px"></textarea></div></div>
 <div class="hbtns"><button id="mpastego">Interpret the pasted text</button></div></div>
+<div class="card" id="lkcard"><b>&#128269; Look up a photo</b>
+<small style="margin:4px 0">Paste a long Photos id from a log (or part of one), or part of a file name. Shoebox shows the real photo: file name, date and albums.</small>
+<div style="display:flex;gap:6px"><input id="lkq" placeholder="e.g. 3F2A9C1E-… or IMG_1234" style="flex:1;min-width:0"><button class="sm p" id="lkgo">Look up</button></div><div id="lkres"></div></div>
 <div class="card" id="livecard"><b>&#128225; Live watch</b> <span class="mutes" id="livestat"></span>
 <small style="margin:4px 0">Streams the Photos and iCloud messages as they happen and explains each one in plain language, with the real file name, date and albums of the picture it mentions.</small>
 <div class="hbtns"><button class="sm p" id="livego">&#9654; Start watching</button></div><div id="livelist"></div></div>
@@ -5417,6 +5437,16 @@ async function livePoll(){if(!LIVEON)return;try{const r=await post('/api/live_po
 $('livego').onclick=async()=>{if(LIVEON){LIVEON=false;clearTimeout(LIVET);await post('/api/live_stop');$('livego').innerHTML='&#9654; Start watching';$('livestat').textContent='stopped';return}
   const r=await post('/api/live_start',{library:$('uplib').value});if(!r.ok){$('livestat').textContent=r.note||'could not start';return}
   LIVEON=true;LIVESEQ=0;LIVEEV={};$('livego').innerHTML='&#9632; Stop watching';$('livestat').textContent='starting…';liveRender();livePoll()};
+
+// ---- Look up a photo ----
+async function doLookup(){const q=$('lkq').value.trim();if(!q)return;$('lkres').innerHTML='<small>Looking&hellip;</small>';
+  const r=await post('/api/lookup',{q,library:$('uplib').value});
+  if(!r.ok){$('lkres').innerHTML='<div class="tip">'+esc(r.why||'Could not read the library')+'</div>';return}
+  $('lkres').innerHTML=r.matches.length?r.matches.map(m=>'<div class="rec" style="display:block">&#128247; '+fileLine(m)+(m.trashed?' <span class="badge warnb">in Recently Deleted</span>':'')+'<div class="mutes" style="word-break:break-all">id '+esc(m.uuid)+(m.stored_as?' &middot; '+esc(m.stored_as):'')+'</div><button class="sm" data-show="'+esc(m.uuid)+'">Show in Photos</button> <button class="sm" data-cp="'+esc(m.file||'')+'">Copy file name</button></div>').join('')+(r.total>r.matches.length?'<small>Showing '+r.matches.length+' of '+r.total+'. Type more to narrow it.</small>':''):'<div class="tip">No photo found for that. Check you picked the right library, or paste more of the id or name.</div>'}
+$('lkgo').onclick=doLookup;$('lkq').onkeydown=e=>{if(e.key==='Enter')doLookup()};
+$('lkres').addEventListener('click',async e=>{const b=e.target.closest('button');if(!b)return;
+  if(b.dataset.cp){await copyTxt(b.dataset.cp);b.textContent='Copied';setTimeout(()=>b.textContent='Copy file name',1500)}
+  else if(b.dataset.show){const r=await post('/api/show_in_photos',{uuid:b.dataset.show});b.textContent=r.ok?'Shown':'Could not: '+r.why;setTimeout(()=>b.textContent='Show in Photos',4000)}});
 </script></main></body></html>"""
 
 

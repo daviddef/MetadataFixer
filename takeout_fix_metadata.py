@@ -5323,6 +5323,38 @@ def resolve_uuids(lib, uuids):
     return {"ok": True, "found": found, "unknown": len(want) - len(found)}
 
 
+def lookup_photos(lib, query, limit=25):
+    """Simple lookup both ways. query may hold full or partial asset ids (UUIDs) or part of a file name. Returns matches with file, date, albums, id."""
+    q = (query or "").strip()
+    if not q:
+        return {"ok": True, "matches": [], "total": 0}
+    idx = asset_index(lib)
+    if not idx.get("ok"):
+        return idx
+    by = idx["by_uuid"]
+    hits, seen = [], set()
+
+    def add(u, how):
+        if u not in seen:
+            seen.add(u)
+            hits.append(dict(by[u], how=how))
+    for m in _UUID_RX.finditer(q):                                   # full ids anywhere in the pasted text
+        if m.group(0).upper() in by:
+            add(m.group(0).upper(), "id")
+    if not hits:
+        frag = re.sub(r"[^0-9A-Fa-f-]", "", q).upper()
+        if len(frag) >= 6 and re.fullmatch(r"[0-9A-F-]+", q.strip().upper().replace("/", "")) is not None:
+            for u in by:                                             # a piece of an id
+                if frag in u:
+                    add(u, "id fragment")
+        low = q.lower()
+        if not hits and len(low) >= 3:
+            for u, a in by.items():                                  # a piece of a file name (original or stored)
+                if low in (a["file"] or "").lower() or low in a["stored_as"].lower():
+                    add(u, "file name")
+    return {"ok": True, "matches": hits[:limit], "total": len(hits)}
+
+
 def photos_log_predicate():
     procs = " OR ".join('process == "%s"' % p for p in sorted(set(MAC_LOG_PROCS)))
     key = " OR ".join('eventMessage CONTAINS[c] "%s"' % w for w in ("paused", "quota", "low power", "no space", "not authenticated", "corrupt", "rebuild", "unsupported", "timed out", "not connected", "upload failed"))

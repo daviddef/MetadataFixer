@@ -1225,6 +1225,10 @@ def t_live_watch_and_albums():
     assert ev[0]["files"] and ev[0]["files"][0]["file"] == "beach.jpg" and ev[0]["files"][0]["albums"] == ["Japan 2025"], ev[0]
     assert any(not e["known"] for e in ev) and p["lines_seen"] >= 4
     assert fx.LiveWatcher().start("", cmd=["/nonexistent/cmd"]) is False
+    for q, how in (("see AAAAAAAA-1111-2222-3333-444444444444 here", "id"), ("aaaaaaaa-1111", "id fragment"), ("beach", "file name")):
+        m = fx.lookup_photos(lib, q)
+        assert m["total"] == 1 and m["matches"][0]["file"] == "beach.jpg" and m["matches"][0]["how"] == how, (q, m)
+    assert fx.lookup_photos(lib, "zzzz")["total"] == 0 and fx.lookup_photos(lib, "")["matches"] == []
     shutil.rmtree(base, ignore_errors=True)
     return "events=%d" % len(ev)
 

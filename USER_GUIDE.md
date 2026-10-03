@@ -292,6 +292,8 @@ The **Fix guides and checklists** box on the Monitor tab has about a dozen step-
 
 Each guide is an ordered checklist. Every step is tagged with who does it: 🧰 **Shoebox** (an Open button jumps to the right tool), 🙋 **You** (do it in Photos or Finder) or ⌨️ **Terminal** (a command you can copy). Risky steps carry a warning. Your ticks are remembered on this Mac, and **Copy as checklist** gives you the whole thing as text to paste into notes or an email.
 
+**Look up a photo.** Paste a long Photos id from a log (or just part of it), or part of a file name, into **Look up a photo** on the Monitor tab. You get the real photo: file name, date, albums and the id, whichever way round you search. **Show in Photos** asks the Photos app to jump to it (Mac only, best effort: if Photos refuses, search the file name in Photos instead), and **Copy file name** copies the name.
+
 **Live watch.** The **Live watch** box on the Monitor tab streams the Photos and iCloud messages from the Mac as they happen (Mac only). Each interesting message becomes a plain-language card: what it means, the first thing to try, and, when the message names a picture, the **real file name, its date and the albums it is in** instead of the long id. Repeats are merged into one card with a count. Pictures are looked up in the library chosen on the Photos tab (or the first one found); an id that is not in that library is reported as not found. Nothing is changed. Press Stop, or quit Shoebox, to end the stream.
 
 Two buttons find the **exact files**, read-only (they read a copy of the Photos database and change nothing):
