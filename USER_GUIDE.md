@@ -85,13 +85,12 @@ Every job (preview or real) has a **Stop** button in the status bar at the top. 
 
 ## Choosing your folders (once, for every tab)
 
-The title block at the top holds two rows that every tab uses, so you only choose them once:
-
-- **Source:** the Takeout zip files or folders to work on. Press **Add zip files...** or **Add folders...** (hold Cmd in the Finder dialog to pick several), or **Edit list** to type or paste one path per line, or drag items onto the title block. Each item shows as a chip; press the **x** to remove it.
-- **Destination:** where the fixed, sorted or merged copies go. Type or paste a path, or press **Choose...**. Guided, Fix and Merge use it; the other tabs ignore it.
-- Both are remembered in your browser. The tabs and progress bar stay frozen at the top as you scroll.
-- **Order matters in one place:** when you merge in place, everything goes into the **first** source folder. Use **Edit list** to reorder.
-- Because the same list is used everywhere, check it before a destructive step: Clean up and the confirmation prompts list the folders they will act on.
+The bar at the top is one simple route: **FROM** your photos **TO** where the finished library goes.
+- **FROM:** use **+ Zips** for Google Takeout zip files and **+ Folders** for folders (hold Cmd to pick several), or **drag** them onto the box. Each shows as a small chip with a ✕ to remove it; more than three fold into "+N more". The **⋯** button lets you type or paste paths, reorder or clear them.
+- **TO:** press **Choose…** (or type a path). The box remembers your last destinations: click the path box to pick one from the list. The ✕ clears it.
+- **Status line:** underneath, one line tells you what is wrong or that you are ready: no sources yet, no destination, a destination you cannot write to, not enough free space, or "✓ 2 sources (12 GB) → 214 GB free at the destination".
+- **Only what each tab needs is shown.** Guided, Fix and Merge show both FROM and TO. Clean up, Convert, Monitor, Health, Similar and Photos only need FROM, so TO is hidden there. History and Help hide the bar.
+- On a phone-width window FROM and TO stack with an arrow between them.
 
 ## Check my files (recommendations)
 

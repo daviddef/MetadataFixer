@@ -1,0 +1,20 @@
+const {chromium}=require('/opt/node22/lib/node_modules/playwright');
+(async()=>{const b=await chromium.launch({args:['--no-sandbox']});const pg=await (await b.newContext({viewport:{width:480,height:800}})).newPage();const errs=[],bad=[];
+pg.on('pageerror',e=>errs.push(e.message));pg.on('dialog',d=>d.dismiss());
+await pg.goto('http://127.0.0.1:'+process.argv[2]+'/',{waitUntil:'domcontentloaded'});await pg.waitForTimeout(600);
+if(await pg.$('#ackbox')){await pg.check('#ackbox');await pg.click('#ackgo')}
+await pg.evaluate(()=>{FOLDERS.length=0;saveFolders();document.getElementById('fdest').value='';saveDest()});
+const vis=id=>pg.evaluate(i=>{const e=document.getElementById(i);return !!(e&&e.offsetParent!==null)},id);
+if(!(await vis('fempty')))bad.push('empty hint hidden with no sources');
+let t=await pg.evaluate(()=>document.getElementById('rtstat').textContent);if(!/Add your/.test(t))bad.push('status: '+t);
+await pg.evaluate(()=>addFolders(['/tmp/a','/tmp/b','/tmp/c','/tmp/d','/tmp/e.zip']));
+const chips=await pg.evaluate(()=>document.querySelectorAll('#fchips .fchip').length);if(chips!==4)bad.push('chips '+chips);
+if(await vis('fempty'))bad.push('empty hint shown with sources');
+await pg.click('[data-tab=guided]');if(!(await vis('fdest')))bad.push('TO hidden on guided');
+t=await pg.evaluate(()=>document.getElementById('rtstat').textContent);if(!/Choose where/.test(t))bad.push('guided status: '+t);
+await pg.click('[data-tab=health]');if(await vis('fdest'))bad.push('TO visible on health');
+await pg.click('[data-tab=history]');if(await vis('fbar'))bad.push('route visible on history');
+await pg.click('[data-tab=merge]');if(!(await vis('fdest')))bad.push('TO hidden on merge');
+await pg.evaluate(()=>{document.getElementById('fdest').value='/tmp/zz';saveDest()});
+const rec=await pg.evaluate(()=>document.getElementById('recentdest').innerHTML);if(!/zz/.test(rec))bad.push('recent not saved');
+console.log(JSON.stringify({bad,errs}));await b.close()})();

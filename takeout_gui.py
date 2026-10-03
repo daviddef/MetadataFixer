@@ -30,7 +30,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.04-c"
+VERSION = "2026.10.04-d"
 class Cancelled(Exception):
     pass
 
@@ -3982,6 +3982,32 @@ h2{margin:12px 0 4px}small{margin-top:3px}
 .profpill b::first-line{font-size:18px}
 .profinfo .blurb{flex:1 1 100%;color:var(--mute)}
 @media(max-width:420px){.profpill b{font-size:11px!important}}
+
+/* ---- v5 route bar: FROM -> TO ---- */
+.route{display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:stretch;margin-top:10px!important;padding-top:10px!important;border-top:1px solid var(--line)}
+.rt{background:var(--card);border:1.5px solid var(--line);border-radius:14px;padding:8px 10px;min-width:0;display:flex;flex-direction:column;gap:5px}
+.rt-from{border-style:dashed}
+.rt-head{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.rt-k{font-size:11px;font-weight:800;letter-spacing:.08em;color:var(--acc);padding:1px 8px;border-radius:999px;background:color-mix(in srgb,var(--acc) 12%,var(--card))}
+.rt-head b{font-size:13px;color:var(--ink);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 1 40px}
+.rt-acts{margin-left:auto;display:flex;gap:4px}
+.rt-acts .sm{padding:3px 8px}
+.rt-arrow{align-self:center;color:var(--acc);font-size:20px}
+.rt .fchips{margin:0!important;flex-wrap:wrap;overflow:visible}
+.rt-empty{font-size:12.5px;color:var(--mute);padding:6px 2px}
+.rt.has .rt-empty{display:none}
+.rt-to input[type=text]{width:100%;padding:6px 8px;font:12px ui-monospace,Menlo,monospace;border-radius:8px;text-overflow:ellipsis}
+.rt-stat{grid-column:1/-1;font-size:12.5px;padding:5px 10px;border-radius:10px;background:var(--soft);color:var(--mute)}
+.rt-stat.ok{color:var(--ok)}.rt-stat.bad{color:var(--bad);background:color-mix(in srgb,var(--bad) 10%,var(--card))}.rt-stat.warn{color:var(--warn)}
+#fpanel{grid-column:1/-1}
+.fbar.over .rt-from{border-color:var(--acc);background:var(--soft)}
+.fchip.more{cursor:pointer;background:var(--soft)}
+body[data-tab=clean] .rt-to,body[data-tab=convert] .rt-to,body[data-tab=monitor] .rt-to,body[data-tab=health] .rt-to,body[data-tab=similar] .rt-to,body[data-tab=photos] .rt-to,
+body[data-tab=clean] .rt-arrow,body[data-tab=convert] .rt-arrow,body[data-tab=monitor] .rt-arrow,body[data-tab=health] .rt-arrow,body[data-tab=similar] .rt-arrow,body[data-tab=photos] .rt-arrow{display:none}
+body[data-tab=clean] .route,body[data-tab=convert] .route,body[data-tab=monitor] .route,body[data-tab=health] .route,body[data-tab=similar] .route,body[data-tab=photos] .route{grid-template-columns:1fr}
+body[data-tab=history] .route,body[data-tab=help] .route{display:none}
+.usefcard,.usef:has(.fnote),.usef:has(.dnote){display:none!important}
+@media(max-width:620px){.route{grid-template-columns:1fr}.rt-arrow{transform:rotate(90deg);justify-self:center;line-height:1}}
 </style></head><body><div id="ack" style="display:none"><div class="ackbox" role="dialog" aria-modal="true" aria-labelledby="acktitle">
 <h2 id="acktitle">Before you start</h2>
 <p>Backstory changes, copies, moves and (if you choose) deletes files. Please read this once:</p>
@@ -4029,12 +4055,21 @@ h2{margin:12px 0 4px}small{margin-top:3px}
       <p class="tag">Give every photo its backstory back: real dates, places and captions from your Google Photos export. <span id="ver" style="opacity:.6;white-space:nowrap"></span> <a href="#" id="vercheck" style="font-size:13px;white-space:nowrap">Check for updates</a> <span id="vermsg" style="font-size:13px;white-space:nowrap"></span></p>
     </div>
   </div>
-  <div class="fbar" id="fbar">
-    <div class="frow" id="frs"><span class="flabel">&#128193; Source <b id="fsum"></b></span><div class="fchips" id="fchips"></div><button id="fadd" class="sm">Add folders...</button><button id="fzip" class="sm" data-tip="Add Google Takeout .zip files directly. They are read one at a time and never changed, so there is no need to unzip them first.">Add zip files...</button><button id="fedit" class="sm">Edit list</button></div>
-    <div id="fpanel" style="display:none"><textarea id="fall" placeholder="One folder path per line (drag folders here too)" spellcheck="false"></textarea><div class="row" style="margin-top:6px"><button id="fdone" class="p sm">Done</button><button id="fclear" class="sm">Clear all</button></div></div>
-    <div class="frow" id="frd"><span class="flabel">&#127919; Destination</span><input type="text" id="fdest" placeholder="Where fixed or sorted copies go (optional when moving)" spellcheck="false"><button id="fdbtn" class="sm">Choose...</button><button id="fdclr" class="sm">Clear</button></div>
+  <div class="fbar route" id="fbar">
+    <div class="rt rt-from" id="frs">
+      <div class="rt-head"><span class="rt-k">FROM</span><b id="fsum"></b><span class="rt-acts"><button id="fadd" class="sm" title="Choose folders (hold Cmd to pick several)">+ Folders</button><button id="fzip" class="sm" data-tip="Add Google Takeout .zip files directly. They are read one at a time and never changed, so there is no need to unzip them first.">+ Zips</button><button id="fedit" class="sm" title="Type or paste paths, reorder or clear" aria-label="Edit the list">&#8943;</button></span></div>
+      <div class="fchips" id="fchips"></div>
+      <div class="rt-empty" id="fempty">&#128194; Drop your Takeout zips or folders here, or use <b>+ Zips</b> / <b>+ Folders</b></div>
+    </div>
+    <div class="rt-arrow" aria-hidden="true">&#10140;</div>
+    <div class="rt rt-to" id="frd">
+      <div class="rt-head"><span class="rt-k">TO</span><b id="fdname"></b><span class="rt-acts"><button id="fdbtn" class="sm">Choose...</button><button id="fdclr" class="sm" title="Clear" aria-label="Clear the destination">&times;</button></span></div>
+      <input type="text" id="fdest" list="recentdest" placeholder="Where the finished copies go" spellcheck="false"><datalist id="recentdest"></datalist>
+    </div>
+    <div id="fpanel" style="display:none"><textarea id="fall" placeholder="One folder or zip path per line (you can drag them in too)" spellcheck="false"></textarea><div class="row" style="margin-top:6px"><button id="fdone" class="p sm">Done</button><button id="fclear" class="sm">Clear all</button></div></div>
+    <div class="rt-stat" id="rtstat"></div>
   </div>
-</header>
+  </header>
 
 <div id="frame">
   <nav class="tabs" role="tablist">
@@ -4322,13 +4357,25 @@ let FOLDERS=[];try{FOLDERS=JSON.parse(localStorage.getItem('folders')||'[]').fil
 const roots=()=>FOLDERS.slice(),sroots=roots,croots=roots,vroots=roots,eroots=roots;
 function renderFolders(){
   const box=$('fchips');box.innerHTML='';
-  FOLDERS.forEach((p,i)=>{const c=document.createElement('span');c.className='fchip';c.title=p;
-    const nm=p.split('/').filter(Boolean).pop()||p;c.appendChild(document.createTextNode(nm));
+  const MAXC=3,show=FOLDERS.slice(0,MAXC);
+  show.forEach((p,i)=>{const c=document.createElement('span');c.className='fchip';c.title=p;
+    const nm=p.split('/').filter(Boolean).pop()||p;c.appendChild(document.createTextNode(/\.zip$/i.test(p)?'\u{1F5DC}\uFE0F '+nm:'\u{1F4C1} '+nm));
     const x=document.createElement('button');x.textContent='\u00d7';x.className='fx';x.setAttribute('aria-label','Remove '+nm);x.onclick=()=>{FOLDERS.splice(i,1);saveFolders()};c.appendChild(x);box.appendChild(c)});
-  $('fsum').textContent=FOLDERS.length?FOLDERS.length+(FOLDERS.length===1?' folder':' folders'):'none chosen yet';
+  if(FOLDERS.length>MAXC){const m=document.createElement('button');m.className='fchip more';m.textContent='+'+(FOLDERS.length-MAXC)+' more';m.onclick=()=>{$('fpanel').style.display='block'};box.appendChild(m)}
+  $('frs').classList.toggle('has',FOLDERS.length>0);
+  $('fsum').textContent=FOLDERS.length?FOLDERS.length+(FOLDERS.length===1?' source':' sources'):'';
   const note=FOLDERS.length?'using the '+(FOLDERS.length===1?'folder':FOLDERS.length+' folders')+' chosen at the top':'none chosen yet. Add folders in the bar at the top';
   document.querySelectorAll('.fnote').forEach(e=>{e.textContent=note});
-  $('fall').value=FOLDERS.join('\n');if(typeof renderDest==='function')renderDest();if(typeof scheduleDoctor==='function')scheduleDoctor()}
+  $('fall').value=FOLDERS.join('\n');if(typeof renderDest==='function')renderDest();if(typeof scheduleDoctor==='function')scheduleDoctor();updRoute()}
+function updRoute(){
+  const st=$('rtstat');if(!st)return;const d=(typeof DOC!=='undefined'&&DOC)||{},tab=document.body.dataset.tab||'guided';
+  const needsDest=['guided','fix','merge'].includes(tab);let cls='',t='';
+  if(!FOLDERS.length){t='Add your Takeout zips or folders (drag them in, or use the buttons).'}
+  else if(needsDest&&!dest()){cls=tab==='guided'?'':'warn';t=tab==='guided'?'Choose where the finished library goes (TO).':'No destination: files are changed in place. Choose a TO folder to keep your originals untouched.'}
+  else if(needsDest&&d.dest_ok===false){cls='bad';t='Cannot write to that destination. Choose another folder.'}
+  else if(needsDest&&d.need&&d.free!=null&&d.free<d.need*1.1){cls='bad';t='Not enough space: needs about '+fmtB(d.need)+', '+fmtB(d.free)+' free there.'}
+  else{cls='ok';t='\u2713 '+FOLDERS.length+(FOLDERS.length===1?' source':' sources')+(d.need?' ('+fmtB(d.need)+')':'')+(needsDest&&dest()&&d.free!=null?' \u2192 '+fmtB(d.free)+' free at the destination':'')}
+  st.className='rt-stat '+cls;st.textContent=t}
 function saveFolders(){try{localStorage.setItem('folders',JSON.stringify(FOLDERS))}catch(e){};renderFolders()}
 function addFolders(list){list.forEach(p=>{p=(p||'').trim().replace(/\/+$/,'');if(p&&!FOLDERS.includes(p))FOLDERS.push(p)});saveFolders()}
 $('fadd').onclick=async()=>{const r=await post('/api/choose',{prompt:'Choose one or more folders (hold Cmd to select several)'});if(r.paths)addFolders(r.paths)};
@@ -4347,10 +4394,13 @@ let DEST='';try{DEST=localStorage.getItem('dest')||''}catch(e){}
 const dest=()=>$('fdest').value.trim().replace(/\/+$/,'');
 function renderDest(){
   if(typeof scheduleDoctor==='function')scheduleDoctor();
+  const dn=$('fdname');if(dn)dn.textContent=dest()?(dest().split('/').filter(Boolean).pop()||dest()):'not chosen';updRoute();
   document.querySelectorAll('.dnote').forEach(e=>{e.textContent=dest()||e.dataset.empty||'none chosen'});
   const nm=p=>p.split('/').filter(Boolean).pop()||p;
 }
-function saveDest(){try{localStorage.setItem('dest',dest())}catch(e){};renderDest()}
+function saveDest(){try{localStorage.setItem('dest',dest());if(dest()){let r=JSON.parse(localStorage.getItem('recentdest')||'[]').filter(x=>x!==dest());r.unshift(dest());localStorage.setItem('recentdest',JSON.stringify(r.slice(0,6)))}}catch(e){};fillRecent();renderDest()}
+function fillRecent(){try{const r=JSON.parse(localStorage.getItem('recentdest')||'[]');$('recentdest').innerHTML=r.map(x=>'<option value="'+esc(x)+'">').join('')}catch(e){}}
+fillRecent();
 $('fdest').value=DEST;
 $('fdest').oninput=saveDest;
 $('fdbtn').onclick=async()=>{const r=await post('/api/choose',{prompt:'Choose the destination folder'});if(r.paths&&r.paths[0]){$('fdest').value=r.paths[0].replace(/\/+$/,'');saveDest()}};
@@ -4443,7 +4493,7 @@ function setBar(barId,fillId,pctId,pct,indet){
     $('updmsg').textContent='Updated. If the page does not reload, restart the app in Terminal.'}
 })();
 const TABS=['guided','fix','merge','clean','convert','health','monitor','photos','similar','history','help'];const tabOf=k=>({diagnostics:'monitor',compare:'merge',formats_apply:'health',similar_apply:'similar',undo:'history',consolidate:'clean',cleanup:'clean',sort:'merge',assess:'guided'}[k]||k);let curGuided=false;const paneKind=()=>curGuided?'guided':tabOf(jobKind);let jobKind='fix';
-function showTab(t){if(!TABS.includes(t))t='fix';
+function showTab(t){if(!TABS.includes(t))t='fix';document.body.dataset.tab=t;try{updRoute()}catch(e){}
   TABS.forEach(x=>{$('pane-'+x).style.display=x===t?'block':'none';document.querySelector('.tab[data-tab="'+x+'"]').classList.toggle('on',x===t)});
   try{localStorage.setItem('tab',t)}catch(e){}
   if(t==='history')loadHistory();
@@ -4522,7 +4572,7 @@ function renderCheck(){
   items.push(DOC&&!d.ffmpeg?['opt2','ffmpeg not found','only needed to convert old videos']:['ok','ffmpeg found','for video conversion']);
   $('gcheck').innerHTML=items.map(i=>`<div class="gc ${i[0]}"><i>${i[0]==='ok'?'&#10003;':i[0]==='bad'?'!':i[0]==='opt2'?'&ndash;':'&middot;'}</i><span>${esc(i[1])}</span><small>${esc(i[2])}</small></div>`).join('');
 }
-async function refreshDoctor(){try{DOC=await post('/api/doctor',{roots:roots(),dest:dest()})}catch(e){}renderCheck()}
+async function refreshDoctor(){try{DOC=await post('/api/doctor',{roots:roots(),dest:dest()})}catch(e){}renderCheck();try{updRoute()}catch(e){}}
 function scheduleDoctor(){renderCheck();clearTimeout(docTimer);docTimer=setTimeout(refreshDoctor,400)}
 $('gst').onclick=async()=>{
   if(DOC&&!DOC.exiftool){alert('ExifTool is missing. In Terminal run: brew install exiftool');return}

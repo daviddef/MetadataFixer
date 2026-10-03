@@ -39,7 +39,7 @@ Existing EXIF values are kept and only missing tags are filled in; add `--overwr
 - Re-pairing Live Photos (`--pair-live` with `--out`, or the app's option) copies each still's Apple ContentIdentifier onto its video and saves it as `.MOV`. Stills that lost their Apple ID are reported as `no-id` / `no-still`.
 
 ## Testing
-`python3 tests/run_e2e.py` runs the end-to-end suite on mock Takeouts, mock Photos libraries and a fake `osascript` (needs exiftool and ffmpeg). `node tests/ui_sweep.js PORT` and `node tests/ui_profiles.js PORT` drive a running copy of the app in a headless browser. See [tests/README.md](tests/README.md).
+`python3 tests/run_e2e.py` runs the end-to-end suite on mock Takeouts, mock Photos libraries and a fake `osascript` (needs exiftool and ffmpeg). `node tests/ui_sweep.js PORT` and `node tests/ui_profiles.js PORT`, `node tests/ui_route.js PORT` drive a running copy of the app in a headless browser. See [tests/README.md](tests/README.md).
 
 Full instructions: [USER_GUIDE.md](USER_GUIDE.md) (also built into the app's **Help** tab). Plans: [ROADMAP.md](ROADMAP.md), [BACKLOG.md](BACKLOG.md).
 

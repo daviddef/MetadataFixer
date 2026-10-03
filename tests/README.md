@@ -6,3 +6,4 @@
 - `ui_profiles.js PORT`: clicks each style (Safest, Balanced, Fastest, Thorough, I like risk) and checks the options it sets.
 
 Start a private copy of the app for the UI scripts with `METADATAFIXER_HOME=/tmp/x python3 takeout_gui.py --port 8801 --no-browser --no-update-check`.
+- `ui_route.js PORT`: checks the FROM/TO bar (empty hint, chip folding, status line, which tabs show TO, remembered destinations).
