@@ -288,11 +288,23 @@ Two ways to use it. **Log issues** on the same tab reads your recent Console mes
 
 ## Fix guides, checklists and finding the exact files (Monitor tab)
 
-The **Fix guides and checklists** box on the Monitor tab has about a dozen step-by-step guides for the things that actually go wrong: iCloud stuck or paused, "Unable to Upload", ghost or orphan files, unsupported formats, imports that fail, a library that will not open, copy errors (-36), a slow or hot Mac, export errors, shared albums, permissions, camera imports and "Something went wrong" on an iPhone.
+The **Fix guides and checklists** box on the Monitor tab has about seventeen step-by-step guides for the things that actually go wrong: iCloud stuck or paused, "Unable to Upload", ghost or orphan files, unsupported formats, imports that fail, a library that will not open, copy errors (-36), a slow or hot Mac, export errors, shared albums, permissions, camera imports and "Something went wrong" on an iPhone.
 
 Each guide is an ordered checklist. Every step is tagged with who does it: 🧰 **Shoebox** (an Open button jumps to the right tool), 🙋 **You** (do it in Photos or Finder) or ⌨️ **Terminal** (a command you can copy). Risky steps carry a warning. Your ticks are remembered on this Mac, and **Copy as checklist** gives you the whole thing as text to paste into notes or an email.
 
 **Look up a photo.** Paste a long Photos id from a log (or just part of it), or part of a file name, into **Look up a photo** on the Monitor tab. You get the real photo: file name, date, albums and the id, whichever way round you search. **Show in Photos** asks the Photos app to jump to it (Mac only, best effort: if Photos refuses, search the file name in Photos instead), and **Copy file name** copies the name.
+
+**Is everything really in iCloud? (counts and the sync engine).** Three buttons answer the questions that come up with a very large library:
+- **Count for comparison** gives the numbers the way the database sees them: visible photos and videos, hidden items, burst frames, Shared Library items and Recently Deleted. Counts rarely match exactly between a Mac, an iPhone and iCloud.com, because each counts differently (hidden and burst items, Shared Library, and `.m4v` videos that Photos can treat as photos). Compare like with like.
+- **Check the sync engine backlog** (in the Sync meter box) reads the row counts of iCloud's own sync queues. Press it, and again several hours later. Rows cleared means it is working. The same row count while the store keeps growing means it is going round in circles, which a steady rhythm in the log cannot tell you. Read-only.
+- **Live watch** now compares the contents of the repeating "After extraction, updated targets" messages and warns when the same items come up again and again.
+
+**How to read these numbers** (rules from a real investigation of a 595,000-item library, where the first guesses were wrong eleven times):
+- Prefer checks that *confirm* something over ones that infer it from something missing. A file missing from a folder only means "not stored locally" when the photo may simply live in iCloud.
+- If a check flags everything (or nothing) in your whole library, suspect the check first. Shoebox warns when it sees that.
+- Photos' two ideas of "in iCloud" can disagree, and neither is certain. Shoebox shows both. For real ground truth, ask Apple for a copy of your data (privacy.apple.com, Request a copy of your data, iCloud Photos). It takes days, so start early.
+- Give Apple's servers **days**, not minutes, before deciding something is permanently stuck. A first sync of a big library can take days to weeks.
+- Keep the old library or drive until you have verified the new one.
 
 **Sync meter.** Start the **Sync meter** on the Monitor tab to see, live, how fast the Photos and iCloud background processes are downloading from and uploading to iCloud (Mac only), with a small graph for each. Underneath it shows how many pictures are waiting to upload, how many items a minute are getting through and a rough time left. If items are waiting but almost nothing is moving, it says so and links to the "stuck" guide and the list of files that have not uploaded. If Shoebox itself is busy (for example merging or removing duplicates) its progress is shown there as well. Network figures include only the Photos and iCloud processes, but background transfers by other apps can share the same helper process, so treat the speed as approximate.
 

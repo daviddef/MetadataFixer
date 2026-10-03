@@ -1187,7 +1187,7 @@ def t_audit_pending_playbooks():
     for p in raw:
         assert all(i in known for i in p["issue_ids"]), p["id"]
         assert all(st["who"] in ("shoebox", "you", "terminal") for st in p["steps"]), p["id"]
-        assert not any(st.get("action") and st["action"] not in ("audit", "pending", "monitor", "health", "guide", "wrongext", "slowsend", "convert") for st in p["steps"]), p["id"]
+        assert not any(st.get("action") and st["action"] not in ("audit", "pending", "monitor", "health", "guide", "counts", "wrongext", "slowsend", "convert") for st in p["steps"]), p["id"]
     page = g.PAGE
     m = re.search(r"const ISSUE_FIX=\{(.*?)\};", page, re.S)
     fixes = re.findall(r"'([a-z0-9-]+)':'([a-z]+)'", m.group(1))
@@ -1267,12 +1267,85 @@ def t_sync_meter():
     return "net points=%d" % len(p["net"])
 
 
+def t_counts_backlog_heartbeat():
+    import sqlite3
+    base = Path(tempfile.mkdtemp(prefix="cplm_"))
+    lib = make_photos_library(base / "C.photoslibrary", [("a.jpg", 10, True), ("b.mov", 10, True), ("c.jpg", 10, False), ("d.jpg", 10, False), ("e.jpg", 10, True)])
+    c = sqlite3.connect(lib / "database" / "Photos.sqlite")
+    for col in ("ZKIND integer", "ZVISIBILITYSTATE integer", "ZBUNDLESCOPE integer", "ZAVALANCHEUUID text"):
+        c.execute("alter table ZASSET add column " + col)
+    c.execute("update ZASSET set ZKIND=0, ZVISIBILITYSTATE=0, ZBUNDLESCOPE=0")
+    c.execute("update ZASSET set ZKIND=1 where Z_PK=2")
+    c.execute("update ZASSET set ZVISIBILITYSTATE=2, ZAVALANCHEUUID='x' where Z_PK=3")
+    c.execute("update ZASSET set ZVISIBILITYSTATE=2, ZBUNDLESCOPE=2 where Z_PK=4")
+    c.execute("update ZASSET set ZTRASHEDSTATE=1 where Z_PK=5")
+    c.execute("create table ZINTERNALRESOURCE (ZASSET integer, ZDATASTORESUBTYPE integer, ZREMOTEAVAILABILITY integer)")
+    c.executemany("insert into ZINTERNALRESOURCE values (?,?,?)", [(1, 1, 1), (2, 1, 1), (3, 1, 0), (4, 1, 1), (3, 0, 0)])
+    c.commit(); c.close()
+    n = fx.library_counts(lib)
+    assert (n["visible_photos"], n["visible_videos"], n["hidden"], n["burst_frames"], n["shared_library"], n["trashed"], n["total"]) == (1, 1, 2, 1, 1, 1, 5), n
+    pf = fx.photos_pending_files(lib)
+    names = {i["file"]: i for i in pf["items"]}
+    assert pf["pending_total"] == 2 and names["d.jpg"]["file_record_in_cloud"] is True and names["c.jpg"]["file_record_in_cloud"] is False and pf["disagree"] == 1, pf
+    assert any("disagree" in x for x in pf["notes"])
+    # control group: every item flagged -> warning
+    c = sqlite3.connect(lib / "database" / "Photos.sqlite")
+    c.execute("update ZASSET set ZCLOUDLOCALSTATE=0")
+    c.execute("insert into ZASSET (Z_PK, ZTRASHEDSTATE, ZCLOUDLOCALSTATE) values (50,0,0)")
+    for i in range(60, 120):
+        c.execute("insert into ZASSET (Z_PK, ZTRASHEDSTATE, ZCLOUDLOCALSTATE) values (?,0,0)", (i,))
+    c.commit(); c.close()
+    assert any("Every picture" in x for x in fx.photos_pending_files(lib)["notes"])
+    # engine store
+    sp = fx.cpl_store_path(lib)
+    sp.parent.mkdir(parents=True)
+    c = sqlite3.connect(sp)
+    c.execute("create table transientPullRepository (x)"); c.execute("create table pullQueue (x)")
+    c.executemany("insert into transientPullRepository values (?)", [(i,) for i in range(100)])
+    c.commit(); c.close()
+    b = fx.cpl_backlog(lib)
+    assert b["ok"] and b["tables"]["transientPullRepository"] == 100 and "pullQueue" in b["tables"], b
+    assert fx.cpl_backlog(base / "none")["ok"] is False
+    t0 = 1000000.0
+    P = lambda t, n, sz: {"t": t, "tables": {"transientPullRepository": n}, "store_bytes": sz}
+    assert fx.cpl_verdict(P(t0, 100, 0), P(t0 + 36000, 100, 700 * 1048576))["state"] == "looping"
+    assert fx.cpl_verdict(P(t0, 100, 0), P(t0 + 36000, 40, 5))["state"] == "progressing"
+    assert fx.cpl_verdict(P(t0, 100, 0), P(t0 + 36000, 100, 5))["state"] == "idle"
+    assert fx.cpl_verdict(P(t0, 100, 0), P(t0 + 36000, 150, 5))["state"] == "growing"
+    assert fx.cpl_verdict(P(t0, 100, 0), P(t0 + 600, 100, 5))["state"] == "early"
+    # heartbeat: identical targets repeat -> loop event; healthy changing targets do not
+    sc = base / "hb.sh"
+    same = "ts cloudphotod: After extraction, updated targets: AAAAAAAA-1111-2222-3333-444444444444, BBBBBBBB-1111-2222-3333-444444444444"
+    sc.write_text("#!/bin/sh\nfor i in 1 2 3 4 5 6; do echo '%s'; done\nsleep 3\n" % same)
+    sc.chmod(0o755)
+    w = fx.LiveWatcher()
+    assert w.start("", cmd=[str(sc)])
+    t1 = time.time()
+    while time.time() - t1 < 4 and not w.poll(0)["events"]:
+        time.sleep(0.1)
+    ev = w.poll(0)["events"]
+    w.stop()
+    assert ev and ev[0]["issue_id"] == "cpl-mingle-livelock" and ev[0]["sev"] == "bad", ev
+    sc.write_text("#!/bin/sh\nfor i in 1 2 3 4 5 6; do echo \"ts cloudphotod: After extraction, updated targets: AAAAAAAA-1111-2222-3333-44444444444$i\"; done\nsleep 2\n")
+    w = fx.LiveWatcher()
+    w.start("", cmd=[str(sc)])
+    time.sleep(1.5)
+    ok = not w.poll(0)["events"]
+    w.stop()
+    assert ok
+    # catalog: heartbeat lines alone do not create 'stuck' findings
+    iss, _ = fx.interpret_log_lines([same])
+    assert not any(i["id"] == "cpl-mingle-livelock" for i in iss)
+    shutil.rmtree(base, ignore_errors=True)
+    return "ok"
+
+
 ORDER = ["t_fix_copy", "t_fix_namedate", "t_fix_inplace", "t_fix_move", "t_fix_dryrun_changes_nothing", "t_fix_zip", "t_zip_resume", "t_zip_needs_dest", "t_zip_corrupt",
          "t_edited_policies", "t_cancel_mid_run", "t_unreadable_and_zero", "t_dest_not_writable", "t_exiftool_missing", "t_low_disk_zip", "t_assess_and_recommend",
          "t_assess_multi_and_photoslib", "t_guided_end_to_end", "t_guided_no_dest", "t_merge_variants", "t_merge_refuses_unsafe", "t_merge_move_in_place", "t_cleanup_all",
          "t_cleanup_refuses_broad", "t_consolidate", "t_convert", "t_convert_stop", "t_similar_apply_undo", "t_health_and_formats", "t_undo_copy_run", "t_photos_plan_and_run",
          "t_photos_applescript_injection_safe", "t_photos_errors", "t_monitor_rules", "t_monitor_job_paste", "t_compare_and_near", "t_diagnostics", "t_history_report",
-         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs", "t_audit_regressions", "t_dates_and_places", "t_resilient_copy", "t_rerun_over_http", "t_keeper_rules_and_matching", "t_bursts_and_compare_rules", "t_qa_hunt_regressions", "t_timezone_correct_dates", "t_preflight_report", "t_albums_and_live_arrival", "t_receipt", "t_context_dates_and_locations", "t_blur_and_screenshots", "t_motion_photo_extract", "t_offline_place_names", "t_issue_catalog", "t_audit_pending_playbooks", "t_live_watch_and_albums", "t_sync_meter"]
+         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs", "t_audit_regressions", "t_dates_and_places", "t_resilient_copy", "t_rerun_over_http", "t_keeper_rules_and_matching", "t_bursts_and_compare_rules", "t_qa_hunt_regressions", "t_timezone_correct_dates", "t_preflight_report", "t_albums_and_live_arrival", "t_receipt", "t_context_dates_and_locations", "t_blur_and_screenshots", "t_motion_photo_extract", "t_offline_place_names", "t_issue_catalog", "t_audit_pending_playbooks", "t_live_watch_and_albums", "t_sync_meter", "t_counts_backlog_heartbeat"]
 if __name__ == "__main__":
     only = sys.argv[1:]
     for n in ORDER:

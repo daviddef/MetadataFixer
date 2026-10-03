@@ -83,7 +83,8 @@
    "unsupported-format-upload",
    "large-file-limit",
    "live-photo-video-upload-fail",
-   "ck-asset-file-not-found"
+   "ck-asset-file-not-found",
+   "live-photo-derivative-missing-3mov"
   ],
   "steps": [
    {
@@ -653,5 +654,215 @@
   ],
   "confidence": "low",
   "provenance": "supplied CSVs (AI-generated) + general macOS knowledge; not yet checked against Apple pages or real Console output"
+ },
+ {
+  "id": "sync-engine-livelock",
+  "icon": "🔁",
+  "title": "Photos analysis never starts / sync engine seems stuck for days",
+  "symptom": "Nothing analysed (no people, places or Duplicates), cloudphotod uses a lot of CPU for a day or more, log shows ReadyForCPL or the same lines repeating.",
+  "issue_ids": [
+   "cpl-mingle-livelock",
+   "analysis-not-ready-cpl",
+   "cloud-sync-stalled-generic"
+  ],
+  "steps": [
+   {
+    "who": "you",
+    "text": "First, give it time: a first sync of a large library takes days to weeks. A steady heartbeat in the log is not proof it is working.",
+    "risk": "safe",
+    "why": "Measured example: the first upload of 464,079 items finished by itself after about 16 days."
+   },
+   {
+    "who": "shoebox",
+    "text": "Start the Sync meter and Live watch, and press 'Check the sync engine backlog'.",
+    "risk": "safe",
+    "action": "monitor"
+   },
+   {
+    "who": "you",
+    "text": "Press 'Check the sync engine backlog' again several hours later. Rows consumed? Then it is working. Exactly the same count while the store grows? It is looping.",
+    "risk": "safe",
+    "why": "Decisive test from the reported case: 4,254,025 rows both times, 35 hours apart, while writing 734 MB."
+   },
+   {
+    "who": "you",
+    "text": "In the Live watch cards, read the targets in 'updated targets' lines: identical ones repeating means a loop, not progress.",
+    "risk": "safe"
+   },
+   {
+    "who": "terminal",
+    "text": "Capture what cloudphotod is doing (keep the output for Apple).",
+    "risk": "safe",
+    "cmd": "sample $(pgrep -x cloudphotod) 5 -file /tmp/cloudphotod-sample.txt",
+    "why": "Highest-value single diagnostic in the reported case."
+   },
+   {
+    "who": "you",
+    "text": "Restart the Mac and re-measure. If the loop returns, note that it did.",
+    "risk": "safe"
+   },
+   {
+    "who": "terminal",
+    "text": "Optional, untried in the reported case: restart the sync helper once (it restarts itself).",
+    "risk": "caution",
+    "cmd": "killall cloudphotod",
+    "why": "Temporary reset only; do not repeat it in a loop."
+   },
+   {
+    "who": "you",
+    "text": "If it persists: build a fresh library from iCloud on another Mac and see whether it reproduces. If it does, it is account-side: escalate to Apple Support with your measurements (row counts, targets, sample file).",
+    "risk": "safe"
+   },
+   {
+    "who": "you",
+    "text": "Keep the old library/drive until everything is verified.",
+    "risk": "safe"
+   }
+  ],
+  "identify": [
+   "Engine store: <library>/resources/cpl/cloudsync.noindex/storage/store.cloudphotodb (no file extension).",
+   "transientPullRepository row count is the backlog."
+  ],
+  "prevention": [
+   "Do not merge many libraries and create thousands of albums before turning on iCloud Photos."
+  ],
+  "confidence": "medium",
+  "provenance": "David's own investigation (handover brief, 2026-10-03): measured on one ~595k-asset library, macOS/Photos version not recorded; measurements are real but from one library, so treat steps as well-supported leads"
+ },
+ {
+  "id": "is-everything-in-icloud",
+  "icon": "🧮",
+  "title": "Is everything really in iCloud? Counts don't match",
+  "symptom": "The Mac, iPhone and iCloud.com show different numbers of photos and videos.",
+  "issue_ids": [
+   "icloud-count-mismatch",
+   "unable-to-upload-album",
+   "ghost-orphan-files"
+  ],
+  "steps": [
+   {
+    "who": "shoebox",
+    "text": "Get the library's own breakdown: visible, hidden, burst frames, shared library, trashed, photos vs videos.",
+    "risk": "safe",
+    "action": "counts"
+   },
+   {
+    "who": "you",
+    "text": "On the iPhone read Photos > Albums > Utilities (Hidden, Recently Deleted) and the totals at the bottom of All Photos. Compare like with like.",
+    "risk": "safe"
+   },
+   {
+    "who": "you",
+    "text": "On iCloud.com note the photos and videos totals. Expect small differences; look for large or one-sided ones.",
+    "risk": "safe"
+   },
+   {
+    "who": "shoebox",
+    "text": "List the files the library itself says have not uploaded.",
+    "risk": "safe",
+    "action": "pending"
+   },
+   {
+    "who": "you",
+    "text": "Know the limits: the Mac's own belief about 'in iCloud' can be wrong, so different definitions gave 1, 364 and 2,052 in the reported case. Do not quote a single number as the answer.",
+    "risk": "safe",
+    "why": "Also, .m4v files can be counted as photos on the Mac."
+   },
+   {
+    "who": "you",
+    "text": "For ground truth request a copy of your data: privacy.apple.com > Request a copy of your data > iCloud Photos. It takes days, so start it early.",
+    "risk": "safe"
+   },
+   {
+    "who": "you",
+    "text": "Keep the old library or drive until you have checked.",
+    "risk": "safe"
+   }
+  ],
+  "identify": [
+   "Spot check a few days and a few albums in each place; a uniform 1.5% gap is invisible at day level."
+  ],
+  "confidence": "medium",
+  "provenance": "David's own investigation (handover brief, 2026-10-03): measured on one ~595k-asset library, macOS/Photos version not recorded; measurements are real but from one library, so treat steps as well-supported leads"
+ },
+ {
+  "id": "shared-album-zone-errors",
+  "icon": "🧩",
+  "title": "Repeating CloudKit 'Unknown Item' errors for shared albums",
+  "symptom": "Logs show CKError 11/2003 'Unknown Item' for SharedCollection-… zones many times an hour.",
+  "issue_ids": [
+   "ck-unknown-item-shared-zone",
+   "shared-library-album-sync"
+  ],
+  "steps": [
+   {
+    "who": "shoebox",
+    "text": "Check the log and read which zone ids are failing.",
+    "risk": "safe",
+    "action": "monitor"
+   },
+   {
+    "who": "you",
+    "text": "Compare the shared albums listed on iCloud.com with those in the Photos sidebar. Look for ones present on one side only.",
+    "risk": "safe"
+   },
+   {
+    "who": "you",
+    "text": "On iCloud.com open each missing album, Select All, Save to Library so the photos are kept, then delete the album.",
+    "risk": "safe"
+   },
+   {
+    "who": "you",
+    "text": "Wait days, not minutes: in the reported case the errors stopped several days later. Do not contact Apple until then.",
+    "risk": "safe",
+    "why": "One wrong call in the reported case was declaring this permanent after two days."
+   }
+  ],
+  "identify": [
+   "The SharedCollection-<UUID> in the log; match by album name on iCloud.com."
+  ],
+  "confidence": "medium",
+  "provenance": "David's own investigation (handover brief, 2026-10-03): measured on one ~595k-asset library, macOS/Photos version not recorded; measurements are real but from one library, so treat steps as well-supported leads"
+ },
+ {
+  "id": "repair-aftermath",
+  "icon": "🧰",
+  "title": "After Repair Library: huge .aside or -wal files, counts changed",
+  "symptom": "Repair finished, but the library folder is huge or the photo count changed.",
+  "issue_ids": [
+   "photolibraryd-expired-cleanup-crash",
+   "repair-leftovers-aside-wal",
+   "repair-library-fails-or-loops"
+  ],
+  "steps": [
+   {
+    "who": "you",
+    "text": "Quit Photos and restart the Mac; a huge -wal file often shrinks on its own.",
+    "risk": "safe"
+   },
+   {
+    "who": "shoebox",
+    "text": "Run the Library audit to check files on disk against the database.",
+    "risk": "safe",
+    "action": "audit"
+   },
+   {
+    "who": "shoebox",
+    "text": "Get the count breakdown and compare with your phone.",
+    "risk": "safe",
+    "action": "counts"
+   },
+   {
+    "who": "you",
+    "text": "Only when counts match and the library opens, consider deleting Photos.sqlite.aside. Keep a backup until you are sure.",
+    "risk": "destructive",
+    "why": "It is the old database; deleting it cannot be undone."
+   }
+  ],
+  "identify": [
+   "Finder > Show Package Contents > database/ shows sizes."
+  ],
+  "confidence": "medium",
+  "provenance": "David's own investigation (handover brief, 2026-10-03): measured on one ~595k-asset library, macOS/Photos version not recorded; measurements are real but from one library, so treat steps as well-supported leads"
  }
 ]

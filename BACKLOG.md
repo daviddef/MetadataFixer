@@ -35,3 +35,11 @@ Things to decide before charging
 - Blur, screenshot and low-quality scoring; pause/resume of long scans; side-by-side zoom compare.
 - RAW+JPEG stacking choices; copy photos between Photos libraries keeping edits (PowerPhotos does this; large effort).
 - Notes: never write to the Photos database; duplicate false positives are the biggest reputational risk, so default to review; a signed, notarized Mac build is expected by privacy-minded users.
+
+
+## From the Photos handover brief (2026-10-03)
+- Rescue exporter: export the files the library thinks are not in iCloud to another disk, de-duplicated, with each file's modified time set to its capture date so re-import dates correctly (the brief mentions a `photos_rescue.py` that was never finished).
+- Album creation from a UUID list via AppleScript (`media item id (uuid & "/L0/001")`, fall back to the plain id): resolved 364 of 364 where the plain id resolved 2 of 5. Candidate for "make an album of everything not uploaded".
+- Calibrate the ZCLOUDLOCALSTATE meaning (values 0/1/2/4 seen) against ZINTERNALRESOURCE on several libraries, then replace the "no established meaning" caveat.
+- Open question: what the `[D]` flag on a CPLAlbumChange record means (delete?). Unverified.
+- Timeline view of the sync engine backlog (the backlog check already saves readings in the app folder).

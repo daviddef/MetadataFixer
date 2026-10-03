@@ -5121,5 +5121,273 @@
    "ls -le shows root ownership or flags on the package; Shoebox drive check shows format and ownership."
   ],
   "prevention": []
+ },
+ {
+  "id": "cpl-mingle-livelock",
+  "category": "icloud",
+  "title": "Sync engine stuck in one long 'mingle' step (analysis never starts)",
+  "signatures": [
+   "CPLMingleChangesScopeTask.{0,200}_performWriteTransaction",
+   "_mingleOtherChanges"
+  ],
+  "processes": [
+   "cloudphotod"
+  ],
+  "codes": [],
+  "severity": "bad",
+  "meaning": "cloudphotod can sit inside a single write transaction for many hours (stack: CPLMingleChangesScopeTask > CPLEngineStore _performWriteTransaction > CPLBatchExtractionStrategy extractBatch). While it does, the sync engine never becomes ready, so Photos analysis (faces, duplicates, memories) is held back. A steady heartbeat is NOT proof of progress: in the reported case the same six target ids repeated every ~44 seconds for 24 hours.",
+  "likely_causes": [
+   "Very large library, with hundreds of thousands of leftover items from repeated library merges (reported, unproven)",
+   "Huge number of albums (21,739 in the reported case; a hypothesis only)",
+   "A pull/merge loop on the account side (suspected, not established)"
+  ],
+  "fixes": [
+   "Measure before concluding: use Shoebox 'Check the sync engine backlog' twice, hours apart. If the backlog row count is exactly the same while the engine store keeps growing, it is looping, not working",
+   "Look at the CONTENTS of the 'After extraction, updated targets' lines: identical targets each time means a loop",
+   "Leave it running for days first; a first sync of a library this size legitimately takes days to weeks",
+   "Restart the Mac, then check again (in the reported case a reboot did not clear it)",
+   "Optional and untested in the reported case: killall cloudphotod (it restarts by itself)",
+   "If it persists, build a fresh library from iCloud on another Mac or account and watch whether it reproduces; if it does, escalate to Apple Support with the measurements"
+  ],
+  "risk": "caution",
+  "confidence": "medium",
+  "sources": [
+   "David's own investigation (handover brief, 2026-10-03): measured on one ~595k-asset library, macOS/Photos version not recorded"
+  ],
+  "verified": false,
+  "provenance": "David's own investigation (handover brief, 2026-10-03): measured on one ~595k-asset library, macOS/Photos version not recorded",
+  "identify": "Terminal: sample <cloudphotod pid> 5 -file /tmp/x shows the stack. Shoebox Live watch flags identical repeating targets. Engine store: <library>/resources/cpl/cloudsync.noindex/storage/store.cloudphotodb (no .db/.sqlite extension).",
+  "prevention": [
+   "Avoid piling up merged libraries and thousands of duplicate albums before turning on iCloud Photos."
+  ]
+ },
+ {
+  "id": "analysis-not-ready-cpl",
+  "category": "library",
+  "title": "Photos analysis never starts ('ReadyForCPL', 'noWorkerReadyForActivity')",
+  "signatures": [
+   "isReadyForAnalysis\\]?:?\\s*ReadyForCPL",
+   "noWorkerReadyForActivity",
+   "Skipping worker \\w+: Not ready for analysis"
+  ],
+  "processes": [
+   "photolibraryd",
+   "photoanalysisd"
+  ],
+  "codes": [],
+  "severity": "info",
+  "meaning": "Photos holds back analysis until the iCloud sync engine reports ready. 'ReadyForCPL' means that gate is still closed. 0 items analysed, no Duplicates album, no people or places yet are the visible symptoms. One such line is normal during a first sync; it only matters if it is still the answer many hours or days later.",
+  "likely_causes": [
+   "First sync still running",
+   "Sync engine stuck in a long step (see the mingle entry)"
+  ],
+  "fixes": [
+   "Check the sync engine first: is it moving? (Sync meter and backlog check)",
+   "Wait: analysis starts after the sync engine is ready",
+   "If the sync engine is looping, treat that as the real problem"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "David's own investigation (handover brief, 2026-10-03): measured on one ~595k-asset library, macOS/Photos version not recorded"
+  ],
+  "verified": false,
+  "provenance": "David's own investigation (handover brief, 2026-10-03): measured on one ~595k-asset library, macOS/Photos version not recorded",
+  "identify": "Counts of 'ReadyForCPL' over time; photolibraryd log. A different library's 'ComputeCacheCompleted' line can be ignored (reported).",
+  "prevention": []
+ },
+ {
+  "id": "photolibraryd-expired-cleanup-crash",
+  "category": "library",
+  "title": "photolibraryd crash loop in PLExpiredCleanupMaintenanceTask",
+  "signatures": [
+   "PLExpiredCleanupMaintenanceTask",
+   "NSValidationMultipleErrors.{0,80}EXC_BREAKPOINT"
+  ],
+  "processes": [
+   "photolibraryd"
+  ],
+  "codes": [
+   "NSCocoaErrorDomain 1560"
+  ],
+  "severity": "bad",
+  "meaning": "photolibraryd crashes repeatedly (33 crash reports with the same stack in the reported case) while cleaning up expired items: a database validation error (NSValidationMultipleErrors) ends in EXC_BREAKPOINT.",
+  "likely_causes": [
+   "Damaged Photos.sqlite"
+  ],
+  "fixes": [
+   "Back up the library package first",
+   "Quit Photos, hold Option+Command while opening it and choose Repair (completed fully and stopped the crashes in the reported case)",
+   "Expect the database to shrink a lot and a leftover Photos.sqlite.aside file; check 'Photos.sqlite.aside' entry before deleting anything",
+   "After repair, check the count of photos against your phone: the database can silently lose track of items (about 1,900 were recovered in the reported case)"
+  ],
+  "risk": "caution",
+  "confidence": "medium",
+  "sources": [
+   "David's own investigation (handover brief, 2026-10-03): measured on one ~595k-asset library, macOS/Photos version not recorded"
+  ],
+  "verified": false,
+  "provenance": "David's own investigation (handover brief, 2026-10-03): measured on one ~595k-asset library, macOS/Photos version not recorded",
+  "identify": "Crash reports in ~/Library/Logs/DiagnosticReports/ (Shoebox lists their names and dates).",
+  "prevention": [
+   "Keep Time Machine running."
+  ]
+ },
+ {
+  "id": "repair-leftovers-aside-wal",
+  "category": "disk",
+  "title": "Huge Photos.sqlite.aside or -wal file left after a repair",
+  "signatures": [
+   "Photos\\.sqlite\\.aside"
+  ],
+  "processes": [
+   "photolibraryd"
+  ],
+  "codes": [],
+  "severity": "info",
+  "meaning": "After Repair Library the old database can remain as Photos.sqlite.aside (16 GB in the reported case), and a write-ahead log (-wal) can reach over 100 GB until the next reboot or clean close. Both are space, not data.",
+  "likely_causes": [
+   "Repair keeps the old database aside",
+   "Photos did not close cleanly"
+  ],
+  "fixes": [
+   "Quit Photos and reboot: a huge -wal usually shrinks (113 GB to 2.8 MB in the reported case)",
+   "Only after you have confirmed the library opens and the photo counts match your phone, the .aside file is safe to delete (reported; keep a backup until sure)"
+  ],
+  "risk": "caution",
+  "confidence": "medium",
+  "sources": [
+   "David's own investigation (handover brief, 2026-10-03): measured on one ~595k-asset library, macOS/Photos version not recorded"
+  ],
+  "verified": false,
+  "provenance": "David's own investigation (handover brief, 2026-10-03): measured on one ~595k-asset library, macOS/Photos version not recorded",
+  "identify": "Finder > Show Package Contents > database/ shows file sizes. Shoebox Health shows free space.",
+  "prevention": []
+ },
+ {
+  "id": "ck-unknown-item-shared-zone",
+  "category": "icloud",
+  "title": "CloudKit 'Unknown Item' (11/2003) on a shared-album zone, repeating",
+  "signatures": [
+   "SharedCollection-[0-9A-F-]{36}",
+   "ParticipantExitStates"
+  ],
+  "processes": [
+   "cloudphotod"
+  ],
+  "codes": [
+   "CKErrorDomain 11"
+  ],
+  "severity": "warn",
+  "meaning": "A shared album exists in iCloud but not on this Mac (or the reverse), so every sync fetch for its zone fails with Unknown Item, around 100 times per 6 hours in the reported case.",
+  "likely_causes": [
+   "Shared album present on iCloud.com but missing locally (reported: 77 on iCloud.com vs 75 on the Mac)",
+   "Album deleted or left on another device"
+  ],
+  "fixes": [
+   "Compare shared albums on iCloud.com with those in Photos to find the missing ones",
+   "Open the album on iCloud.com, Select All, save to your library (keeps the photos), then delete the album",
+   "Give Apple's servers DAYS to settle: the errors stopped days later, not minutes. Do not declare it stuck or contact Apple after a day or two"
+  ],
+  "risk": "caution",
+  "confidence": "medium",
+  "sources": [
+   "David's own investigation (handover brief, 2026-10-03): measured on one ~595k-asset library, macOS/Photos version not recorded"
+  ],
+  "verified": false,
+  "provenance": "David's own investigation (handover brief, 2026-10-03): measured on one ~595k-asset library, macOS/Photos version not recorded",
+  "identify": "The zone id in the log is SharedCollection-<UUID>. Match shared album names: iCloud.com versus Photos sidebar.",
+  "prevention": []
+ },
+ {
+  "id": "live-photo-derivative-missing-3mov",
+  "category": "icloud",
+  "title": "Upload blocked by missing Live Photo '_3.mov' derivatives",
+  "signatures": [
+   "_3\\.mov"
+  ],
+  "processes": [
+   "cloudphotod"
+  ],
+  "codes": [],
+  "severity": "warn",
+  "meaning": "cloudphotod can fail on specific Live Photos whose '_3.mov' video derivative is missing, a few dozen per hour (518 real blockers in the reported case) while the rest of a huge upload continues.",
+  "likely_causes": [
+   "Missing Live Photo video derivative in the library"
+  ],
+  "fixes": [
+   "Do not panic: the reported 464,079-item upload finished by itself after about 16 days",
+   "Use Shoebox 'Which files have not uploaded?' to see the specific pictures",
+   "Leave the Mac on power and awake; check again after days, not hours"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "David's own investigation (handover brief, 2026-10-03): measured on one ~595k-asset library, macOS/Photos version not recorded"
+  ],
+  "verified": false,
+  "provenance": "David's own investigation (handover brief, 2026-10-03): measured on one ~595k-asset library, macOS/Photos version not recorded",
+  "identify": "Names of the failing files appear in cloudphotod log lines; Shoebox maps ids to names.",
+  "prevention": []
+ },
+ {
+  "id": "icloud-count-mismatch",
+  "category": "icloud",
+  "title": "iCloud.com shows fewer photos than the Mac and iPhone",
+  "signatures": [],
+  "processes": [],
+  "codes": [],
+  "severity": "info",
+  "meaning": "Counts rarely match exactly between Photos on a Mac, an iPhone and iCloud.com. Reported example: Mac 556,327 and iPhone 556,304 agreed to within 23, while iCloud.com showed about 8,481 (1.5%) fewer, never explained. Differences usually come from what each place counts (hidden items, burst frames, shared-library items, .m4v files treated as photos, videos vs photos split).",
+  "likely_causes": [
+   "Different counting rules",
+   "Hidden, burst or shared-library items",
+   "Genuinely missing items (possible, unproven)"
+  ],
+  "fixes": [
+   "Use Shoebox 'Count for comparison' to get visible, hidden, burst, shared-library and trashed counts the way the database sees them",
+   "When two devices agree and one differs, question the differing one's definition before suspecting data loss, but do not dismiss it",
+   "For real ground truth, request your data from Apple: privacy.apple.com > Request a copy of your data > iCloud Photos (takes days)",
+   "Spot check a few days or albums in each place; a uniform 1.5% gap will not show up at day level"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "David's own investigation (handover brief, 2026-10-03): measured on one ~595k-asset library, macOS/Photos version not recorded"
+  ],
+  "verified": false,
+  "provenance": "David's own investigation (handover brief, 2026-10-03): measured on one ~595k-asset library, macOS/Photos version not recorded",
+  "identify": "Not file specific. The data export is the only check from Apple's side (reported).",
+  "prevention": [
+   "Keep the old library or drive until you have compared counts and, ideally, the Apple data export."
+  ]
+ },
+ {
+  "id": "duplicates-via-iphone-merge",
+  "category": "library",
+  "title": "Duplicates album never fills on the Mac; huge duplicate set (25,164 / 212 GB reported)",
+  "signatures": [],
+  "processes": [],
+  "codes": [],
+  "severity": "info",
+  "meaning": "Repeated library merges (for example with PowerPhotos) can leave tens of thousands of duplicates. The Mac's Duplicates album only fills once analysis runs; if analysis is held back, it stays empty.",
+  "likely_causes": [
+   "Repeated merges",
+   "Analysis held back by the sync engine"
+  ],
+  "fixes": [
+   "On an iPhone: Photos > Albums > Utilities > Duplicates > Select All > Merge (works independently of the Mac, reported)",
+   "Merge in several rounds so you can check the result between them",
+   "Use Shoebox Compare/duplicate tools on exports for files Photos does not treat as duplicates"
+  ],
+  "risk": "caution",
+  "confidence": "medium",
+  "sources": [
+   "David's own investigation (handover brief, 2026-10-03): measured on one ~595k-asset library, macOS/Photos version not recorded"
+  ],
+  "verified": false,
+  "provenance": "David's own investigation (handover brief, 2026-10-03): measured on one ~595k-asset library, macOS/Photos version not recorded",
+  "identify": "Duplicates album on the iPhone lists them; Shoebox 'Compare libraries' finds them across libraries.",
+  "prevention": []
  }
 ]

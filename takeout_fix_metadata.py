@@ -5195,6 +5195,131 @@ def photos_library_audit(lib, limit=500):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _resource_remote(con):
+    """{asset pk: True/False} from ZINTERNALRESOURCE: is the ORIGINAL file (subtype 1) available in iCloud? None if the table is not usable.
+    A second, independent signal next to ZASSET.ZCLOUDLOCALSTATE, whose meaning is not established."""
+    try:
+        rc = {r[1] for r in con.execute("PRAGMA table_info(ZINTERNALRESOURCE)")}
+        if not {"ZASSET", "ZDATASTORESUBTYPE", "ZREMOTEAVAILABILITY"} <= rc:
+            return None
+        out = {}
+        for pk, remote in con.execute("SELECT ZASSET, ZREMOTEAVAILABILITY FROM ZINTERNALRESOURCE WHERE ZDATASTORESUBTYPE = 1"):
+            out[pk] = out.get(pk, False) or remote == 1
+        if not any(out.values()):                  # control group: if nothing at all is remote, the probe is probably wrong, not the world
+            return None
+        return out
+    except Exception:
+        return None
+
+
+def library_counts(lib):
+    """Counts the way the database sees them, for comparing with an iPhone or iCloud.com: visible photos and videos, hidden, shared-library,
+    burst frames, trashed. Read-only."""
+    try:
+        con, tmp, cols = _photos_db_open(lib)
+    except Exception as ex:
+        return {"ok": False, "why": str(ex)[:140]}
+    try:
+        out = {"ok": True, "total": 0, "trashed": 0, "visible_photos": 0, "visible_videos": 0, "visible_other": 0, "hidden": 0, "shared_library": 0, "burst_frames": None, "notes": []}
+        has = lambda c: c in cols
+        sel = ["ZKIND" if has("ZKIND") else "0", "ZTRASHEDSTATE" if has("ZTRASHEDSTATE") else "0", "ZVISIBILITYSTATE" if has("ZVISIBILITYSTATE") else "0",
+               "ZBUNDLESCOPE" if has("ZBUNDLESCOPE") else "0", "ZAVALANCHEUUID" if has("ZAVALANCHEUUID") else "NULL"]
+        burst = 0
+        for kind, tr, vis, scope, av in con.execute("SELECT %s FROM ZASSET" % ", ".join(sel)):
+            out["total"] += 1
+            if tr:
+                out["trashed"] += 1
+                continue
+            if scope == 2:
+                out["shared_library"] += 1
+            if vis not in (0, None):
+                out["hidden"] += 1
+                if av:
+                    burst += 1
+                continue
+            if kind == 0:
+                out["visible_photos"] += 1
+            elif kind == 1:
+                out["visible_videos"] += 1
+            else:
+                out["visible_other"] += 1
+        if has("ZAVALANCHEUUID"):
+            out["burst_frames"] = burst
+        else:
+            out["notes"].append("This Photos version does not mark burst frames in a way Shoebox can read.")
+        if not has("ZVISIBILITYSTATE"):
+            out["notes"].append("Hidden items could not be told apart in this Photos version, so the visible counts may include them.")
+        out["visible_total"] = out["visible_photos"] + out["visible_videos"] + out["visible_other"]
+        out["notes"].append("A .m4v video can be counted as a photo by Photos. Hidden items and shared-library items are not in the visible counts. iCloud.com may count differently again.")
+        return out
+    except Exception as ex:
+        return {"ok": False, "why": str(ex)[:140]}
+    finally:
+        try:
+            con.close()
+        except Exception:
+            pass
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def cpl_store_path(lib):
+    return Path(lib) / "resources" / "cpl" / "cloudsync.noindex" / "storage" / "store.cloudphotodb"
+
+
+CPL_TABLES = ("transientPullRepository", "pullQueue", "cloudCache", "idMapping", "quarantinedRecords", "pushRepository", "downloadQueue")
+
+
+def cpl_backlog(lib):
+    """Row counts of the iCloud sync engine's own queues (read-only, opened in place: it is large). transientPullRepository is the backlog
+    that must shrink for a sync to be progressing. Returns {"ok", "tables", "store_bytes"}."""
+    import sqlite3
+    path = cpl_store_path(lib)
+    if not path.exists():
+        return {"ok": False, "why": "no sync engine store found in this library (iCloud Photos may be off, or this Photos version keeps it elsewhere)"}
+    con = None
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % path, uri=True, timeout=5)
+        con.text_factory = lambda b: b.decode("utf-8", "replace")
+        have = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        tables = {t: con.execute('SELECT COUNT(*) FROM "%s"' % t).fetchone()[0] for t in CPL_TABLES if t in have}
+        if not tables:
+            return {"ok": False, "why": "the sync engine store has none of the tables Shoebox knows (a different Photos version?)"}
+        size = path.stat().st_size
+        for suf in ("-wal",):
+            try:
+                size += Path(str(path) + suf).stat().st_size
+            except OSError:
+                pass
+        return {"ok": True, "tables": tables, "store_bytes": size}
+    except Exception as ex:
+        return {"ok": False, "why": str(ex)[:140]}
+    finally:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
+
+
+def cpl_verdict(prev, cur):
+    """Compare two backlog samples {"t", "tables", "store_bytes"}. Decisive rule from a measured case: zero rows consumed while the store
+    kept growing means looping, not working."""
+    hrs = (cur["t"] - prev["t"]) / 3600.0
+    a, b = prev["tables"].get("transientPullRepository"), cur["tables"].get("transientPullRepository")
+    if a is None or b is None:
+        return {"state": "unknown", "text": "The backlog table was not found, so progress cannot be judged."}
+    grew = cur["store_bytes"] - prev["store_bytes"]
+    if hrs < 1:
+        return {"state": "early", "text": "Only %d minutes between checks. Check again after a few hours." % int(hrs * 60)}
+    if b < a:
+        return {"state": "progressing", "text": "Working: %s rows cleared in %.1f hours (%s left)." % (format(a - b, ","), hrs, format(b, ","))}
+    if b == a and grew > 50 * 1024 * 1024:
+        return {"state": "looping", "text": "Possible loop: the backlog is exactly %s rows, unchanged for %.0f hours, while the engine store grew by %d MB. Check the log for identical repeating targets, restart, and see the guide." % (format(b, ","), hrs, grew // 1048576)}
+    if b == a:
+        return {"state": "idle", "text": "No change in %.0f hours, and the store did not grow either: idle or waiting (for example paused)." % hrs}
+    return {"state": "growing", "text": "The backlog grew from %s to %s: new changes are arriving faster than they are cleared. Normal during a large sync." % (format(a, ","), format(b, ","))}
+
+
 def photos_pending_files(lib, limit=500):
     """The exact pictures not yet uploaded to iCloud (database state 'not in cloud'), with the likely reason for each. Read-only."""
     lib = Path(lib)
@@ -5205,8 +5330,11 @@ def photos_pending_files(lib, limit=500):
     try:
         if "ZCLOUDLOCALSTATE" not in cols:
             return {"ok": False, "why": "this Photos version does not record upload state"}
-        items, total = [], 0
+        items, total, live_total = [], 0, 0
+        remote = _resource_remote(con)
         for r in _asset_rows(con, cols):
+            if not r["trashed"]:
+                live_total += 1
             if r["trashed"] or r["cloud_state"] != 0:
                 continue
             total += 1
@@ -5232,9 +5360,18 @@ def photos_pending_files(lib, limit=500):
                 hints.append("very large (over 20 GB)")
             elif size > 5 * 1024 ** 3:
                 hints.append("large (over 5 GB): slow to upload")
-            items.append({"file": name, "uuid": r["uuid"], "size": size, "date": r["created"], "video": r["kind"] == 1, "hints": hints})
+            items.append({"file": name, "uuid": r["uuid"], "size": size, "date": r["created"], "video": r["kind"] == 1, "hints": hints,
+                          "file_record_in_cloud": (remote.get(r["pk"]) if remote is not None else None)})
         items.sort(key=lambda i: (not i["hints"], i["file"].lower()))
-        out = {"ok": True, "pending_total": total, "items": items[:limit], "with_hints": sum(1 for i in items if i["hints"])}
+        out = {"ok": True, "pending_total": total, "items": items[:limit], "with_hints": sum(1 for i in items if i["hints"]), "library_total": live_total, "notes": []}
+        if remote is not None:
+            out["file_records_say_missing"] = sum(1 for pk, v in remote.items() if not v)
+            out["disagree"] = sum(1 for i in items if i["file_record_in_cloud"] is True)
+            if out["disagree"]:
+                out["notes"].append("%d of these are marked as in iCloud by the per-file records, so Photos' two signals disagree. Neither is certain. Check on iCloud.com or an iPhone before acting." % out["disagree"])
+        if live_total > 50 and total >= live_total:
+            out["notes"].append("Every picture is flagged as not uploaded. That usually means this check cannot read your Photos version correctly, not that nothing uploaded.")
+        out["notes"].append("Photos does not document this database. The state used here (ZCLOUDLOCALSTATE) has no established meaning, so treat this as a lead, not proof.")
         return out
     except Exception as ex:
         return {"ok": False, "why": str(ex)[:140]}
@@ -5357,7 +5494,7 @@ def lookup_photos(lib, query, limit=25):
 
 def photos_log_predicate():
     procs = " OR ".join('process == "%s"' % p for p in sorted(set(MAC_LOG_PROCS)))
-    key = " OR ".join('eventMessage CONTAINS[c] "%s"' % w for w in ("paused", "quota", "low power", "no space", "not authenticated", "corrupt", "rebuild", "unsupported", "timed out", "not connected", "upload failed"))
+    key = " OR ".join('eventMessage CONTAINS[c] "%s"' % w for w in ("paused", "quota", "low power", "no space", "not authenticated", "corrupt", "rebuild", "unsupported", "timed out", "not connected", "upload failed", "ReadyForCPL", "noWorkerReadyForActivity", "After extraction", "mingle"))
     return "(%s) AND (messageType == error OR messageType == fault OR %s)" % (procs, key)
 
 
@@ -5370,6 +5507,7 @@ class LiveWatcher:
         self.proc = None
         self.events, self.seq, self.lines_seen = [], 0, 0
         self.running, self.note, self.lib, self.index, self.index_at = False, "", "", None, 0.0
+        self.last_targets, self.same_targets = None, 0
 
     def start(self, lib="", cmd=None):
         self.stop()
@@ -5430,6 +5568,21 @@ class LiveWatcher:
                     continue
                 with self.lock:
                     self.lines_seen += 1
+                tg = re.search(r"After extraction, updated targets:?\s*(.*)$", line)
+                if tg:                                           # steady rhythm is what a loop looks like: compare the CONTENTS
+                    key = tuple(sorted(_UUID_RX.findall(tg.group(1)))) or tg.group(1).strip()[:200]
+                    with self.lock:
+                        if key and key == self.last_targets:
+                            self.same_targets += 1
+                        else:
+                            self.last_targets, self.same_targets = key, 1
+                        n_same = self.same_targets
+                    if n_same in (5, 50, 500):
+                        with self.lock:
+                            self.seq += 1
+                            self.events.append({"title": "The sync engine keeps handling the same items", "sev": "bad", "known": True, "issue_id": "cpl-mingle-livelock",
+                                                "meaning": "The last %d 'After extraction' messages named identical targets. A steady rhythm is not progress: this looks like a loop. Run 'Check the sync engine backlog' twice, hours apart, to confirm." % n_same,
+                                                "fix": "See the guide: Photos analysis never starts / sync engine seems stuck.", "raw": line[:300], "files": [], "unknown_ids": 0, "paths": [], "count": n_same, "t": time.time(), "seq": self.seq, "eid": self.seq})
                 issues, other = interpret_log_lines([line], max_examples=1)
                 if not issues and not other:
                     continue

@@ -3610,8 +3610,12 @@ class Handler(BaseHTTPRequestHandler):
             if not (sys.platform == "darwin" or os.environ.get("BACKSTORY_OSASCRIPT")):
                 return self._send(200, json.dumps({"ok": False, "why": "Showing a photo in Photos only works on a Mac."}))
             try:
-                r = subprocess.run([OSA, "-e", 'tell application "Photos" to activate', "-e", 'tell application "Photos" to spotlight media item id "%s/L0/001"' % u.upper()],
-                                   capture_output=True, text=True, timeout=30)
+                r = None
+                for ident in ("%s/L0/001" % u.upper(), u.upper()):          # the /L0/001 form resolved 364 of 364 in a real library; plain id is the fallback
+                    r = subprocess.run([OSA, "-e", 'tell application "Photos" to activate', "-e", 'tell application "Photos" to spotlight media item id "%s"' % ident],
+                                       capture_output=True, text=True, timeout=30)
+                    if r.returncode == 0:
+                        break
             except (OSError, subprocess.TimeoutExpired) as ex:
                 return self._send(200, json.dumps({"ok": False, "why": str(ex)[:120]}))
             self._send(200, json.dumps({"ok": r.returncode == 0, "why": (r.stderr or "").strip()[:160] or "Photos could not show it. Search its file name in Photos instead."}))
@@ -3623,6 +3627,34 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/sync_stop":
             fx.SYNC.stop()
             self._send(200, "{}")
+        elif path == "/api/library_counts":
+            lib = _library_or_first(body)
+            self._send(200, json.dumps(fx.library_counts(lib) if lib else {"ok": False, "why": "no Photos library found"}))
+        elif path == "/api/cpl_backlog":
+            lib = _library_or_first(body)
+            if not lib:
+                return self._send(200, json.dumps({"ok": False, "why": "no Photos library found"}))
+            r = fx.cpl_backlog(lib)
+            if r.get("ok"):
+                cur = {"t": time.time(), "lib": lib, "tables": r["tables"], "store_bytes": r["store_bytes"]}
+                path_ = APP_HOME / "cpl.jsonl"
+                prev = None
+                try:
+                    for ln in path_.read_text(encoding="utf-8").splitlines()[-200:]:
+                        o = json.loads(ln)
+                        if o.get("lib") == lib:
+                            prev = o
+                except (OSError, ValueError):
+                    pass
+                try:
+                    APP_HOME.mkdir(parents=True, exist_ok=True)
+                    with open(path_, "a", encoding="utf-8") as fh:
+                        fh.write(json.dumps(cur) + "\n")
+                except OSError:
+                    pass
+                r["prev"] = prev
+                r["verdict"] = fx.cpl_verdict(prev, cur) if prev else {"state": "first", "text": "First reading saved. Check again after a few hours to see whether the backlog is shrinking."}
+            self._send(200, json.dumps(r))
         elif path == "/api/live_start":
             ok = fx.LIVE.start(_library_or_first(body))
             self._send(200, json.dumps({"ok": ok, **{k: v for k, v in fx.LIVE.poll(0).items() if k == "note"}}))
@@ -4431,7 +4463,7 @@ body[data-tab=history] .route,body[data-tab=help] .route{display:none}
 <div class="hbtns"><button id="mpastego">Interpret the pasted text</button></div></div>
 <div class="card" id="synccard"><b>&#128260; Sync meter</b> <span class="mutes" id="syncstat"></span>
 <small style="margin:4px 0">How fast Photos is talking to iCloud right now, and how the upload queue is moving. Reads network use of the Photos and iCloud background processes (Mac only) and the library's own upload count.</small>
-<div class="hbtns"><button class="sm p" id="syncgo">&#9654; Start the meter</button></div><div id="syncbody"></div></div>
+<div class="hbtns"><button class="sm p" id="syncgo">&#9654; Start the meter</button><button class="sm" id="cplgo">&#128270; Check the sync engine backlog</button></div><div id="cplres"></div><div id="syncbody"></div></div>
 <div class="card" id="lkcard"><b>&#128269; Look up a photo</b>
 <small style="margin:4px 0">Paste a long Photos id from a log (or part of one), or part of a file name. Shoebox shows the real photo: file name, date and albums.</small>
 <div style="display:flex;gap:6px"><input id="lkq" placeholder="e.g. 3F2A9C1E-… or IMG_1234" style="flex:1;min-width:0"><button class="sm p" id="lkgo">Look up</button></div><div id="lkres"></div></div>
@@ -4440,7 +4472,7 @@ body[data-tab=history] .route,body[data-tab=help] .route{display:none}
 <div class="hbtns"><button class="sm p" id="livego">&#9654; Start watching</button></div><div id="livelist"></div></div>
 <div class="card" id="pbcard"><details id="pbdet"><summary style="cursor:pointer;font-weight:700">&#129521; Fix guides and checklists <span class="mutes" id="pbcount"></span></summary>
 <div class="secbody"><small style="margin-top:0">Pick what you are seeing. Each guide is an ordered checklist: some steps are buttons in Shoebox, some you do in Photos or Finder, some are a Terminal command you can copy. Ticks are remembered on this Mac.</small>
-<div class="hbtns"><button class="sm" id="pbaudit">&#128269; Library audit: orphan and missing files</button><button class="sm" id="pbpend">&#9729;&#65039; Which files have not uploaded?</button></div>
+<div class="hbtns"><button class="sm" id="pbaudit">&#128269; Library audit: orphan and missing files</button><button class="sm" id="pbpend">&#9729;&#65039; Which files have not uploaded?</button><button class="sm" id="pbcount">&#129518; Count for comparison</button></div>
 <div id="pbres"></div><div id="pblist"></div></div></details></div>
 <div class="card" id="kbcard"><details id="kbdet"><summary style="cursor:pointer;font-weight:700">&#128214; Known Photos problems <span class="mutes" id="kbcount"></span></summary>
 <small style="margin-top:6px"><b>Draft knowledge base.</b> Built from general knowledge of Photos, iCloud and macOS, not yet checked line by line against Apple&#39;s pages, so treat fixes beyond the safe ones as leads and always back up first. A built-in list of Apple Photos, iCloud and macOS problems and the error codes and log messages they show in Console, with the likely causes and the fixes to try, safest first. Search by a word, an error code (like 4097) or a process name (like cloudphotod).</small>
@@ -5409,7 +5441,7 @@ function renderPB(){const L=PB||[];const kbById={};(KB||[]).forEach(e=>kbById[e.
   ${p.issue_ids.length?'<small>Related errors: '+p.issue_ids.map(id=>esc(kbById[id]?kbById[id].title:id)).join(' &middot; ')+'</small>':''}
   <small>Confidence: <b>${esc(p.confidence)}</b> &middot; <i>draft: ${esc(p.provenance||'not yet checked')}</i></small>
   <div class="hbtns"><button type="button" class="sm" data-pbcopy="${esc(p.id)}">Copy as checklist</button><button type="button" class="sm" data-pbreset="${esc(p.id)}">Clear ticks</button></div></div></details>`}).join('')||'<small>No guides found.</small>'}
-function pbAct(a){if(FIXES[a]&&a!=='audit'&&a!=='pending'){applyFix(a);return}if(a==='audit')runAudit();else if(a==='pending')runPending();else if(a==='monitor')showTab('monitor');else if(a==='health')showTab('health');else if(a==='guide')showTab('merge')}
+function pbAct(a){if(a==='counts'){runCounts();return}if(FIXES[a]&&a!=='audit'&&a!=='pending'){applyFix(a);return}if(a==='audit')runAudit();else if(a==='pending')runPending();else if(a==='monitor')showTab('monitor');else if(a==='health')showTab('health');else if(a==='guide')showTab('merge')}
 $('pblist').addEventListener('change',e=>{const c=e.target;if(c.dataset&&c.dataset.k){pbSet(c.dataset.k,c.checked);const det=c.closest('details');const p=PB.find(x=>x.id===det.dataset.pb);const [d,n]=pbProgress(p);det.querySelector('.pbprog').textContent=d+'/'+n}});
 $('pblist').addEventListener('click',async e=>{const b=e.target.closest('button');if(!b)return;
   if(b.dataset.copy){const ok=await copyTxt(b.dataset.copy);b.textContent=ok?'Copied':'Copy';setTimeout(()=>b.textContent='Copy',1500)}
@@ -5431,7 +5463,7 @@ async function runPending(){showTab('monitor');$('pbdet').open=true;await loadPB
   if(!r.ok){$('pbres').innerHTML='<div class="tip">'+esc(r.why||'Could not read the library')+'</div>';return}
   $('pbres').innerHTML='<div class="card"><b>'+(r.pending_total?r.pending_total.toLocaleString()+' not uploaded yet':'&#10003; Everything is uploaded')+'</b>'+(r.pending_total?' <span class="mutes">'+r.with_hints+' have a likely cause</span>':'')
    +(r.items.length?tbl(['File','Size','Likely cause'],r.items.slice(0,50).map(i=>[esc(i.file),fmtB(i.size),esc(i.hints.join('; ')||'none seen: probably just waiting')])):'')
-   +(r.pending_total?'<small>A big queue with no likely causes is usually just waiting for the network. Ones with a cause are the ones to fix first.</small><div class="hbtns"><button class="sm" id="pbcsv">Save the full list as a spreadsheet</button></div><div id="pbcsvres"></div>':'')+'</div>';
+   +(r.notes||[]).map(x=>'<small>'+esc(x)+'</small>').join('')+(r.pending_total?'<small>A big queue with no likely causes is usually just waiting for the network. Ones with a cause are the ones to fix first.</small><div class="hbtns"><button class="sm" id="pbcsv">Save the full list as a spreadsheet</button></div><div id="pbcsvres"></div>':'')+'</div>';
   if($('pbcsv'))$('pbcsv').onclick=async()=>{const x=await post('/api/pending_files',{library:lib,csv:true});$('pbcsvres').innerHTML=csvLine(x);if($('pbfolder'))$('pbfolder').onclick=()=>post('/api/open_reports')}}
 $('pbaudit').onclick=runAudit;$('pbpend').onclick=runPending;$('pbdet').addEventListener('toggle',()=>{if($('pbdet').open)loadPB()});
 
@@ -5501,6 +5533,17 @@ function applyFix(k){const f=FIXES[k];if(!f)return;const prev={},notes=[];
   $('fixclose').onclick=()=>b.remove();$('fixundo').onclick=()=>{Object.entries(FIXUNDO||{}).forEach(([id,v])=>setOpt(id,v));b.remove()}}
 document.addEventListener('click',e=>{const a=e.target.closest('[data-fix],[data-fixguide]');if(!a)return;e.preventDefault();
   if(a.dataset.fix)applyFix(a.dataset.fix);else{showTab('monitor');$('pbdet').open=true;loadPB().then(()=>{const d=document.querySelector('[data-pb="'+a.dataset.fixguide+'"]');if(d){d.open=true;d.scrollIntoView({behavior:'smooth'})}})}});
+
+// ---- Counts and sync engine backlog ----
+async function runCounts(){showTab('monitor');$('pbdet').open=true;await loadPB();$('pbres').innerHTML='<small>Counting&hellip;</small>';
+  const r=await post('/api/library_counts',{library:$('uplib').value});if(!r.ok){$('pbres').innerHTML='<div class="tip">'+esc(r.why||'Could not read the library')+'</div>';return}
+  const n=x=>(x==null?'not available':x.toLocaleString());
+  $('pbres').innerHTML='<div class="card"><b>Counts for comparison</b><table><tr><td>Visible photos</td><td class="n"><b>'+n(r.visible_photos)+'</b></td></tr><tr><td>Visible videos</td><td class="n"><b>'+n(r.visible_videos)+'</b></td></tr>'+(r.visible_other?'<tr><td>Other visible items</td><td class="n">'+n(r.visible_other)+'</td></tr>':'')+'<tr><td>Hidden</td><td class="n">'+n(r.hidden)+'</td></tr><tr><td>&nbsp;&nbsp;of which burst frames</td><td class="n">'+n(r.burst_frames)+'</td></tr><tr><td>Shared Library items</td><td class="n">'+n(r.shared_library)+'</td></tr><tr><td>In Recently Deleted</td><td class="n">'+n(r.trashed)+'</td></tr><tr><td>All items in the database</td><td class="n">'+n(r.total)+'</td></tr></table>'+r.notes.map(x=>'<small>'+esc(x)+'</small>').join('')+'</div>'}
+$('pbcount').onclick=runCounts;
+$('cplgo').onclick=async()=>{$('cplres').innerHTML='<small>Reading the sync engine&hellip;</small>';const r=await post('/api/cpl_backlog',{library:$('uplib').value});
+  if(!r.ok){$('cplres').innerHTML='<div class="tip">'+esc(r.why||'Could not read it')+'</div>';return}
+  const v=r.verdict||{};const col={looping:'var(--bad)',progressing:'var(--ok)',growing:'var(--warn)'}[v.state]||'var(--mute)';
+  $('cplres').innerHTML='<div class="card"><b>Sync engine backlog</b>'+tbl(['Queue','Rows'],Object.entries(r.tables).map(([k,x])=>[esc(k),x.toLocaleString()]))+'<div style="color:'+col+';font-weight:600;margin:4px 0">'+esc(v.text||'')+'</div><small>Read-only. Backlog = transientPullRepository: it must shrink for a sync to be moving. Compare readings hours apart; a steady log rhythm alone proves nothing.</small>'+(v.state==='looping'?'<div class="hbtns"><button class="sm" data-fixguide="sync-engine-livelock">Open the guide</button></div>':'')+'</div>'};
 </script></main></body></html>"""
 
 
