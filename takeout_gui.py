@@ -3817,7 +3817,7 @@ button.p{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:60
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin:10px 0}
 .tile{border:1px solid var(--line);border-radius:10px;padding:10px 12px}.tile b{display:block;font-size:24px;font-variant-numeric:tabular-nums}.tile span{color:var(--mute);font-size:13px}
 .tile.bad b{color:var(--bad)}.tile.ok b{color:var(--ok)}.err{color:var(--bad)}.ok{color:var(--ok)}
-table{width:100%;border-collapse:collapse;font-size:14px;font-variant-numeric:tabular-nums}th,td{text-align:left;padding:5px 6px;border-bottom:1px solid var(--line)}th{color:var(--mute);font-weight:500}td.n,th.n{text-align:right}
+table{width:100%;border-collapse:collapse;font-size:14px;font-variant-numeric:tabular-nums}th,td{text-align:left;padding:5px 3px;border-bottom:1px solid var(--line)}th{color:var(--mute);font-weight:500}td.n,th.n{text-align:right}
 .tip{border-left:3px solid var(--warn);padding:6px 10px;margin:8px 0;background:var(--bg)}
 .mini{display:inline-block;height:8px;background:var(--bad);border-radius:3px;vertical-align:middle;margin-left:6px}
 .hero{background:linear-gradient(135deg,color-mix(in srgb,var(--acc) 14%,var(--card)),var(--card) 70%);border:1px solid var(--line);border-radius:16px;padding:20px 20px 16px;margin:0 0 22px}
@@ -4243,7 +4243,7 @@ body[data-tab=history] .route,body[data-tab=help] .route{display:none}
 <section class="pane" id="pane-guided">
 <h2 class="ph">Fix my Takeout</h2>
 <div class="card profcard"><div style="display:flex;align-items:center;gap:8px"><b>How do you like to play it?</b><button type="button" class="ib" id="profib" aria-label="What are styles?" style="margin-left:0;display:grid;width:20px;height:20px;padding:0;border-radius:50%;font:700 11px/1 system-ui;color:var(--mute);border:1px solid var(--line);background:transparent;place-items:center">i</button></div><div class="mutes" id="profexp" style="margin-top:4px;display:none">One tap sets every option in the app (Guided, Fix, Similar, Photos) to match how much time, risk and reward you want. You can still change any single option. <b>Preview stays on</b> in every style, so you always see what would happen first.</div>
-<div class="profpills" id="profpills"></div><div class="profinfo" id="profinfo"></div></div>
+<div class="profpills" id="profpills"></div><div class="profinfo" id="profinfo"></div><button type="button" class="sm" id="profcmpgo" style="margin-top:8px">&#128202; Compare all five side by side</button></div>
 <div class="card"><small style="margin-top:0">The easy way. Add your Google Takeout <b>zip files</b> (or the folders you unzipped) in the bar at the top, choose where the finished library should go, and press the button. Your originals are <b>never changed</b>: a clean, merged copy is made in the Destination, with the real dates, locations and captions put back, duplicates removed and your folder structure kept.</small>
 <div class="gcheck" id="gcheck"></div>
 <div class="chkbox"><div><b>Not sure what to tick?</b><br><span class="mutes">Let the app look at your real files and recommend a plan, with the reasons. It changes nothing.</span></div><button id="gchk" class="p">Check my files</button></div>
@@ -5544,6 +5544,34 @@ $('cplgo').onclick=async()=>{$('cplres').innerHTML='<small>Reading the sync engi
   if(!r.ok){$('cplres').innerHTML='<div class="tip">'+esc(r.why||'Could not read it')+'</div>';return}
   const v=r.verdict||{};const col={looping:'var(--bad)',progressing:'var(--ok)',growing:'var(--warn)'}[v.state]||'var(--mute)';
   $('cplres').innerHTML='<div class="card"><b>Sync engine backlog</b>'+tbl(['Queue','Rows'],Object.entries(r.tables).map(([k,x])=>[esc(k),x.toLocaleString()]))+'<div style="color:'+col+';font-weight:600;margin:4px 0">'+esc(v.text||'')+'</div><small>Read-only. Backlog = transientPullRepository: it must shrink for a sync to be moving. Compare readings hours apart; a steady log rhythm alone proves nothing.</small>'+(v.state==='looping'?'<div class="hbtns"><button class="sm" data-fixguide="sync-engine-livelock">Open the guide</button></div>':'')+'</div>'};
+
+// ---- Compare the five styles side by side ----
+function optInfo(id){const el=document.getElementById(id);if(!el)return {label:id,desc:'',el:null};const c=el.closest('.opt');let label=id,desc='';
+  if(c){const lb=c.querySelector('label');if(lb){const cl=lb.cloneNode(true);cl.querySelectorAll('.ib,button').forEach(x=>x.remove());label=cl.textContent}else{const d=el.type==='checkbox'?c.querySelector('div'):c.querySelector('div');if(d){const cl=d.cloneNode(true);cl.querySelectorAll('.ib,small,button').forEach(x=>x.remove());label=cl.textContent.trim().split('\n')[0]}}
+   const sm=c.querySelector('small');if(sm)desc=sm.textContent.trim()}
+  return {label:label.replace(/\s+/g,' ').trim().replace(/^⚠️\s*/,'⚠️ '),desc,el}}
+function cellVal(id,v,el){if(el&&el.tagName==='SELECT'){const o=[...el.options].find(x=>x.value===String(v));return o?o.textContent.replace(/\s*\(.*?\)\s*/g,' ').trim():String(v)}return v?'✓':'—'}
+function buildCompare(onlyDiff){const keys=Object.keys(PROFILES);const rows=[];
+  const sec=t=>rows.push({sec:t});
+  sec('Overall');rows.push({label:'Time it takes',vals:keys.map(k=>dots(PROFILES[k].time,'')),raw:keys.map(k=>PROFILES[k].time)},{label:'Risk',vals:keys.map(k=>dots(PROFILES[k].risk,'risk')),raw:keys.map(k=>PROFILES[k].risk)},{label:'Reward',vals:keys.map(k=>dots(PROFILES[k].reward,'rew')),raw:keys.map(k=>PROFILES[k].reward)},
+   {label:'In a few words',vals:keys.map(k=>'<small>'+esc(PROFILES[k].blurb)+'</small>'),raw:keys.map(k=>k)},{label:'Preview stays on',vals:keys.map(()=>'✓'),raw:keys.map(()=>1),desc:'Every style starts as a preview. Nothing changes on your files until you untick it and press Start.'});
+  sec('Guided and Fix options');Object.keys(PROFILES.balanced.g).forEach(id=>{const i=optInfo(id);const raw=keys.map(k=>String(PROFILES[k].g[id]));rows.push({label:i.label,desc:i.desc,vals:keys.map(k=>cellVal(id,PROFILES[k].g[id],i.el)),raw})});
+  sec('Looking for similar photos');{const i=optInfo('simsens');rows.push({label:'How alike counts as a match',vals:keys.map(k=>cellVal('simsens',PROFILES[k].o.simsens,i.el)),raw:keys.map(k=>PROFILES[k].o.simsens)})}
+  sec('Choosing which duplicate to keep');rows.push({label:'Burst shots',vals:keys.map(k=>PROFILES[k].dp.bursts==='best'?'Pick the best':'Keep all'),raw:keys.map(k=>PROFILES[k].dp.bursts),desc:'A burst is a quick run of photos of the same moment.'});
+  rows.push({label:'Must also match to count as a duplicate',vals:keys.map(k=>PROFILES[k].dp.must.length?PROFILES[k].dp.must.map(m=>DP_MUST[m].replace('The ','').replace(' must match','')).join(', '):'—'),raw:keys.map(k=>PROFILES[k].dp.must.join())});
+  const rules=DP_DEFAULT.concat([...new Set(keys.flatMap(k=>PROFILES[k].dp.extra||[]))]);rules.forEach(r=>rows.push({label:DP_RULES[r],vals:keys.map(k=>(DP_DEFAULT.includes(r)||(PROFILES[k].dp.extra||[]).includes(r))?'✓':'—'),raw:keys.map(k=>(DP_DEFAULT.includes(r)||(PROFILES[k].dp.extra||[]).includes(r))?'1':'0')}));
+  sec('Sending to Apple Photos');[['pbatch','Batch size',v=>'About '+v+' GB'],['ppace','Between batches',null],['padapt',null,null],['palb',null,null]].forEach(([id,lab,fn])=>{const i=optInfo(id);rows.push({label:lab||i.label,desc:id==='pbatch'?'':i.desc,vals:keys.map(k=>fn?fn(PROFILES[k].o[id]):cellVal(id,PROFILES[k].o[id],i.el)),raw:keys.map(k=>String(PROFILES[k].o[id]))})});
+  let h='<table class="cmp"><colgroup><col style="width:104px">'+keys.map(()=>'<col>').join('')+'</colgroup><thead><tr><th>Setting</th>'+keys.map(k=>'<th><button type="button" class="sm" data-useprof="'+k+'">'+PROFILES[k].icon+'<br>'+esc(PROFILES[k].name)+'</button></th>').join('')+'</tr></thead><tbody>';
+  rows.forEach(r=>{if(r.sec){h+='<tr class="cs"><td colspan="6">'+esc(r.sec)+'</td></tr>';return}
+   const diff=new Set(r.raw).size>1;if(onlyDiff&&!diff&&!/Preview/.test(r.label))return;
+   h+='<tr class="'+(diff?'cd':'')+'"><td><b>'+esc(r.label)+'</b>'+(r.desc?'<small>'+esc(r.desc.slice(0,150))+'</small>':'')+'</td>'+r.vals.map((v,i)=>'<td class="'+(keys[i]===PROF&&!PROF_CUSTOM?'cur':'')+'">'+(String(v).startsWith('<')?v:esc(v))+'</td>').join('')+'</tr>'});
+  return h+'</tbody></table>'}
+function openCompare(){let o=$('profcmp');if(!o){o=document.createElement('div');o.id='profcmp';o.style.cssText='position:fixed;inset:0;z-index:80;background:var(--bg,#fff);overflow:auto;padding:10px';
+   o.innerHTML='<style>#profcmp table.cmp{border-collapse:separate;border-spacing:0;font-size:11.5px;width:100%;table-layout:fixed}#profcmp .cmp th button{padding:3px 2px;font-size:11px;width:100%;line-height:1.2}#profcmp .cmp th,#profcmp .cmp td{padding:5px 6px;border-bottom:1px solid var(--line);text-align:center;vertical-align:top}#profcmp .cmp td:first-child,#profcmp .cmp th:first-child{text-align:left;position:sticky;left:0;background:var(--bg,#fff);width:104px;z-index:1}#profcmp .cmp thead th{position:sticky;top:0;background:var(--bg,#fff);z-index:2}#profcmp .cmp thead th:first-child{z-index:3}#profcmp .cmp tr.cs td{background:var(--soft,#f1effc);font-weight:700;text-align:left;position:static}#profcmp .cmp tr.cd td:not(:first-child){background:rgba(255,200,60,.14)}#profcmp .cmp td.cur{outline:2px solid var(--acc,#6c63ff);outline-offset:-2px}#profcmp small{display:block;font-weight:400;color:var(--mute)}</style><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><b style="font-size:17px">The five styles, side by side</b><span style="flex:1"></span><button type="button" class="sm" id="cmpclose">Close</button></div><label style="display:flex;gap:6px;margin:8px 0;align-items:center"><input type="checkbox" id="cmpdiff"> Only show what differs</label><small class="mutes" style="display:block;margin-bottom:6px">Shaded rows differ between styles. Tap a style at the top to use it. Your current style is outlined. You can still change any single option afterwards.</small><div id="cmpbody"></div>';
+   document.body.appendChild(o);$('cmpclose').onclick=()=>o.remove();$('cmpdiff').onchange=()=>{$('cmpbody').innerHTML=buildCompare($('cmpdiff').checked)};
+   o.addEventListener('click',e=>{const b=e.target.closest('[data-useprof]');if(b){applyProfile(b.dataset.useprof,true);o.remove()}})}
+  $('cmpbody').innerHTML=buildCompare(false)}
+$('profcmpgo').onclick=openCompare;
 </script></main></body></html>"""
 
 
