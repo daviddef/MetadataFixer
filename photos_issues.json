@@ -2844,19 +2844,27 @@
   "meaning": "The requested change (e.g. an edit or creation request configuration) is not supported by the system. Name verified in Apple docs; raw value 3300 from header/forum reports.",
   "likely_causes": [
    "Unsupported combination of request options",
-   "Asset type that cannot be modified (e.g. shared or cloud-only item)"
+   "Asset type that cannot be modified (e.g. shared or cloud-only item)",
+   "Too many items in one change (large batches into an album, e.g. Shortcuts 'Find Photos' + 'Save to Album' on thousands)",
+   "RAW+HEIF pair saved with the resources in the wrong order (reported: HEIF should be primary)",
+   "Stricter album-membership checks in newer OS versions"
   ],
   "fixes": [
    "Retry with a different asset or simpler request",
-   "Update macOS and the app making the request"
+   "Update macOS and the app making the request",
+   "Do it in batches of 100-500 items instead of thousands",
+   "Restart the device and retry",
+   "Split the work across several smaller albums or several steps"
   ],
   "risk": "safe",
   "confidence": "medium",
   "sources": [
    "https://developer.apple.com/documentation/photos/phphotoserror-swift.struct/code",
-   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)"
+   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)",
+   "supplied: Grok PDF 'PHPhotosError 3300-Series Deep Dive' (AI-generated, unverified; agrees on names for 3300-3306, 3310, 3311)"
   ],
-  "verified": false
+  "verified": false,
+  "identify": "The failing batch is the one in the request; retry smaller halves to find any single offender."
  },
  {
   "id": "phphotos-3301-operation-interrupted",
@@ -2877,18 +2885,23 @@
   "likely_causes": [
    "Photos or the app quit or crashed mid-operation",
    "Library locked by another process",
-   "Sleep or volume disconnect"
+   "Sleep or volume disconnect",
+   "App backgrounded or screen locked during a long save",
+   "Memory, heat or low-power pressure"
   ],
   "fixes": [
    "Quit and reopen Photos, then retry",
    "Keep the Mac awake and the library volume connected during import",
-   "If repeated, restart the Mac"
+   "If repeated, restart the Mac",
+   "Keep the app in front and the device awake and plugged in for the whole job",
+   "Close other heavy apps before big imports"
   ],
   "risk": "safe",
   "confidence": "medium",
   "sources": [
    "https://developer.apple.com/documentation/photos/phphotoserror-swift.struct/code",
-   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)"
+   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)",
+   "supplied: Grok PDF 'PHPhotosError 3300-Series Deep Dive' (AI-generated, unverified; agrees on names for 3300-3306, 3310, 3311)"
   ],
   "verified": false
  },
@@ -2912,22 +2925,34 @@
    "Corrupt, truncated or zero-byte file",
    "Wrong extension or unsupported codec/container",
    "Video not playable by AVFoundation",
-   "Unsupported colour or bit-depth format"
+   "Unsupported colour or bit-depth format",
+   "Unsupported codec inside the file (AVIF, WebP, some HEVC profiles, non-AAC audio in MP4)",
+   "App only has Limited access to Photos",
+   "Truncated or incomplete file data",
+   "Missing or wrong file extension",
+   "Shared Albums apply stricter checks than the main library",
+   "Metadata or sidecar data Photos cannot parse"
   ],
   "fixes": [
    "Check the file opens in Preview or QuickTime Player",
    "Re-export or convert (e.g. HEVC/H.264 MP4, JPEG/HEIC/TIFF)",
    "Re-copy the file from the original source",
-   "Check size is non-zero"
+   "Check size is non-zero",
+   "Give the app Full Access to Photos",
+   "Convert to plain JPEG, or H.264 + AAC MP4",
+   "Save the file to the Files app first, then import from there",
+   "For Shared Albums: smaller batches, make a slight edit (rotate), or turn Live Photo off first"
   ],
   "risk": "safe",
   "confidence": "high",
   "sources": [
    "https://developer.apple.com/documentation/photos/phphotoserror-swift.struct/code",
    "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)",
-   "https://developer.apple.com/forums/thread/696924"
+   "https://developer.apple.com/forums/thread/696924",
+   "supplied: Grok PDF 'PHPhotosError 3300-Series Deep Dive' (AI-generated, unverified; agrees on names for 3300-3306, 3310, 3311)"
   ],
-  "verified": false
+  "verified": false,
+  "identify": "Shoebox Health check lists files with a wrong extension, truncated data or an odd codec; also try the failing file alone."
  },
  {
   "id": "phphotos-3303-missing-resource",
@@ -2948,19 +2973,25 @@
   "likely_causes": [
    "Originals stored in iCloud and not downloaded",
    "File deleted or moved out of the library",
-   "Damaged library"
+   "Damaged library",
+   "Optimize Storage is on, so only a placeholder exists on this device",
+   "Original never fully synced, or removed from iCloud"
   ],
   "fixes": [
    "Download originals (Photos > Settings > iCloud, Download Originals)",
-   "Run Library Repair (hold Option+Command while opening Photos) after a backup"
+   "Run Library Repair (hold Option+Command while opening Photos) after a backup",
+   "Switch to Download and Keep Originals, or force-download the item (right-click > Download Original)",
+   "Stay on power and stable Wi-Fi while it downloads"
   ],
   "risk": "caution",
   "confidence": "medium",
   "sources": [
    "https://developer.apple.com/documentation/photos/phphotoserror-swift.struct/code",
-   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)"
+   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)",
+   "supplied: Grok PDF 'PHPhotosError 3300-Series Deep Dive' (AI-generated, unverified; agrees on names for 3300-3306, 3310, 3311)"
   ],
-  "verified": false
+  "verified": false,
+  "identify": "Shoebox Library audit separates 'only in iCloud' from 'missing everywhere'."
  },
  {
   "id": "phphotos-3306-request-not-supported-for-asset",
@@ -2980,17 +3011,23 @@
   "meaning": "The system does not support the requested operation for that specific asset.",
   "likely_causes": [
    "Operation on a shared album/syncing item",
-   "Asset type lacks the requested resource"
+   "Asset type lacks the requested resource",
+   "After the first heavy edit of a RAW file in Photos, a bad preview can be generated (reported for macOS Ventura and later)",
+   "Preview or derivative generation incomplete"
   ],
   "fixes": [
    "Use a different operation (export instead of edit)",
-   "Duplicate the item and retry"
+   "Duplicate the item and retry",
+   "Image > Revert to Original, then redo edits",
+   "Export the unmodified original and re-import it",
+   "Edit RAW externally first, before heavy edits in Photos"
   ],
   "risk": "safe",
   "confidence": "medium",
   "sources": [
    "https://developer.apple.com/documentation/photos/phphotoserror-swift.struct/code",
-   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)"
+   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)",
+   "supplied: Grok PDF 'PHPhotosError 3300-Series Deep Dive' (AI-generated, unverified; agrees on names for 3300-3306, 3310, 3311)"
   ],
   "verified": false
  },
@@ -3000,27 +3037,34 @@
   "title": "Photos request exceeded a limit",
   "signatures": [
    "PHPhotosErrorDomain\\D{0,12}3312\\b",
-   "PHPhotosError\\w*\\W{1,3}limitExceeded\\b"
+   "PHPhotosError\\w*\\W{1,3}limitExceeded\\b",
+   "PHPhotosErrorDomain\\D{0,12}3307\\b"
   ],
   "processes": [
    "Photos"
   ],
   "codes": [
-   "PHPhotosErrorDomain 3312"
+   "PHPhotosErrorDomain 3312",
+   "PHPhotosErrorDomain 3307"
   ],
   "severity": "warn",
-  "meaning": "The request exceeds a limit (e.g. too many items in one request).",
+  "meaning": "The request exceeds a limit (e.g. too many items in one request). NOTE: the supplied Grok PDF numbers this 3307, ours says 3312. Both are from AI memory; check the SDK header (PHPhotosError.limitExceeded) on a Mac.",
   "likely_causes": [
-   "Very large batch operation"
+   "Very large batch operation",
+   "Shared Album limits (photos, videos or contributors)",
+   "Too many items in a single operation"
   ],
   "fixes": [
-   "Split the operation into smaller batches"
+   "Split the operation into smaller batches",
+   "Spread content across more Shared Albums",
+   "Check Apple's Shared Album limits and stay well under them"
   ],
   "risk": "safe",
   "confidence": "low",
   "sources": [
    "https://developer.apple.com/documentation/photos/phphotoserror-swift.struct/code",
-   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)"
+   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)",
+   "supplied: Grok PDF 'PHPhotosError 3300-Series Deep Dive' (AI-generated, unverified; agrees on names for 3300-3306, 3310, 3311)"
   ],
   "verified": false
  },
@@ -3774,17 +3818,21 @@
   "meaning": "System configuration (Screen Time, MDM or parental restriction) restricts access to photos.",
   "likely_causes": [
    "Screen Time content restrictions",
-   "MDM profile restricts Photos"
+   "MDM profile restricts Photos",
+   "MDM or work-managed profile",
+   "Screen Time > Content & Privacy Restrictions > Photos"
   ],
   "fixes": [
    "Check System Settings > Screen Time and Privacy & Security > Photos",
-   "Ask the administrator if the Mac is managed"
+   "Ask the administrator if the Mac is managed",
+   "Test on a non-managed device or account to confirm"
   ],
   "risk": "safe",
   "confidence": "medium",
   "sources": [
    "https://developer.apple.com/documentation/photos/phphotoserror-swift.struct/code",
-   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)"
+   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)",
+   "supplied: Grok PDF 'PHPhotosError 3300-Series Deep Dive' (AI-generated, unverified; agrees on names for 3300-3306, 3310, 3311)"
   ],
   "verified": false
  },
@@ -3810,13 +3858,16 @@
   ],
   "fixes": [
    "Open System Settings > Privacy & Security > Photos and enable the app",
-   "If the app is absent, reset with: tccutil reset Photos <bundle id> then relaunch"
+   "If the app is absent, reset with: tccutil reset Photos <bundle id> then relaunch",
+   "'Add Photos Only' is enough for apps that only save pictures",
+   "Restart the app after changing the permission"
   ],
   "risk": "safe",
   "confidence": "medium",
   "sources": [
    "https://developer.apple.com/documentation/photos/phphotoserror-swift.struct/code",
-   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)"
+   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)",
+   "supplied: Grok PDF 'PHPhotosError 3300-Series Deep Dive' (AI-generated, unverified; agrees on names for 3300-3306, 3310, 3311)"
   ],
   "verified": false
  },
@@ -4078,18 +4129,23 @@
   "meaning": "There is not enough disk space to perform the change, such as importing or copying originals.",
   "likely_causes": [
    "Library volume nearly full",
-   "Importing large videos or ProRAW"
+   "Importing large videos or ProRAW",
+   "Writes can need temporary space of about twice the file size (reported, not measured)",
+   "Large videos or many items processed at once"
   ],
   "fixes": [
    "Free space on the library drive and the startup disk (import needs temporary space)",
    "Move the library to a larger drive after backing up",
-   "Empty Recently Deleted"
+   "Empty Recently Deleted",
+   "Check real free space with Disk Utility, not just Finder",
+   "Move the library to a drive with more space"
   ],
   "risk": "safe",
   "confidence": "medium",
   "sources": [
    "https://developer.apple.com/documentation/photos/phphotoserror-swift.struct/code",
-   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)"
+   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)",
+   "supplied: Grok PDF 'PHPhotosError 3300-Series Deep Dive' (AI-generated, unverified; agrees on names for 3300-3306, 3310, 3311)"
   ],
   "verified": false
  },
