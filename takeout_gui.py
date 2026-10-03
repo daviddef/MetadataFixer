@@ -30,7 +30,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.04-d"
+VERSION = "2026.10.04-e"
 class Cancelled(Exception):
     pass
 
@@ -4008,6 +4008,10 @@ body[data-tab=clean] .route,body[data-tab=convert] .route,body[data-tab=monitor]
 body[data-tab=history] .route,body[data-tab=help] .route{display:none}
 .usefcard,.usef:has(.fnote),.usef:has(.dnote){display:none!important}
 @media(max-width:620px){.route{grid-template-columns:1fr}.rt-arrow{transform:rotate(90deg);justify-self:center;line-height:1}}
+
+.rt-acts .ic{width:34px;height:32px;padding:0;font-size:16px;line-height:1;display:grid;place-items:center;border-radius:10px;position:relative}
+.rt-acts .ic sup{position:absolute;right:3px;top:1px;font-size:11px;font-weight:800;color:var(--acc)}
+.rt-acts .ic:hover{transform:translateY(-1px)}
 </style></head><body><div id="ack" style="display:none"><div class="ackbox" role="dialog" aria-modal="true" aria-labelledby="acktitle">
 <h2 id="acktitle">Before you start</h2>
 <p>Backstory changes, copies, moves and (if you choose) deletes files. Please read this once:</p>
@@ -4057,13 +4061,13 @@ body[data-tab=history] .route,body[data-tab=help] .route{display:none}
   </div>
   <div class="fbar route" id="fbar">
     <div class="rt rt-from" id="frs">
-      <div class="rt-head"><span class="rt-k">FROM</span><b id="fsum"></b><span class="rt-acts"><button id="fadd" class="sm" title="Choose folders (hold Cmd to pick several)">+ Folders</button><button id="fzip" class="sm" data-tip="Add Google Takeout .zip files directly. They are read one at a time and never changed, so there is no need to unzip them first.">+ Zips</button><button id="fedit" class="sm" title="Type or paste paths, reorder or clear" aria-label="Edit the list">&#8943;</button></span></div>
+      <div class="rt-head"><span class="rt-k">FROM</span><b id="fsum"></b><span class="rt-acts"><button id="fadd" class="sm ic" title="Add folders (hold Cmd to pick several)" aria-label="Add folders">&#128193;<sup>+</sup></button><button id="fzip" class="sm ic" title="Add Google Takeout zip files (read one at a time, never changed)" aria-label="Add zip files">&#128230;<sup>+</sup></button><button id="fedit" class="sm ic" title="Edit the list: type or paste paths, reorder, clear" aria-label="Edit the list">&#9999;&#65039;</button></span></div>
       <div class="fchips" id="fchips"></div>
-      <div class="rt-empty" id="fempty">&#128194; Drop your Takeout zips or folders here, or use <b>+ Zips</b> / <b>+ Folders</b></div>
+      <div class="rt-empty" id="fempty">&#128194; Drop your Takeout zips or folders here, or tap &#128230;+ or &#128193;+</div>
     </div>
     <div class="rt-arrow" aria-hidden="true">&#10140;</div>
     <div class="rt rt-to" id="frd">
-      <div class="rt-head"><span class="rt-k">TO</span><b id="fdname"></b><span class="rt-acts"><button id="fdbtn" class="sm">Choose...</button><button id="fdclr" class="sm" title="Clear" aria-label="Clear the destination">&times;</button></span></div>
+      <div class="rt-head"><span class="rt-k">TO</span><b id="fdname"></b><span class="rt-acts"><button id="fdbtn" class="sm ic" title="Choose the destination folder" aria-label="Choose the destination folder">&#128194;</button><button id="fdclr" class="sm ic" title="Clear the destination" aria-label="Clear the destination">&times;</button></span></div>
       <input type="text" id="fdest" list="recentdest" placeholder="Where the finished copies go" spellcheck="false"><datalist id="recentdest"></datalist>
     </div>
     <div id="fpanel" style="display:none"><textarea id="fall" placeholder="One folder or zip path per line (you can drag them in too)" spellcheck="false"></textarea><div class="row" style="margin-top:6px"><button id="fdone" class="p sm">Done</button><button id="fclear" class="sm">Clear all</button></div></div>
@@ -4359,7 +4363,7 @@ function renderFolders(){
   const box=$('fchips');box.innerHTML='';
   const MAXC=3,show=FOLDERS.slice(0,MAXC);
   show.forEach((p,i)=>{const c=document.createElement('span');c.className='fchip';c.title=p;
-    const nm=p.split('/').filter(Boolean).pop()||p;c.appendChild(document.createTextNode(/\.zip$/i.test(p)?'\u{1F5DC}\uFE0F '+nm:'\u{1F4C1} '+nm));
+    const nm=p.split('/').filter(Boolean).pop()||p;c.appendChild(document.createTextNode(/\.zip$/i.test(p)?'\u{1F4E6} '+nm:'\u{1F4C1} '+nm));
     const x=document.createElement('button');x.textContent='\u00d7';x.className='fx';x.setAttribute('aria-label','Remove '+nm);x.onclick=()=>{FOLDERS.splice(i,1);saveFolders()};c.appendChild(x);box.appendChild(c)});
   if(FOLDERS.length>MAXC){const m=document.createElement('button');m.className='fchip more';m.textContent='+'+(FOLDERS.length-MAXC)+' more';m.onclick=()=>{$('fpanel').style.display='block'};box.appendChild(m)}
   $('frs').classList.toggle('has',FOLDERS.length>0);

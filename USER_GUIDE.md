@@ -86,8 +86,8 @@ Every job (preview or real) has a **Stop** button in the status bar at the top. 
 ## Choosing your folders (once, for every tab)
 
 The bar at the top is one simple route: **FROM** your photos **TO** where the finished library goes.
-- **FROM:** use **+ Zips** for Google Takeout zip files and **+ Folders** for folders (hold Cmd to pick several), or **drag** them onto the box. Each shows as a small chip with a ✕ to remove it; more than three fold into "+N more". The **⋯** button lets you type or paste paths, reorder or clear them.
-- **TO:** press **Choose…** (or type a path). The box remembers your last destinations: click the path box to pick one from the list. The ✕ clears it.
+- **FROM:** tap 📦+ for Google Takeout zip files and 📁+ for folders (hold Cmd to pick several), or **drag** them onto the box. Each shows as a small chip with a ✕ to remove it; more than three fold into "+N more". The ✏️ button lets you type or paste paths, reorder or clear them. (Hover over any icon to see its name.)
+- **TO:** tap 📂 (or type a path). The box remembers your last destinations: click the path box to pick one from the list. The × clears it.
 - **Status line:** underneath, one line tells you what is wrong or that you are ready: no sources yet, no destination, a destination you cannot write to, not enough free space, or "✓ 2 sources (12 GB) → 214 GB free at the destination".
 - **Only what each tab needs is shown.** Guided, Fix and Merge show both FROM and TO. Clean up, Convert, Monitor, Health, Similar and Photos only need FROM, so TO is hidden there. History and Help hide the bar.
 - On a phone-width window FROM and TO stack with an arrow between them.
