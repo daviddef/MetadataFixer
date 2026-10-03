@@ -62,7 +62,7 @@ def main():
     url = f"http://127.0.0.1:{port}"
     try:
         import webview
-        webview.create_window("Backstory", url, width=1100, height=900, min_size=(700, 600))
+        webview.create_window("Shoebox", url, width=1100, height=900, min_size=(700, 600))
         webview.start()                     # returns when the window is closed
     except Exception:
         webbrowser.open(url)                # no native window available: use the browser; keep running

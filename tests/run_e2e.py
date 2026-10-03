@@ -1,4 +1,4 @@
-"""End-to-end tests for Backstory's engine and jobs (no browser). Run:  python3 tests/run_e2e.py
+"""End-to-end tests for Shoebox's engine and jobs (no browser). Run:  python3 tests/run_e2e.py
 Everything runs in a scratch folder with mock Takeouts, mock Photos libraries and a fake osascript."""
 import json
 import os
@@ -612,13 +612,13 @@ def t_audit_regressions():
         except urllib.error.HTTPError as e:
             return e.code, b""
     code, page = call("/", method="GET")
-    tok = page.decode().split("X-Backstory-Token':'")[1].split("'")[0]
+    tok = page.decode().split("X-Shoebox-Token':'")[1].split("'")[0]
     assert code == 200 and len(tok) == 32 and "__TOKEN__" not in page.decode()
     assert call("/api/history")[0] == 403, "POST without token accepted"
-    assert call("/api/history", hdr={"X-Backstory-Token": tok, "Origin": "http://evil.example"})[0] == 403
-    assert call("/api/history", hdr={"X-Backstory-Token": tok, "Host": "evil.example"})[0] == 403
-    assert call("/api/history", b"not json", {"X-Backstory-Token": tok})[0] == 400
-    assert call("/api/history", hdr={"X-Backstory-Token": tok})[0] == 200
+    assert call("/api/history", hdr={"X-Shoebox-Token": tok, "Origin": "http://evil.example"})[0] == 403
+    assert call("/api/history", hdr={"X-Shoebox-Token": tok, "Host": "evil.example"})[0] == 403
+    assert call("/api/history", b"not json", {"X-Shoebox-Token": tok})[0] == 400
+    assert call("/api/history", hdr={"X-Shoebox-Token": tok})[0] == 200
     assert call("/thumb?p=/etc/passwd", method="GET")[0] == 404
     srv.shutdown()
 
@@ -753,9 +753,9 @@ def t_rerun_over_http():
     port = srv.server_address[1]
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     page = urllib.request.urlopen("http://127.0.0.1:%d/" % port).read().decode()
-    tok = page.split("X-Backstory-Token':'")[1].split("'")[0]
+    tok = page.split("X-Shoebox-Token':'")[1].split("'")[0]
     def post(path, body):
-        rq = urllib.request.Request("http://127.0.0.1:%d%s" % (port, path), data=json.dumps(body).encode(), headers={"X-Backstory-Token": tok})
+        rq = urllib.request.Request("http://127.0.0.1:%d%s" % (port, path), data=json.dumps(body).encode(), headers={"X-Shoebox-Token": tok})
         try:
             with urllib.request.urlopen(rq, timeout=20) as r:
                 return r.status, json.loads(r.read() or b"{}")
@@ -889,9 +889,9 @@ def t_qa_hunt_regressions():
     # HTTP: double start, odd bodies
     srv = g.ThreadingHTTPServer(("127.0.0.1", 0), g.Handler); port = srv.server_address[1]
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    tok = urllib.request.urlopen("http://127.0.0.1:%d/" % port).read().decode().split("X-Backstory-Token':'")[1].split("'")[0]
+    tok = urllib.request.urlopen("http://127.0.0.1:%d/" % port).read().decode().split("X-Shoebox-Token':'")[1].split("'")[0]
     def post(path, body, raw=None):
-        rq = urllib.request.Request("http://127.0.0.1:%d%s" % (port, path), data=raw if raw is not None else json.dumps(body).encode(), headers={"X-Backstory-Token": tok})
+        rq = urllib.request.Request("http://127.0.0.1:%d%s" % (port, path), data=raw if raw is not None else json.dumps(body).encode(), headers={"X-Shoebox-Token": tok})
         try:
             with urllib.request.urlopen(rq, timeout=20) as r:
                 return r.status, r.read()

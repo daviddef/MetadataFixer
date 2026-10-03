@@ -1,24 +1,20 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
 <defs>
 <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5b5bf0"/><stop offset=".55" stop-color="#7a4df0"/><stop offset="1" stop-color="#14b8c4"/></linearGradient>
+<linearGradient id="box" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f0b778"/><stop offset="1" stop-color="#d28f4d"/></linearGradient>
+<linearGradient id="lid" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffd29c"/><stop offset="1" stop-color="#eaa966"/></linearGradient>
 <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8fd3ff"/><stop offset="1" stop-color="#ffe6b3"/></linearGradient>
-<filter id="sh" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#1a1050" flood-opacity=".35"/></filter>
-<filter id="sh2" x="-30%" y="-30%" width="160%" height="170%"><feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#3a1000" flood-opacity=".35"/></filter>
+<filter id="sh" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="14" stdDeviation="16" flood-color="#1a1050" flood-opacity=".35"/></filter>
 </defs>
 <rect width="1024" height="1024" rx="230" fill="url(#bg)"/>
 <circle cx="860" cy="170" r="230" fill="#fff" opacity=".07"/>
-<g transform="rotate(-7 480 520)" filter="url(#sh)">
-  <rect x="190" y="150" width="600" height="720" rx="34" fill="#fffdf8"/>
-  <rect x="240" y="200" width="500" height="470" rx="14" fill="url(#sky)"/>
-  <circle cx="610" cy="320" r="62" fill="#ffb347"/>
-  <path d="M240 600 L400 430 L500 540 L590 450 L740 610 L740 656 a14 14 0 0 1 -14 14 L254 670 a14 14 0 0 1 -14 -14 Z" fill="#3f6fd8"/>
-  <path d="M240 640 L360 540 L470 630 L560 560 L740 650 L740 656 a14 14 0 0 1 -14 14 L254 670 a14 14 0 0 1 -14 -14 Z" fill="#2c4fa8"/>
-  <rect x="250" y="722" width="330" height="26" rx="13" fill="#c9cbe0"/>
-  <rect x="250" y="772" width="220" height="26" rx="13" fill="#dcdded"/>
-</g>
-<g filter="url(#sh2)" transform="translate(690 610)">
-  <path d="M0 -150 C-84 -150 -146 -88 -146 -10 C-146 78 -50 150 0 232 C50 150 146 78 146 -10 C146 -88 84 -150 0 -150 Z" fill="#ff5a4e" stroke="#fff" stroke-width="22"/>
-  <circle cx="0" cy="-10" r="54" fill="#fff"/>
-  <path d="M-26 -8 l20 22 l38 -46" fill="none" stroke="#ff5a4e" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+<g filter="url(#sh)">
+  <g transform="rotate(-14 330 420)"><rect x="230" y="170" width="250" height="300" rx="16" fill="#fffdf8"/><rect x="250" y="190" width="210" height="190" rx="8" fill="#ff9d8a"/><circle cx="395" cy="250" r="26" fill="#fff3c4"/></g>
+  <g transform="rotate(12 700 420)"><rect x="560" y="150" width="250" height="300" rx="16" fill="#fffdf8"/><rect x="580" y="170" width="210" height="190" rx="8" fill="#7fd6c2"/><path d="M580 340 L650 260 L700 320 L740 270 L790 340 Z" fill="#2c8f7a"/></g>
+  <g transform="rotate(-2 512 400)"><rect x="380" y="120" width="270" height="330" rx="16" fill="#fffdf8"/><rect x="400" y="140" width="230" height="210" rx="8" fill="url(#sky)"/><circle cx="560" cy="205" r="30" fill="#ffb347"/><path d="M400 340 L470 250 L525 315 L570 260 L630 340 Z" fill="#3f6fd8"/><rect x="400" y="372" width="150" height="16" rx="8" fill="#c9cbe0"/></g>
+  <rect x="150" y="400" width="724" height="400" rx="40" fill="url(#box)"/>
+  <rect x="120" y="360" width="784" height="120" rx="36" fill="url(#lid)"/>
+  <rect x="120" y="440" width="784" height="26" fill="#000" opacity=".08"/>
+  <rect x="400" y="540" width="224" height="46" rx="23" fill="#fff" opacity=".55"/>
 </g>
 </svg>

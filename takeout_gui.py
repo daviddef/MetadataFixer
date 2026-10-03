@@ -30,7 +30,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.04-f"
+VERSION = "2026.10.05-a"
 class Cancelled(Exception):
     pass
 
@@ -195,7 +195,7 @@ def summarise(rows, sidecars, roots, dry_run):
     if cc["dates_corrected"]:
         tips.append("%d photos had a date that did not fit their folder (or was in the future); it was corrected from the folder name." % cc["dates_corrected"])
     if cc["places_named"]:
-        tips.append("%d photos had a place name (city, region, country) written into them from their location, using Backstory's built-in offline list of about 144,000 towns and cities (GeoNames). Apple Photos works out place names itself; other apps such as Lightroom and digiKam read the ones written here." % cc["places_named"])
+        tips.append("%d photos had a place name (city, region, country) written into them from their location, using Shoebox's built-in offline list of about 144,000 towns and cities (GeoNames). Apple Photos works out place names itself; other apps such as Lightroom and digiKam read the ones written here." % cc["places_named"])
     if cc["dates_reconstructed"]:
         tips.append("%d missing dates were reconstructed from every clue (file name, neighbouring photo numbers, folder name, file time): %d high, %d medium and %d low confidence. Each one says why in the report's date_note column; sort by date_conf to review the low ones." % (cc["dates_reconstructed"], cc["recon_high"], cc["recon_medium"], cc["recon_low"]))
     if cc["gps_nearby"]:
@@ -1514,7 +1514,7 @@ def check_clean_folders(folders):
         if not p.is_dir():
             raise ValueError(f"Not a folder: {p}")
         if fx.inside_photos_library(p):
-            raise ValueError(f"{p.name} is inside a Photos library. Backstory only reads Photos libraries and never changes them.")
+            raise ValueError(f"{p.name} is inside a Photos library. Shoebox only reads Photos libraries and never changes them.")
         if p.resolve() in (Path("/"), Path.home().resolve()) or len(p.resolve().parts) <= 2:
             raise ValueError(f"Too broad to clean safely: {p}. Choose the specific folder.")
         out.append(p)
@@ -1744,7 +1744,7 @@ def read_doc(name):
 
 
 def build_recommendations(F, dest):
-    """Turn the facts about the user's files into a plain-language plan. Every option and workflow Backstory has gets an
+    """Turn the facts about the user's files into a plain-language plan. Every option and workflow Shoebox has gets an
     answer here: recommended (with the numbers behind it), optional, or not needed."""
     def n(x):
         return f"{int(x):,}"
@@ -1773,7 +1773,7 @@ def build_recommendations(F, dest):
     if media == 0:
         warns.append("No photos or videos were found in what you added. Check that you chose your Takeout zip files or the folders that hold them.")
     if F.get("photos_libs"):
-        warns.append("%s of your sources is a Photos library. Backstory only reads it: its photos are copied out, and its albums and edits are not carried over." % pl(F["photos_libs"], "library", "libraries"))
+        warns.append("%s of your sources is a Photos library. Shoebox only reads it: its photos are copied out, and its albums and edits are not carried over." % pl(F["photos_libs"], "library", "libraries"))
     plan = {"dedupe": True, "live": False, "name_dates": False, "fix_ext": False, "replace": True, "convert": False, "albums": False}
     # ---------------------------------------------------------------- the library build (Guided options)
     if media:
@@ -1793,7 +1793,7 @@ def build_recommendations(F, dest):
                          "why": "No Google info files (.json) were found, so there is nothing to restore from. Dates will only come from the file names where possible. If this is a Takeout export, add the zip files that hold the .json files."})
         if S.get("n") and S.get("diff_date"):
             recs.append({"id": "datepol", "title": "Dates: the earlier date wins", "risk": "safe", "on": True, "fixed": True,
-                         "why": "In your sample, %d of %d files with an info file already have a date that differs from Google's. Backstory keeps the earlier of the two, because Google often records the upload day. You can change this rule on the Fix tab." % (S["diff_date"], max(1, S["with_json"]))})
+                         "why": "In your sample, %d of %d files with an info file already have a date that differs from Google's. Shoebox keeps the earlier of the two, because Google often records the upload day. You can change this rule on the Fix tab." % (S["diff_date"], max(1, S["with_json"]))})
     n_s = S.get("n") or 0
     if media and (S.get("future") or S.get("date_odd") or S.get("no_date_hint") or F.get("hint_files")):
         parts = []
@@ -1806,7 +1806,7 @@ def build_recommendations(F, dest):
         if parts:
             plan["folder_dates"] = True
             recs.append({"id": "folder_dates", "title": "Fill missing dates from the folder name", "risk": "safe", "on": True,
-                         "why": "; ".join(parts).capitalize() + ". Backstory uses the year (or month) in the folder name only where the photo has no date. A date that already exists is never changed by this option."})
+                         "why": "; ".join(parts).capitalize() + ". Shoebox uses the year (or month) in the folder name only where the photo has no date. A date that already exists is never changed by this option."})
         if S.get("date_odd") or S.get("future"):
             plan["fix_dates"] = False
             recs.append({"id": "fix_dates", "title": "Correct dates that disagree with the folder name", "risk": "caution", "on": False,
@@ -1816,7 +1816,7 @@ def build_recommendations(F, dest):
         recs.append({"id": "guess_gps", "title": "Guess locations from folder names", "risk": "caution", "on": False,
                      "why": ("%d of %d sampled files have no location but sit in a folder that names a place (like Johannesburg or Japan). " % (g_, n_s) if g_ else
                              "%s photos sit in folders that name a place. " % n(F["place_files"])) +
-                            "Backstory can add an approximate location (the middle of that city or country) and label each as a guess with a keyword. A location a photo already has is never touched. Preview first."})
+                            "Shoebox can add an approximate location (the middle of that city or country) and label each as a guess with a keyword. A location a photo already has is never touched. Preview first."})
     if F["name_date_candidates"]:
         plan["name_dates"] = True
         recs.append({"id": "name_dates", "title": "Use the date in the file name where there is no info file", "risk": "safe", "on": True,
@@ -1878,7 +1878,7 @@ def build_recommendations(F, dest):
                        "why": "%s of files share a name but exist in more than one format (for example IMG_1.mov and IMG_1.mp4). This usually means a video was converted and the old copy kept. After the library is built, the Health tab compares their lengths and lets you set the older formats aside." % pl(F["format_groups"], "group", "groups")})
     if F.get("raw_pairs"):
         extras.append({"id": "rawpairs", "title": "RAW photos that also have a JPEG", "tab": "health", "risk": "safe",
-                       "why": "%s a RAW file next to a JPEG or HEIC with the same name. Keeping both is normal if you edit RAW files. The Health tab shows how much space the RAW copies take; Backstory never deletes them for you." % pl(F["raw_pairs"], "photo has", "photos have")})
+                       "why": "%s a RAW file next to a JPEG or HEIC with the same name. Keeping both is normal if you edit RAW files. The Health tab shows how much space the RAW copies take; Shoebox never deletes them for you." % pl(F["raw_pairs"], "photo has", "photos have")})
     if F.get("sim_groups"):
         extras.append({"id": "consolidate", "title": "Merge folders that are the same trip", "tab": "clean", "risk": "caution",
                        "why": "Found %s of folders with near-identical names (for example %s). Review them on the Clean up tab and merge the ones that are the same." % (
@@ -2409,7 +2409,7 @@ def _wanted_for(files):
 
 
 def photos_verify_report(lib, root):
-    """Check every file Backstory has sent so far against the Photos database."""
+    """Check every file Shoebox has sent so far against the Photos database."""
     log = Path(root) / fx.PHOTOS_LOG
     sent = []
     try:
@@ -2473,12 +2473,12 @@ def run_photos(roots, opts, dry_run):
         if not batches:
             sm["tips"].append("Nothing left to import from this folder.")
         if dry_run:
-            sm["tips"].append("This was a preview: nothing was sent to Photos. Each batch is about %s. Between batches Backstory %s.%s" % (
+            sm["tips"].append("This was a preview: nothing was sent to Photos. Each batch is about %s. Between batches Shoebox %s.%s" % (
                 fmt_bytes(batch_bytes), pace_text[pace], " The batch size adapts to how fast iCloud keeps up." if adaptive else ""))
             if pace == "verify":
                 chk = fx.photos_upload_status(lib)
                 sm["tips"].append(("Photos library found: %s items, %s uploaded to iCloud." % (f"{chk['total']:,}", f"{chk['uploaded']:,}") if chk.get("ok") and chk.get("uploaded") is not None else
-                                   "Could not read the Photos database to verify uploads (%s). Backstory will fall back to waiting for free space." % chk.get("why", "unknown")))
+                                   "Could not read the Photos database to verify uploads (%s). Shoebox will fall back to waiting for free space." % chk.get("why", "unknown")))
             with LOCK:
                 STATE.update(state="done", message="Finished", summary=sm, phase=None)
             return
@@ -2490,7 +2490,7 @@ def run_photos(roots, opts, dry_run):
             STATE.update(state="running", total=total, done=0)
         use_verify = pace == "verify" and fx.photos_upload_status(lib).get("ok")
         if pace == "verify" and not use_verify:
-            sm["tips"].append("Backstory could not read the Photos database, so it waited for free space between batches instead of verifying uploads.")
+            sm["tips"].append("Shoebox could not read the Photos database, so it waited for free space between batches instead of verifying uploads.")
 
         def free_now():
             return shutil.disk_usage(Path.home()).free
@@ -2648,11 +2648,11 @@ def run_monitor(hours, pasted):
             crashes = fx.collect_crash_reports(max(1, hours // 24 + 1) if hours > 24 else 7)
             lines += crashes
             src["crash_reports"] = len(crashes)
-            # Backstory's own recent problems
+            # Shoebox's own recent problems
             mine = []
             for e in list_history(40):
                 if e.get("state") in ("failed", "stopped") and e.get("message") and time.time() - e["started"] < max(hours, 24) * 3600:
-                    mine.append("%s Backstory %s: %s" % (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(e["started"])), e["title"], e["message"]))
+                    mine.append("%s Shoebox %s: %s" % (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(e["started"])), e["title"], e["message"]))
             lines += mine
             src["backstory"] = len(mine)
         issues, other = fx.interpret_log_lines(lines)
@@ -2873,7 +2873,7 @@ def run_diagnostics(roots, library, hours):
         lines += fx.collect_crash_reports(7)
         for e_ in list_history(40):
             if e_.get("state") in ("failed", "stopped") and e_.get("message") and time.time() - e_["started"] < max(hours, 24) * 3600:
-                lines.append("%s Backstory %s: %s" % (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(e_["started"])), e_["title"], e_["message"]))
+                lines.append("%s Shoebox %s: %s" % (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(e_["started"])), e_["title"], e_["message"]))
         issues, other = fx.interpret_log_lines(lines)
         step(3, "looking at the Mac")
         snap = fx.system_snapshot(True)
@@ -2903,7 +2903,7 @@ APP_HOME = Path(os.environ.get("METADATAFIXER_HOME") or (
     Path.home() / "Library" / "Application Support" / "MetadataFixer" if sys.platform == "darwin" else Path.home() / ".metadatafixer"))
 HIST_DIR = APP_HOME / "history"
 fx.set_hash_cache(APP_HOME / "hash_cache.jsonl")
-REPORTS_DIR = Path(os.environ.get("METADATAFIXER_REPORTS") or (Path.home() / "Documents" / "Backstory Reports"))
+REPORTS_DIR = Path(os.environ.get("METADATAFIXER_REPORTS") or (Path.home() / "Documents" / "Shoebox Reports"))
 KIND_TITLE = {"compare": "Compare libraries", "diagnostics": "Full diagnostics", "monitor": "Photos and iCloud log check", "health": "Library health check", "formats_apply": "Set older formats aside", "photos": "Send to Apple Photos", "similar": "Find similar photos", "similar_apply": "Set similar photos aside", "undo": "Undo a run", "assess": "Check my files", "consolidate": "Merge similar folders", "fix": "Fix metadata", "merge": "Merge folders", "cleanup": "Clean up", "convert": "Convert videos", "guided": "Guided: Fix my Takeout"}
 
 
@@ -3034,7 +3034,7 @@ def write_run_record(run, timeline):
              "dry_run": bool(meta.get("dry_run")), "source": meta.get("source", []), "dest": meta.get("dest", ""),
              "options": meta.get("options", {}), "endpoint": meta.get("endpoint", ""), "again": meta.get("again"), "headline": _headline(sm) if state == "finished" else msg,
              "folder": "", "html": "", "log": ""}
-    L = ["Backstory run log", "=" * 60,
+    L = ["Shoebox run log", "=" * 60,
          "Run:        %s%s" % (title, " (preview, nothing changed)" if entry["dry_run"] else ""),
          "Result:     %s%s" % (state.upper(), (" - " + msg) if entry["message"] else ""),
          "Started:    %s" % time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(run["started"])),
@@ -3053,7 +3053,7 @@ def write_run_record(run, timeline):
     for t, tst, tmsg in timeline:
         L.append("%s  [%s] %s" % (time.strftime("%H:%M:%S", time.localtime(t)), tst, tmsg))
     L.append("%s  [end] %s" % (time.strftime("%H:%M:%S", time.localtime(ended)), state))
-    L += ["", "Backstory is free software provided as is, without warranty. Back up your photos and read each preview before a real run.",
+    L += ["", "Shoebox is free software provided as is, without warranty. Back up your photos and read each preview before a real run.",
           "Support: " + SUPPORT_EMAIL]
     try:
         folder.mkdir(parents=True, exist_ok=True)
@@ -3122,8 +3122,8 @@ def tracked(kind, meta, fn, *args):
             if isinstance(sm_, dict) and (fx.RESIL["retries"] or fx.RESIL["abort"]):
                 sm_["drive"] = {"retries": fx.RESIL["retries"], "stopped": fx.RESIL["abort"], "events": fx.RESIL["events"][:20]}
                 sm_.setdefault("tips", []).append(
-                    ("The drive stopped answering, so Backstory paused instead of failing every file. Reconnect the drive, then press Continue where I left off: finished files are remembered." if fx.RESIL["abort"]
-                     else "The drive hiccuped %d time(s). Backstory slowed down, waited and retried, and everything was copied. If this keeps happening, the drive or its cable may be failing: back it up soon." % fx.RESIL["retries"]))
+                    ("The drive stopped answering, so Shoebox paused instead of failing every file. Reconnect the drive, then press Continue where I left off: finished files are remembered." if fx.RESIL["abort"]
+                     else "The drive hiccuped %d time(s). Shoebox slowed down, waited and retried, and everything was copied. If this keeps happening, the drive or its cable may be failing: back it up soon." % fx.RESIL["retries"]))
         try:
             if undo_dest:
                 run["undo"] = _collect_undo(undo_dest, before, meta)
@@ -3184,13 +3184,13 @@ def save_report_html(rid, body_html):
                  ("From", "<br>".join(html_escape(x) for x in e["source"]) or "-"), ("To", html_escape(e["dest"]) or "-"),
                  ("Version", html_escape(e["version"]))]
     doc = ('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
-           '<title>Backstory report</title><style>' + _page_css() +
+           '<title>Shoebox report</title><style>' + _page_css() +
            'body{padding:32px 20px}main{max-width:860px}.rhead{margin-bottom:18px}.rhead h1{font-size:26px}.rmeta{width:100%;margin:10px 0 4px}'
            '.rmeta td:first-child{width:90px;color:var(--mute)}.rfoot{margin-top:28px;color:var(--mute);font-size:12px}'
            '@media print{body{background:#fff;color:#000;padding:0}.card,.tile{break-inside:avoid}}</style></head><body><main>'
-           '<div class="rhead"><h1>Backstory report</h1><div class="card"><table class="rmeta">' +
+           '<div class="rhead"><h1>Shoebox report</h1><div class="card"><table class="rmeta">' +
            "".join("<tr><td>%s</td><td>%s</td></tr>" % kv for kv in meta_rows) + '</table></div></div>' + body_html +
-           '<p class="rfoot">Made by Backstory on your computer. Nothing was uploaded. The full text log is saved next to this report (run.log). Provided as is, without warranty: keep backups of your originals. Support: ' + SUPPORT_EMAIL + '</p></main></body></html>')
+           '<p class="rfoot">Made by Shoebox on your computer. Nothing was uploaded. The full text log is saved next to this report (run.log). Provided as is, without warranty: keep backups of your originals. Support: ' + SUPPORT_EMAIL + '</p></main></body></html>')
     try:
         (folder / "report.html").write_text(doc, encoding="utf-8")
         e["html"] = str(folder / "report.html")
@@ -3248,7 +3248,7 @@ def build_receipt(dest, library="", sources=None):
         if up.get("uploaded") is not None:
             ul.append(("In iCloud", "{:,} ({} waiting)".format(up["uploaded"], up["pending"])))
         if up.get("sent"):
-            ul.append(("Sent by Backstory", "{:,}".format(up["sent"])))
+            ul.append(("Sent by Shoebox", "{:,}".format(up["sent"])))
             if up.get("matched") is not None:
                 ul.append(("Found in Photos", "{:,} of {:,}".format(up["matched"], up["sent"])))
                 ul.append(("Of those in iCloud", "{:,}".format(up.get("matched_uploaded", 0))))
@@ -3263,15 +3263,15 @@ def build_receipt(dest, library="", sources=None):
         miss = [a for a in (al.get("albums") or []) if a["found"] < a["expected"]]
         if miss:
             sec.append("<h3>Albums to check</h3><table><tr><th>Album</th><th>Sent</th><th>In Photos</th></tr>" + "".join("<tr><td>%s</td><td>%s</td><td>%s</td></tr>" % (esc_(a["name"]), a["expected"], a["found"]) for a in miss) + "</table>")
-    verdict = "Everything Backstory could check arrived." if (up and up.get("ok") and up.get("pending") == 0 and not (up.get("not_found")) and not (up.get("albums_live") or {}).get("albums_missing")) else "Some items could not be confirmed yet. See the sections above."
-    page = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Backstory migration receipt</title><style>
+    verdict = "Everything Shoebox could check arrived." if (up and up.get("ok") and up.get("pending") == 0 and not (up.get("not_found")) and not (up.get("albums_live") or {}).get("albums_missing")) else "Some items could not be confirmed yet. See the sections above."
+    page = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Shoebox migration receipt</title><style>
 body{font:15px/1.5 -apple-system,system-ui,sans-serif;max-width:760px;margin:30px auto;padding:0 16px;color:#1d1d1b}h1{margin:0 0 4px}h2{margin:24px 0 6px;font-size:17px}table{width:100%%;border-collapse:collapse}td,th{padding:6px 8px;border-bottom:1px solid #ddd;text-align:left;vertical-align:top}td:first-child{color:#555;width:45%%}
 .v{padding:12px 14px;border-radius:12px;background:#eef6ff;margin:14px 0;font-weight:600}small{color:#666}.f{margin-top:30px;color:#777;font-size:12.5px}</style></head><body>
-<h1>Migration receipt</h1><div>Made by Backstory %s on %s</div><div class="v">%s</div>%s
-<div class="f">This receipt was made on your own computer from what Backstory could read. The numbers for dates, locations and captions come from a random sample of the library's files; the Photos figures come from a copy of Photos' own database, which Apple does not document, so treat them as strong hints. Nothing was uploaded anywhere. Keep your original Takeout until you have checked Photos and iCloud yourself.</div></body></html>""" % (
+<h1>Migration receipt</h1><div>Made by Shoebox %s on %s</div><div class="v">%s</div>%s
+<div class="f">This receipt was made on your own computer from what Shoebox could read. The numbers for dates, locations and captions come from a random sample of the library's files; the Photos figures come from a copy of Photos' own database, which Apple does not document, so treat them as strong hints. Nothing was uploaded anywhere. Keep your original Takeout until you have checked Photos and iCloud yourself.</div></body></html>""" % (
         esc_(VERSION), esc_(time.strftime("%Y-%m-%d %H:%M")), esc_(verdict), "".join(sec))
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    path = REPORTS_DIR / ("Backstory receipt %s.html" % time.strftime("%Y-%m-%d %H%M%S"))
+    path = REPORTS_DIR / ("Shoebox receipt %s.html" % time.strftime("%Y-%m-%d %H%M%S"))
     path.write_text(page, encoding="utf-8")
     return str(path), page
 
@@ -3280,7 +3280,7 @@ body{font:15px/1.5 -apple-system,system-ui,sans-serif;max-width:760px;margin:30p
 def diagnostics_text():
     with LOCK:
         st = {k: STATE.get(k) for k in ("state", "kind", "message")}
-    L = ["Backstory diagnostics", "Version: %s" % VERSION, "System: %s, Python %s%s" % (platform.platform(), platform.python_version(), " (packaged app)" if FROZEN else ""),
+    L = ["Shoebox diagnostics", "Version: %s" % VERSION, "System: %s, Python %s%s" % (platform.platform(), platform.python_version(), " (packaged app)" if FROZEN else ""),
          "Tools: " + ", ".join("%s %s" % kv for kv in _tool_versions().items()), "Now: %s / %s / %s" % (st["state"], st["kind"], st["message"]), "", "Recent runs:"]
     for e in list_history(8):
         L.append("- %s  %s  %s%s  %s" % (time.strftime("%Y-%m-%d %H:%M", time.localtime(e["started"])), e["title"], e["state"],
@@ -3348,7 +3348,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         # only accept requests from our own page: right Host, same-origin, and the per-run token
-        if not self._local() or self.headers.get("X-Backstory-Token") != TOKEN:
+        if not self._local() or self.headers.get("X-Shoebox-Token") != TOKEN:
             return self._send(403, "{}")
         org = self.headers.get("Origin")
         if org and org.split("://", 1)[-1].rsplit(":", 1)[0].strip("[]") not in ("127.0.0.1", "localhost", "::1"):
@@ -3664,7 +3664,7 @@ class Handler(BaseHTTPRequestHandler):
 
 PAGE = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Backstory</title><link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDI0IDEwMjQiIHdpZHRoPSIxMDI0IiBoZWlnaHQ9IjEwMjQiPgo8ZGVmcz4KPGxpbmVhckdyYWRpZW50IGlkPSJiZyIgeDE9IjAiIHkxPSIwIiB4Mj0iMSIgeTI9IjEiPjxzdG9wIG9mZnNldD0iMCIgc3RvcC1jb2xvcj0iIzViNWJmMCIvPjxzdG9wIG9mZnNldD0iLjU1IiBzdG9wLWNvbG9yPSIjN2E0ZGYwIi8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjMTRiOGM0Ii8+PC9saW5lYXJHcmFkaWVudD4KPGxpbmVhckdyYWRpZW50IGlkPSJza3kiIHgxPSIwIiB5MT0iMCIgeDI9IjAiIHkyPSIxIj48c3RvcCBvZmZzZXQ9IjAiIHN0b3AtY29sb3I9IiM4ZmQzZmYiLz48c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiNmZmU2YjMiLz48L2xpbmVhckdyYWRpZW50Pgo8ZmlsdGVyIGlkPSJzaCIgeD0iLTIwJSIgeT0iLTIwJSIgd2lkdGg9IjE0MCUiIGhlaWdodD0iMTUwJSI+PGZlRHJvcFNoYWRvdyBkeD0iMCIgZHk9IjE4IiBzdGREZXZpYXRpb249IjIyIiBmbG9vZC1jb2xvcj0iIzFhMTA1MCIgZmxvb2Qtb3BhY2l0eT0iLjM1Ii8+PC9maWx0ZXI+CjxmaWx0ZXIgaWQ9InNoMiIgeD0iLTMwJSIgeT0iLTMwJSIgd2lkdGg9IjE2MCUiIGhlaWdodD0iMTcwJSI+PGZlRHJvcFNoYWRvdyBkeD0iMCIgZHk9IjgiIHN0ZERldmlhdGlvbj0iMTAiIGZsb29kLWNvbG9yPSIjM2ExMDAwIiBmbG9vZC1vcGFjaXR5PSIuMzUiLz48L2ZpbHRlcj4KPC9kZWZzPgo8cmVjdCB3aWR0aD0iMTAyNCIgaGVpZ2h0PSIxMDI0IiByeD0iMjMwIiBmaWxsPSJ1cmwoI2JnKSIvPgo8Y2lyY2xlIGN4PSI4NjAiIGN5PSIxNzAiIHI9IjIzMCIgZmlsbD0iI2ZmZiIgb3BhY2l0eT0iLjA3Ii8+CjxnIHRyYW5zZm9ybT0icm90YXRlKC03IDQ4MCA1MjApIiBmaWx0ZXI9InVybCgjc2gpIj4KICA8cmVjdCB4PSIxOTAiIHk9IjE1MCIgd2lkdGg9IjYwMCIgaGVpZ2h0PSI3MjAiIHJ4PSIzNCIgZmlsbD0iI2ZmZmRmOCIvPgogIDxyZWN0IHg9IjI0MCIgeT0iMjAwIiB3aWR0aD0iNTAwIiBoZWlnaHQ9IjQ3MCIgcng9IjE0IiBmaWxsPSJ1cmwoI3NreSkiLz4KICA8Y2lyY2xlIGN4PSI2MTAiIGN5PSIzMjAiIHI9IjYyIiBmaWxsPSIjZmZiMzQ3Ii8+CiAgPHBhdGggZD0iTTI0MCA2MDAgTDQwMCA0MzAgTDUwMCA1NDAgTDU5MCA0NTAgTDc0MCA2MTAgTDc0MCA2NTYgYTE0IDE0IDAgMCAxIC0xNCAxNCBMMjU0IDY3MCBhMTQgMTQgMCAwIDEgLTE0IC0xNCBaIiBmaWxsPSIjM2Y2ZmQ4Ii8+CiAgPHBhdGggZD0iTTI0MCA2NDAgTDM2MCA1NDAgTDQ3MCA2MzAgTDU2MCA1NjAgTDc0MCA2NTAgTDc0MCA2NTYgYTE0IDE0IDAgMCAxIC0xNCAxNCBMMjU0IDY3MCBhMTQgMTQgMCAwIDEgLTE0IC0xNCBaIiBmaWxsPSIjMmM0ZmE4Ii8+CiAgPHJlY3QgeD0iMjUwIiB5PSI3MjIiIHdpZHRoPSIzMzAiIGhlaWdodD0iMjYiIHJ4PSIxMyIgZmlsbD0iI2M5Y2JlMCIvPgogIDxyZWN0IHg9IjI1MCIgeT0iNzcyIiB3aWR0aD0iMjIwIiBoZWlnaHQ9IjI2IiByeD0iMTMiIGZpbGw9IiNkY2RkZWQiLz4KPC9nPgo8ZyBmaWx0ZXI9InVybCgjc2gyKSIgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNjkwIDYxMCkiPgogIDxwYXRoIGQ9Ik0wIC0xNTAgQy04NCAtMTUwIC0xNDYgLTg4IC0xNDYgLTEwIEMtMTQ2IDc4IC01MCAxNTAgMCAyMzIgQzUwIDE1MCAxNDYgNzggMTQ2IC0xMCBDMTQ2IC04OCA4NCAtMTUwIDAgLTE1MCBaIiBmaWxsPSIjZmY1YTRlIiBzdHJva2U9IiNmZmYiIHN0cm9rZS13aWR0aD0iMjIiLz4KICA8Y2lyY2xlIGN4PSIwIiBjeT0iLTEwIiByPSI1NCIgZmlsbD0iI2ZmZiIvPgogIDxwYXRoIGQ9Ik0tMjYgLTggbDIwIDIyIGwzOCAtNDYiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2ZmNWE0ZSIgc3Ryb2tlLXdpZHRoPSIyMCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+CjwvZz4KPC9zdmc+Cg==">
+<title>Shoebox</title><link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDI0IDEwMjQiIHdpZHRoPSIxMDI0IiBoZWlnaHQ9IjEwMjQiPgo8ZGVmcz4KPGxpbmVhckdyYWRpZW50IGlkPSJiZyIgeDE9IjAiIHkxPSIwIiB4Mj0iMSIgeTI9IjEiPjxzdG9wIG9mZnNldD0iMCIgc3RvcC1jb2xvcj0iIzViNWJmMCIvPjxzdG9wIG9mZnNldD0iLjU1IiBzdG9wLWNvbG9yPSIjN2E0ZGYwIi8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjMTRiOGM0Ii8+PC9saW5lYXJHcmFkaWVudD4KPGxpbmVhckdyYWRpZW50IGlkPSJib3giIHgxPSIwIiB5MT0iMCIgeDI9IjAiIHkyPSIxIj48c3RvcCBvZmZzZXQ9IjAiIHN0b3AtY29sb3I9IiNmMGI3NzgiLz48c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiNkMjhmNGQiLz48L2xpbmVhckdyYWRpZW50Pgo8bGluZWFyR3JhZGllbnQgaWQ9ImxpZCIgeDE9IjAiIHkxPSIwIiB4Mj0iMCIgeTI9IjEiPjxzdG9wIG9mZnNldD0iMCIgc3RvcC1jb2xvcj0iI2ZmZDI5YyIvPjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iI2VhYTk2NiIvPjwvbGluZWFyR3JhZGllbnQ+CjxsaW5lYXJHcmFkaWVudCBpZD0ic2t5IiB4MT0iMCIgeTE9IjAiIHgyPSIwIiB5Mj0iMSI+PHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjOGZkM2ZmIi8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjZmZlNmIzIi8+PC9saW5lYXJHcmFkaWVudD4KPGZpbHRlciBpZD0ic2giIHg9Ii0yMCUiIHk9Ii0yMCUiIHdpZHRoPSIxNDAlIiBoZWlnaHQ9IjE1MCUiPjxmZURyb3BTaGFkb3cgZHg9IjAiIGR5PSIxNCIgc3RkRGV2aWF0aW9uPSIxNiIgZmxvb2QtY29sb3I9IiMxYTEwNTAiIGZsb29kLW9wYWNpdHk9Ii4zNSIvPjwvZmlsdGVyPgo8L2RlZnM+CjxyZWN0IHdpZHRoPSIxMDI0IiBoZWlnaHQ9IjEwMjQiIHJ4PSIyMzAiIGZpbGw9InVybCgjYmcpIi8+CjxjaXJjbGUgY3g9Ijg2MCIgY3k9IjE3MCIgcj0iMjMwIiBmaWxsPSIjZmZmIiBvcGFjaXR5PSIuMDciLz4KPGcgZmlsdGVyPSJ1cmwoI3NoKSI+CiAgPGcgdHJhbnNmb3JtPSJyb3RhdGUoLTE0IDMzMCA0MjApIj48cmVjdCB4PSIyMzAiIHk9IjE3MCIgd2lkdGg9IjI1MCIgaGVpZ2h0PSIzMDAiIHJ4PSIxNiIgZmlsbD0iI2ZmZmRmOCIvPjxyZWN0IHg9IjI1MCIgeT0iMTkwIiB3aWR0aD0iMjEwIiBoZWlnaHQ9IjE5MCIgcng9IjgiIGZpbGw9IiNmZjlkOGEiLz48Y2lyY2xlIGN4PSIzOTUiIGN5PSIyNTAiIHI9IjI2IiBmaWxsPSIjZmZmM2M0Ii8+PC9nPgogIDxnIHRyYW5zZm9ybT0icm90YXRlKDEyIDcwMCA0MjApIj48cmVjdCB4PSI1NjAiIHk9IjE1MCIgd2lkdGg9IjI1MCIgaGVpZ2h0PSIzMDAiIHJ4PSIxNiIgZmlsbD0iI2ZmZmRmOCIvPjxyZWN0IHg9IjU4MCIgeT0iMTcwIiB3aWR0aD0iMjEwIiBoZWlnaHQ9IjE5MCIgcng9IjgiIGZpbGw9IiM3ZmQ2YzIiLz48cGF0aCBkPSJNNTgwIDM0MCBMNjUwIDI2MCBMNzAwIDMyMCBMNzQwIDI3MCBMNzkwIDM0MCBaIiBmaWxsPSIjMmM4ZjdhIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0icm90YXRlKC0yIDUxMiA0MDApIj48cmVjdCB4PSIzODAiIHk9IjEyMCIgd2lkdGg9IjI3MCIgaGVpZ2h0PSIzMzAiIHJ4PSIxNiIgZmlsbD0iI2ZmZmRmOCIvPjxyZWN0IHg9IjQwMCIgeT0iMTQwIiB3aWR0aD0iMjMwIiBoZWlnaHQ9IjIxMCIgcng9IjgiIGZpbGw9InVybCgjc2t5KSIvPjxjaXJjbGUgY3g9IjU2MCIgY3k9IjIwNSIgcj0iMzAiIGZpbGw9IiNmZmIzNDciLz48cGF0aCBkPSJNNDAwIDM0MCBMNDcwIDI1MCBMNTI1IDMxNSBMNTcwIDI2MCBMNjMwIDM0MCBaIiBmaWxsPSIjM2Y2ZmQ4Ii8+PHJlY3QgeD0iNDAwIiB5PSIzNzIiIHdpZHRoPSIxNTAiIGhlaWdodD0iMTYiIHJ4PSI4IiBmaWxsPSIjYzljYmUwIi8+PC9nPgogIDxyZWN0IHg9IjE1MCIgeT0iNDAwIiB3aWR0aD0iNzI0IiBoZWlnaHQ9IjQwMCIgcng9IjQwIiBmaWxsPSJ1cmwoI2JveCkiLz4KICA8cmVjdCB4PSIxMjAiIHk9IjM2MCIgd2lkdGg9Ijc4NCIgaGVpZ2h0PSIxMjAiIHJ4PSIzNiIgZmlsbD0idXJsKCNsaWQpIi8+CiAgPHJlY3QgeD0iMTIwIiB5PSI0NDAiIHdpZHRoPSI3ODQiIGhlaWdodD0iMjYiIGZpbGw9IiMwMDAiIG9wYWNpdHk9Ii4wOCIvPgogIDxyZWN0IHg9IjQwMCIgeT0iNTQwIiB3aWR0aD0iMjI0IiBoZWlnaHQ9IjQ2IiByeD0iMjMiIGZpbGw9IiNmZmYiIG9wYWNpdHk9Ii41NSIvPgo8L2c+Cjwvc3ZnPgo=">
 <style>
 :root{--bg:#f6f6f4;--card:#fff;--ink:#1d1d1b;--mute:#6b6b66;--line:#dcdcd6;--acc:#2563eb;--ok:#15803d;--bad:#b91c1c;--warn:#b45309}
 @media (prefers-color-scheme:dark){:root{--bg:#161615;--card:#1f1f1e;--ink:#eeeeea;--mute:#9a9a94;--line:#34342f;--acc:#60a5fa;--ok:#4ade80;--bad:#f87171;--warn:#fbbf24}}
@@ -4032,7 +4032,7 @@ body[data-tab=history] .route,body[data-tab=help] .route{display:none}
 .updbar{flex-wrap:nowrap!important}.updbar .rt-acts{margin-left:0}
 </style></head><body><div id="ack" style="display:none"><div class="ackbox" role="dialog" aria-modal="true" aria-labelledby="acktitle">
 <h2 id="acktitle">Before you start</h2>
-<p>Backstory changes, copies, moves and (if you choose) deletes files. Please read this once:</p>
+<p>Shoebox changes, copies, moves and (if you choose) deletes files. Please read this once:</p>
 <ul>
 <li><b>Back up your originals</b> (your Takeout zip files or folders) before you begin.</li>
 <li><b>Preview first.</b> Every tab starts with <i>Preview only</i> ticked. It changes nothing.</li>
@@ -4048,30 +4048,26 @@ body[data-tab=history] .route,body[data-tab=help] .route{display:none}
 <header class="hero">
   
   <div class="brand">
-    <svg class="logo" viewBox="0 0 1024 1024" role="img" aria-label="Backstory logo"><defs>
+    <svg class="logo" viewBox="0 0 1024 1024" role="img" aria-label="Shoebox logo"><defs>
 <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5b5bf0"/><stop offset=".55" stop-color="#7a4df0"/><stop offset="1" stop-color="#14b8c4"/></linearGradient>
+<linearGradient id="box" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f0b778"/><stop offset="1" stop-color="#d28f4d"/></linearGradient>
+<linearGradient id="lid" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffd29c"/><stop offset="1" stop-color="#eaa966"/></linearGradient>
 <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8fd3ff"/><stop offset="1" stop-color="#ffe6b3"/></linearGradient>
-<filter id="sh" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#1a1050" flood-opacity=".35"/></filter>
-<filter id="sh2" x="-30%" y="-30%" width="160%" height="170%"><feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#3a1000" flood-opacity=".35"/></filter>
+<filter id="sh" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="14" stdDeviation="16" flood-color="#1a1050" flood-opacity=".35"/></filter>
 </defs>
 <rect width="1024" height="1024" rx="230" fill="url(#bg)"/>
 <circle cx="860" cy="170" r="230" fill="#fff" opacity=".07"/>
-<g transform="rotate(-7 480 520)" filter="url(#sh)">
-  <rect x="190" y="150" width="600" height="720" rx="34" fill="#fffdf8"/>
-  <rect x="240" y="200" width="500" height="470" rx="14" fill="url(#sky)"/>
-  <circle cx="610" cy="320" r="62" fill="#ffb347"/>
-  <path d="M240 600 L400 430 L500 540 L590 450 L740 610 L740 656 a14 14 0 0 1 -14 14 L254 670 a14 14 0 0 1 -14 -14 Z" fill="#3f6fd8"/>
-  <path d="M240 640 L360 540 L470 630 L560 560 L740 650 L740 656 a14 14 0 0 1 -14 14 L254 670 a14 14 0 0 1 -14 -14 Z" fill="#2c4fa8"/>
-  <rect x="250" y="722" width="330" height="26" rx="13" fill="#c9cbe0"/>
-  <rect x="250" y="772" width="220" height="26" rx="13" fill="#dcdded"/>
-</g>
-<g filter="url(#sh2)" transform="translate(690 610)">
-  <path d="M0 -150 C-84 -150 -146 -88 -146 -10 C-146 78 -50 150 0 232 C50 150 146 78 146 -10 C146 -88 84 -150 0 -150 Z" fill="#ff5a4e" stroke="#fff" stroke-width="22"/>
-  <circle cx="0" cy="-10" r="54" fill="#fff"/>
-  <path d="M-26 -8 l20 22 l38 -46" fill="none" stroke="#ff5a4e" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+<g filter="url(#sh)">
+  <g transform="rotate(-14 330 420)"><rect x="230" y="170" width="250" height="300" rx="16" fill="#fffdf8"/><rect x="250" y="190" width="210" height="190" rx="8" fill="#ff9d8a"/><circle cx="395" cy="250" r="26" fill="#fff3c4"/></g>
+  <g transform="rotate(12 700 420)"><rect x="560" y="150" width="250" height="300" rx="16" fill="#fffdf8"/><rect x="580" y="170" width="210" height="190" rx="8" fill="#7fd6c2"/><path d="M580 340 L650 260 L700 320 L740 270 L790 340 Z" fill="#2c8f7a"/></g>
+  <g transform="rotate(-2 512 400)"><rect x="380" y="120" width="270" height="330" rx="16" fill="#fffdf8"/><rect x="400" y="140" width="230" height="210" rx="8" fill="url(#sky)"/><circle cx="560" cy="205" r="30" fill="#ffb347"/><path d="M400 340 L470 250 L525 315 L570 260 L630 340 Z" fill="#3f6fd8"/><rect x="400" y="372" width="150" height="16" rx="8" fill="#c9cbe0"/></g>
+  <rect x="150" y="400" width="724" height="400" rx="40" fill="url(#box)"/>
+  <rect x="120" y="360" width="784" height="120" rx="36" fill="url(#lid)"/>
+  <rect x="120" y="440" width="784" height="26" fill="#000" opacity=".08"/>
+  <rect x="400" y="540" width="224" height="46" rx="23" fill="#fff" opacity=".55"/>
 </g>
 </svg>
-    <div class="hname"><h1 title="Give every photo its backstory back: real dates, places and captions from your Google Photos export.">Backstory</h1></div>
+    <div class="hname"><h1 title="Get every photo out of the shoebox and back where it belongs: real dates, places and captions from your Google Photos export.">Shoebox</h1></div>
     <div class="hmeta"><span id="ver"></span><a href="#" id="vercheck" title="Check for updates" aria-label="Check for updates">&#8635;</a><span id="vermsg"></span></div>
   </div>
   <div class="fbar route" id="fbar">
@@ -4272,7 +4268,7 @@ body[data-tab=history] .route,body[data-tab=help] .route{display:none}
 <section class="pane" id="pane-history">
 <h2 class="ph">History and reports</h2>
 <div class="card"><small style="margin-top:0">Every run is saved here with a full report and a plain-text log, so you can see exactly what happened, even weeks later.</small>
-<div class="usef" style="margin:10px 0 0">Reports are kept in: <b id="repdir">Documents/Backstory Reports</b></div>
+<div class="usef" style="margin:10px 0 0">Reports are kept in: <b id="repdir">Documents/Shoebox Reports</b></div>
 <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><button id="hfolder">Open reports folder</button><button id="hdiag" data-tip="Copies your version, system, tool versions and the end of the latest log, so you can paste it when asking for help. Check it for private paths first.">Copy diagnostic info</button></div></div>
 <div id="hlist"></div>
 </section>
@@ -4292,7 +4288,7 @@ body[data-tab=history] .route,body[data-tab=help] .route{display:none}
 </section>
 <section class="pane" id="pane-photos">
 <h2 class="ph">Send to Apple Photos</h2>
-<div class="card"><small style="margin-top:0">Sends your finished library to the Photos app in batches, oldest first, so a Mac that is short of space can take a big library over time: Photos uploads each batch to iCloud, macOS frees the space, and Backstory waits before sending the next one. Live Photos stay together, and album folders become Photos albums.</small>
+<div class="card"><small style="margin-top:0">Sends your finished library to the Photos app in batches, oldest first, so a Mac that is short of space can take a big library over time: Photos uploads each batch to iCloud, macOS frees the space, and Shoebox waits before sending the next one. Live Photos stay together, and album folders become Photos albums.</small>
 <div class="gcheck" id="pcheck"></div>
 <div class="usef" style="margin-top:6px"><b>Library to send:</b> <span id="proot">the first folder in the Source list</span></div>
 <div class="opt"><div style="flex:1"><label for="pbatch" style="font-weight:600">Batch size</label><select id="pbatch" class="sel"><option value="2">About 2 GB</option><option value="5">About 5 GB</option><option value="10" selected>About 10 GB</option><option value="25">About 25 GB</option><option value="50">About 50 GB</option></select></div></div>
@@ -4309,7 +4305,7 @@ body[data-tab=history] .route,body[data-tab=help] .route{display:none}
 <div class="card"><small style="margin-top:0">A health check for a finished library: wasted space, the same file saved in several formats, folder problems, empty and ghost files, files that are only in iCloud, and useful statistics. It only reads, and it keeps a history so you can see whether your library is getting healthier or messier.</small>
 <div class="usef" style="margin-top:10px"><b>Library to check:</b> <span class="fnote"></span></div>
 <div class="opt"><input type="checkbox" id="hdeep"><div>Deep check<small>Reads the metadata of up to 40,000 files (instead of a sample of about 400) to find wrong extensions, missing dates and photos in the wrong year folder. Slower.</small></div></div>
-<div class="opt"><div style="flex:1"><label for="hauto" style="font-weight:600">Check again automatically</label><select id="hauto" class="sel"><option value="0">Off</option><option value="1">Every hour</option><option value="6">Every 6 hours</option><option value="24">Every day</option></select><small>Only while Backstory is open. A new check is skipped while another job is running.</small></div></div>
+<div class="opt"><div style="flex:1"><label for="hauto" style="font-weight:600">Check again automatically</label><select id="hauto" class="sel"><option value="0">Off</option><option value="1">Every hour</option><option value="6">Every 6 hours</option><option value="24">Every day</option></select><small>Only while Shoebox is open. A new check is skipped while another job is running.</small></div></div>
 <button class="p" id="hgo" style="margin-top:6px">Check library health</button></div>
 </section>
 <section class="pane" id="pane-monitor">
@@ -4318,14 +4314,14 @@ body[data-tab=history] .route,body[data-tab=help] .route{display:none}
 <small style="margin-top:4px">One report that answers: is my library healthy, is Photos making progress, what are the logs saying, and is the Mac itself in good shape? It combines the library health check, the iCloud upload status (speed and time left), the Photos and iCloud log check, and a look at Photos' processes, power, disk and network. It ends with a verdict and the few things to do first. It only reads.</small>
 <div class="hbtns"><button class="p" id="diaggo">Run full diagnostics</button></div></div>
 <div class="card"><b>Is everything in iCloud yet?</b>
-<small style="margin-top:4px">Reads a copy of your Photos library's database to count what has uploaded, how fast it is going, and whether it looks stuck. It also checks the files Backstory sent from your first Source folder. Apple does not document this database, so treat the numbers as a strong hint and confirm in Photos and on iCloud.com.</small>
+<small style="margin-top:4px">Reads a copy of your Photos library's database to count what has uploaded, how fast it is going, and whether it looks stuck. It also checks the files Shoebox sent from your first Source folder. Apple does not document this database, so treat the numbers as a strong hint and confirm in Photos and on iCloud.com.</small>
 <div class="opt"><div style="flex:1"><label for="uplib" style="font-weight:600">Photos library</label><select id="uplib" class="sel"><option value="">Find it automatically</option></select></div></div>
-<div class="opt"><input type="checkbox" id="upsent" checked><div>Also check the files Backstory sent<small>Compares each file sent from the first Source folder with Photos, by name and size.</small></div></div>
+<div class="opt"><input type="checkbox" id="upsent" checked><div>Also check the files Shoebox sent<small>Compares each file sent from the first Source folder with Photos, by name and size.</small></div></div>
 <div class="hbtns"><button class="p" id="upgo">Check upload status</button><button id="rcgo" title="A shareable page proving what arrived">Make a migration receipt</button></div><div id="upres"></div></div>
 <div class="card"><b>Log issues</b>
-<small style="margin-top:4px">Reads recent Photos, iCloud and Backstory errors that you never see in Console and explains them in plain language, with fixes. It only reads. Nothing is uploaded.</small>
+<small style="margin-top:4px">Reads recent Photos, iCloud and Shoebox errors that you never see in Console and explains them in plain language, with fixes. It only reads. Nothing is uploaded.</small>
 <div class="opt"><div style="flex:1"><label for="mhours" style="font-weight:600">Look back</label><select id="mhours" class="sel"><option value="1">1 hour</option><option value="6" selected>6 hours</option><option value="24">24 hours</option><option value="168">7 days</option></select></div></div>
-<div class="opt"><div style="flex:1"><label for="mauto" style="font-weight:600">Check automatically</label><select id="mauto" class="sel"><option value="0">Off</option><option value="15">Every 15 minutes</option><option value="60">Every hour</option></select><small>Only while Backstory is open (macOS asks permission before showing notifications).</small></div></div>
+<div class="opt"><div style="flex:1"><label for="mauto" style="font-weight:600">Check automatically</label><select id="mauto" class="sel"><option value="0">Off</option><option value="15">Every 15 minutes</option><option value="60">Every hour</option></select><small>Only while Shoebox is open (macOS asks permission before showing notifications).</small></div></div>
 <div class="hbtns"><button class="p" id="mongo">Check the logs</button></div>
 <div class="opt"><div style="flex:1"><label for="mpaste" style="font-weight:600">Or paste log text</label><textarea id="mpaste" placeholder="Paste lines from Console or a crash report here" spellcheck="false" style="min-height:70px"></textarea></div></div>
 <div class="hbtns"><button id="mpastego">Interpret the pasted text</button></div></div>
@@ -4342,7 +4338,7 @@ body[data-tab=history] .route,body[data-tab=help] .route{display:none}
 <script>
 var docTimer=null,DOC=null;
 const $=id=>document.getElementById(id), esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-async function post(u,b){const r=await fetch(u,{method:'POST',headers:{'X-Backstory-Token':'__TOKEN__'},body:JSON.stringify(b||{})});return r.json()}
+async function post(u,b){const r=await fetch(u,{method:'POST',headers:{'X-Shoebox-Token':'__TOKEN__'},body:JSON.stringify(b||{})});return r.json()}
 
 // ---- info buttons: long explanations live in hover / tap tooltips
 const tipEl=document.createElement('div');tipEl.id='tip';tipEl.setAttribute('role','tooltip');document.body.appendChild(tipEl);
@@ -4460,7 +4456,7 @@ function showSummary(s){
   const c=s.changes||{},v=s.dry_run?'would change':'changed';
   h+=`<h2>What ${s.dry_run?'would be':'was'} changed</h2><div class="tiles">${tile(c.dates,'dates '+v)}${tile(c.gps,'locations '+v)}${tile(c.desc,'captions '+v)}${tile(c.people,'files with people tagged')}${tile(c.favourites,'favourites marked')}</div>`;
   if(c.dates_filled||c.dates_corrected||c.gps_guessed||c.flag_future||c.flag_year)h+=`<h2>Dates and places from folder names</h2><div class="tiles">${tile(c.dates_filled||0,'dates filled from the folder name')}${tile(c.dates_corrected||0,'wrong dates corrected')}${tile(c.gps_guessed||0,'locations guessed (labelled)')}${tile(c.flag_future||0,'dates in the future, not fixed')}${tile(c.flag_year||0,'dates that do not fit the folder, not fixed')}</div>`;
-  if(s.drive||(s.status&&(s.status['copy-error']||0)>0))h+=`<div class="tip" style="border-color:var(--acc)"><b>Some files did not get copied.</b> ${s.drive&&s.drive.stopped?'The drive stopped answering, so Backstory paused. ':''}Everything that finished is remembered. Reconnect the drive if needed, then <button class="sm p" id="resumebtn">Continue where I left off</button></div>`;
+  if(s.drive||(s.status&&(s.status['copy-error']||0)>0))h+=`<div class="tip" style="border-color:var(--acc)"><b>Some files did not get copied.</b> ${s.drive&&s.drive.stopped?'The drive stopped answering, so Shoebox paused. ':''}Everything that finished is remembered. Reconnect the drive if needed, then <button class="sm p" id="resumebtn">Continue where I left off</button></div>`;
   h+=`<div class="tip" style="border-color:var(--acc)">${s.dry_run?'Would change':'Changed'} <b>${c.dates.toLocaleString()}</b> dates (${c.dates_added.toLocaleString()} added, ${c.dates_replaced.toLocaleString()} replaced), <b>${c.gps.toLocaleString()}</b> locations (${c.gps_added.toLocaleString()} added, ${c.gps_replaced.toLocaleString()} replaced) and <b>${c.desc.toLocaleString()}</b> captions.</div>`;
   h+='<h2>Information stored in the photos</h2>'+tbl(['Field','Added','Replaced','Left alone (different)','Already correct'],[['date','Date taken'],['gps','Location'],['desc','Description']].map(([k,l])=>{const f=s.fields[k]||{};return [l,(f.added||0).toLocaleString(),(f.replaced||0).toLocaleString(),(f.kept||0).toLocaleString(),(f.same||0).toLocaleString()]}));
   if((s.problems||[]).length)h+='<h2>Problems ('+s.problems.length+(s.problems.length>=100?'+':'')+')</h2>'+tbl(['File','What went wrong'],s.problems.map(p=>[esc(p.file),esc(p.detail||p.status)]))+'<small>These files were skipped. Every other file was processed. The full list is in the CSV report.</small>';
@@ -4656,10 +4652,10 @@ async function helpView(v){
     <div class="hbtns"><button class="p" id="sup1">Copy diagnostic info and email support</button><button id="sup2">Copy support email address</button></div><small id="supnote"></small>`;
     $('sup1').onclick=async()=>{const r=await post('/api/diagnostics');let ok=false;try{await navigator.clipboard.writeText(r.text);ok=true}catch(e){}
       $('supnote').textContent=ok?'Diagnostic info copied. Paste it into the email (Cmd+V). Check it for private paths first.':'Could not copy automatically: use History > Copy diagnostic info.';
-      location.href='mailto:'+email+'?subject='+encodeURIComponent('Backstory support ('+g.version+')')+'&body='+encodeURIComponent('What I was trying to do:\n\nWhat happened:\n\nDiagnostic info (paste here):\n')};
+      location.href='mailto:'+email+'?subject='+encodeURIComponent('Shoebox support ('+g.version+')')+'&body='+encodeURIComponent('What I was trying to do:\n\nWhat happened:\n\nDiagnostic info (paste here):\n')};
     $('sup2').onclick=async()=>{try{await navigator.clipboard.writeText(email);$('supnote').textContent='Copied '+email}catch(e){prompt('Support email:',email)}};return}
   if(v==='about'){
-    box.innerHTML=`<div class="md"><h2>About</h2><p><b>Backstory</b> version ${esc(g.version)}. Free, open source (MIT License). Everything runs on your computer; nothing is uploaded.</p><p>Not affiliated with Google or Apple. Support: <a href="mailto:${email}">${email}</a>. Project: <a href="https://github.com/daviddef/MetadataFixer" target="_blank" rel="noopener">github.com/daviddef/MetadataFixer</a></p>${md(g.notices||'')}<h2>License</h2><pre>${esc(g.license||'MIT License')}</pre></div>`;return}
+    box.innerHTML=`<div class="md"><h2>About</h2><p><b>Shoebox</b> version ${esc(g.version)}. Free, open source (MIT License). Everything runs on your computer; nothing is uploaded.</p><p>Not affiliated with Google or Apple. Support: <a href="mailto:${email}">${email}</a>. Project: <a href="https://github.com/daviddef/MetadataFixer" target="_blank" rel="noopener">github.com/daviddef/MetadataFixer</a></p>${md(g.notices||'')}<h2>License</h2><pre>${esc(g.license||'MIT License')}</pre></div>`;return}
 }
 document.querySelectorAll('#hsubnav button').forEach(b=>b.onclick=()=>helpView(b.dataset.v));
 document.querySelectorAll('a[data-help]').forEach(a=>a.onclick=e=>{e.preventDefault();showTab('help');helpView(a.dataset.help)});
@@ -4822,7 +4818,7 @@ function showHealth(s){
   if(ex.length){const mx=Math.max(...ex.map(e=>e[2]));h+=tbl(['Type','Files','Size',''],ex.map(e=>[esc(e[0]),e[1].toLocaleString(),esc(fmtB(e[2])),`<span class="mini" style="width:${Math.round(120*e[2]/mx)}px;background:var(--acc)"></span>`]))}
   if((st.years||[]).length){const my=Math.max(...st.years.map(y=>y[1]));h+='<small>Photos and videos by year (by file date)</small><div class="years">'+st.years.map(y=>`<div class="yr" title="${y[0]}: ${y[1].toLocaleString()}"><i style="height:${Math.max(3,Math.round(70*y[1]/my))}px"></i><span>${esc(y[0].slice(2))}</span></div>`).join('')+'</div>'}
   const r=st.raw||{};
-  if(r.total)h+=`<div class="tip"><b>RAW photos:</b> ${r.total.toLocaleString()} (${esc(fmtB(r.bytes))}). ${r.paired.toLocaleString()} sit next to a JPEG or HEIC with the same name (the RAW files take ${esc(fmtB(r.paired_raw_bytes))}, the JPEGs ${esc(fmtB(r.paired_jpg_bytes))}), and ${r.raw_only.toLocaleString()} have no JPEG. Keeping both is normal for editing; if you never edit RAW files, the RAWs of those pairs are the biggest single saving. Backstory never deletes them for you.</div>`;
+  if(r.total)h+=`<div class="tip"><b>RAW photos:</b> ${r.total.toLocaleString()} (${esc(fmtB(r.bytes))}). ${r.paired.toLocaleString()} sit next to a JPEG or HEIC with the same name (the RAW files take ${esc(fmtB(r.paired_raw_bytes))}, the JPEGs ${esc(fmtB(r.paired_jpg_bytes))}), and ${r.raw_only.toLocaleString()} have no JPEG. Keeping both is normal for editing; if you never edit RAW files, the RAWs of those pairs are the biggest single saving. Shoebox never deletes them for you.</div>`;
   if(st.live_pairs)h+=`<div class="tip"><b>Live Photos:</b> ${st.live_pairs.toLocaleString()} photos have a matching video, kept together.</div>`;
   if(st.deep&&st.deep.places&&st.deep.places.length)h+='<small>Where your photos were taken (in the files checked): '+st.deep.places.map(m=>esc(m[0])+' ('+m[1]+')').join('; ')+'</small>';
   if(st.deep&&st.deep.models&&st.deep.models.length)h+='<small>Most common cameras (in the files checked): '+st.deep.models.map(m=>esc(m[0])+' ('+m[1]+')').join(', ')+'</small>';
@@ -4859,15 +4855,15 @@ function uploadHTML(r){
   const eta=r.eta||{};
   if(eta.stalled)h+='<div class="tip" style="border-color:var(--bad)"><b>Uploads look stuck:</b> the number waiting has not fallen for about 45 minutes. <a href="#" id="whystuck">Check the logs for the cause</a> (Low Power Mode, a paused sync, no iCloud space and a lost network are the usual ones).</div>';
   else if(eta.rate_per_hour>0&&eta.eta_hours)h+=`<div class="tip" style="border-color:var(--acc)">Uploading about <b>${eta.rate_per_hour.toLocaleString()}</b> items an hour. About <b>${fmtEta(eta.eta_hours)}</b> left at that speed.</div>`;
-  else if(r.pending>0&&(eta.points||0)<2)h+='<div class="tip">Press the button again in a few minutes and Backstory will work out the upload speed and time left.</div>';
+  else if(r.pending>0&&(eta.points||0)<2)h+='<div class="tip">Press the button again in a few minutes and Shoebox will work out the upload speed and time left.</div>';
   const al=r.albums_live;if(al&&al.ok){const bad=al.albums_missing||al.albums_short||(al.live_found!=null&&al.live_found<al.live_expected);
     h+=`<div class="tip" style="border-color:${bad?'var(--warn)':'var(--ok)'}"><b>Albums and Live Photos:</b> ${al.albums.length-al.albums_missing-al.albums_short} of ${al.albums.length} albums arrived complete${al.albums_missing?', '+al.albums_missing+' missing':''}${al.albums_short?', '+al.albums_short+' with fewer photos than sent':''}. ${al.live_found!=null?'Live Photos in Photos: <b>'+al.live_found.toLocaleString()+'</b> of '+al.live_expected.toLocaleString()+' expected.':''}${(al.notes||[]).map(n=>' '+esc(n)).join('')}</div>`;
     if(al.albums&&al.albums.some(a=>a.found<a.expected))h+='<details class="more"><summary>Albums that are missing or short</summary>'+tbl(['Album','Sent','In Photos'],al.albums.filter(a=>a.found<a.expected).map(a=>[esc(a.name),a.expected.toLocaleString(),a.found.toLocaleString()]))+'</details>'}
   if(r.sent!=null&&r.sent>0){
-    if(r.wanted_note)h+='<div class="tip">Could not verify the files Backstory sent ('+esc(r.wanted_note)+').</div>';
+    if(r.wanted_note)h+='<div class="tip">Could not verify the files Shoebox sent ('+esc(r.wanted_note)+').</div>';
     else if(r.matched!=null){const ok=r.matched_uploaded===r.matched&&r.not_found===0;
-      h+=`<div class="tip" style="border-color:${ok?'var(--ok)':'var(--warn)'}"><b>Files Backstory sent:</b> ${r.matched.toLocaleString()} of ${r.sent.toLocaleString()} are in Photos, ${r.matched_uploaded.toLocaleString()} of those are in iCloud${r.not_found?`; ${r.not_found.toLocaleString()} were not found in Photos (skipped as duplicates, still importing, or renamed)`:''}.${(r.missing_examples||[]).length?'<br>Not found: '+r.missing_examples.map(esc).join(', '):''}</div>`;
-      if(ok)h+='<h2>Ready to retire the staging copy?</h2><div class="rec"><div class="why" style="margin:0">All files Backstory sent are in iCloud. Before you remove anything: (1) look through Photos and on iCloud.com (Photos) for a few years and albums; (2) compare the item counts; (3) keep a backup of your library on another drive; (4) <b>keep your Takeout zip files and the staging drive until you are satisfied</b>. The zips hold Google\'s original information and are your only copy of it.</div></div>'}}
+      h+=`<div class="tip" style="border-color:${ok?'var(--ok)':'var(--warn)'}"><b>Files Shoebox sent:</b> ${r.matched.toLocaleString()} of ${r.sent.toLocaleString()} are in Photos, ${r.matched_uploaded.toLocaleString()} of those are in iCloud${r.not_found?`; ${r.not_found.toLocaleString()} were not found in Photos (skipped as duplicates, still importing, or renamed)`:''}.${(r.missing_examples||[]).length?'<br>Not found: '+r.missing_examples.map(esc).join(', '):''}</div>`;
+      if(ok)h+='<h2>Ready to retire the staging copy?</h2><div class="rec"><div class="why" style="margin:0">All files Shoebox sent are in iCloud. Before you remove anything: (1) look through Photos and on iCloud.com (Photos) for a few years and albums; (2) compare the item counts; (3) keep a backup of your library on another drive; (4) <b>keep your Takeout zip files and the staging drive until you are satisfied</b>. The zips hold Google\'s original information and are your only copy of it.</div></div>'}}
   return h}
 async function checkUpload(){
   $('upgo').disabled=true;$('upres').innerHTML='<small>Reading the Photos database...</small>';
@@ -4886,14 +4882,14 @@ async function startMonitor(quiet,pasted){
 $('mongo').onclick=()=>startMonitor(false);
 $('mpastego').onclick=()=>{const t=$('mpaste').value;if(!t.trim()){alert('Paste some log text first');return}startMonitor(false,t)};
 function showMonitor(s){
-  const src=Object.entries(s.sources||{}).map(([k,v])=>({mac_log:'macOS log',crash_reports:'crash reports',backstory:'Backstory runs',pasted:'pasted text'}[k]+': '+v.toLocaleString()+' lines')).join(' &middot; ');
+  const src=Object.entries(s.sources||{}).map(([k,v])=>({mac_log:'macOS log',crash_reports:'crash reports',backstory:'Shoebox runs',pasted:'pasted text'}[k]+': '+v.toLocaleString()+' lines')).join(' &middot; ');
   let h=`<div class="tiles">${tile(s.issues.length,'issues found',s.issues.some(i=>i.sev==='bad')?'bad':s.issues.length?'':'ok')}${tile(s.lines,'log lines read')}${tile((s.other||[]).length,'unrecognised errors')}</div><small>${src}</small>`;
   if(s.note)h+=`<div class="tip">${esc(s.note)}</div>`;
   h+=(s.tips||[]).map(t=>`<div class="tip" style="border-color:var(--ok)">${esc(t)}</div>`).join('');
   h+=issuesHTML(s.issues,s.other);
   $('sumbody').innerHTML=h;$('sum').style.display='block';
   const bad=s.issues.filter(i=>i.new&&i.sev==='bad');
-  if(bad.length&&window.Notification&&Notification.permission==='granted'){try{new Notification('Backstory: '+bad[0].title,{body:bad[0].meaning})}catch(e){}}}
+  if(bad.length&&window.Notification&&Notification.permission==='granted'){try{new Notification('Shoebox: '+bad[0].title,{body:bad[0].meaning})}catch(e){}}}
 (function(){let a='0';try{a=localStorage.getItem('mon_auto')||'0'}catch(e){}$('mauto').value=a;
   $('mauto').onchange=()=>{try{localStorage.setItem('mon_auto',$('mauto').value)}catch(e){}if($('mauto').value!=='0'&&window.Notification&&Notification.permission==='default')Notification.requestPermission()};
   setInterval(async()=>{const m=+$('mauto').value;if(!m)return;let last=0;try{last=+localStorage.getItem('mon_last')||0}catch(e){}
@@ -4921,7 +4917,7 @@ function showCompare(s){
   h+=`<div class="tip" style="border-color:var(--acc)"><b>If you merge them</b> the library would hold about <b>${s.merged_files.toLocaleString()}</b> files. ${s.same_picture_conflicts?'If you also skip near-identical pictures it would hold about <b>'+s.merged_if_near_skipped.toLocaleString()+'</b>. ':''}Identical files are kept once; files with the same name that differ are both kept (the second becomes <i>name_1</i>).</div>`;
   const pic=(x)=>x.path?`<img src="/thumb?p=${encodeURIComponent(x.path)}" loading="lazy" alt="">`:'<div class="stnoimg">&#128247;</div>';
   const side=(x,lab)=>`<div class="cmpside">${pic(x)}<div class="simcap"><b>${esc(lab)}</b><span>${esc(x.name)}</span><span>${esc(x.where)}</span><span>${x.w&&x.h?x.w+' &times; '+x.h+' &middot; ':''}${esc(fmtB(x.size))}${x.date?' &middot; '+esc(x.date.slice(0,10)):''}${x.gps?' &middot; has location':''}</span></div></div>`;
-  if((s.conflicts||[]).length)h+=`<h2>Same name, but not the same file (${s.conflict_n.toLocaleString()})</h2><small style="margin-top:0">${s.same_picture_conflicts?s.same_picture_conflicts.toLocaleString()+' of these look like the same picture saved differently. ':''}A merge keeps both.</small>`+s.conflicts.map(c=>`<div class="card cmppair"><div class="cmpsides">${side(c.a,la)}${side(c.b,lb)}</div><div class="why">${c.same_picture?'<span class="badge okb">Same picture</span> ':'<span class="badge badb">Different pictures</span> '}${c.differences.length?esc(c.differences.join('; ')):'No difference in size, date, location or caption that Backstory can see.'}</div></div>`).join('');
+  if((s.conflicts||[]).length)h+=`<h2>Same name, but not the same file (${s.conflict_n.toLocaleString()})</h2><small style="margin-top:0">${s.same_picture_conflicts?s.same_picture_conflicts.toLocaleString()+' of these look like the same picture saved differently. ':''}A merge keeps both.</small>`+s.conflicts.map(c=>`<div class="card cmppair"><div class="cmpsides">${side(c.a,la)}${side(c.b,lb)}</div><div class="why">${c.same_picture?'<span class="badge okb">Same picture</span> ':'<span class="badge badb">Different pictures</span> '}${c.differences.length?esc(c.differences.join('; ')):'No difference in size, date, location or caption that Shoebox can see.'}</div></div>`).join('');
   if((s.similar||[]).length)h+=`<h2>Same picture, different size (${s.similar_n.toLocaleString()})</h2><small style="margin-top:0">Not identical files, but they look the same. Tick <i>Also skip near-identical pictures</i> in Guided to keep only the best copy (by your keeper rules) when you merge.</small>`+s.similar.map(c=>`<div class="card cmppair"><div class="cmpsides">${side(c.a,la)}${side(c.b,lb)}</div><div class="why">${c.keep?'<b>Merge would keep '+(c.keep==='a'?esc(la):c.keep==='b'?esc(lb):'either one')+'</b> ('+esc(c.why)+'). ':''}${c.bigger==='same'?'Same size. ':esc((c.bigger==='a'?la:lb))+' has the larger picture. '}${esc(c.differences.join('; '))}</div></div>`).join('');
   if((s.refiled_examples||[]).length)h+='<h2>Same file, filed in a different folder ('+s.refiled.toLocaleString()+')</h2>'+tbl(['File',esc(la),esc(lb)],s.refiled_examples.map(r=>[esc(r.name),esc(r.a),esc(r.b)+(r.b_name!==r.name?' ('+esc(r.b_name)+')':'')]));
   const fl=(L,t)=>L.length?'<h2>'+t+'</h2>'+tbl(['Folder','Files'],L.map(r=>[esc(r.folder),r.files.toLocaleString()])):'';
@@ -4941,7 +4937,7 @@ function issuesHTML(issues,other){
   let h=(issues||[]).map(i=>`<div class="card"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="font-size:16px">${esc(i.title)}</b><span class="badge ${i.sev==='bad'?'badb':i.sev==='warn'?'warnb':''}">${i.sev==='bad'?'Fix':i.sev==='warn'?'Worth fixing':'For your information'}</span>${i.new?'<span class="badge okb">New</span>':''}<span class="mutes">${i.count.toLocaleString()} time${i.count===1?'':'s'}${i.last&&i.last!==i.first?' &middot; last '+esc(i.last):''}</span></div>
   <div class="why" style="margin:6px 0">${esc(i.meaning)}</div><b style="font-size:13px">What to do</b><ol style="margin:4px 0 8px;padding-left:20px">${i.fixes.map(f=>'<li>'+esc(f)+'</li>').join('')}</ol>
   <details><summary class="mutes">Show the log lines</summary><pre style="white-space:pre-wrap;font-size:11.5px;margin:6px 0">${i.examples.map(esc).join('\n')}</pre></details></div>`).join('');
-  if((other||[]).length)h+='<h2>Errors Backstory does not recognise</h2><small style="margin-top:0">These are errors without a known explanation. If something is not working, copy them into an email to support.</small><pre style="white-space:pre-wrap;font-size:11.5px">'+other.map(o=>esc(o.text)+'  (x'+o.count+')').join('\n')+'</pre>';
+  if((other||[]).length)h+='<h2>Errors Shoebox does not recognise</h2><small style="margin-top:0">These are errors without a known explanation. If something is not working, copy them into an email to support.</small><pre style="white-space:pre-wrap;font-size:11.5px">'+other.map(o=>esc(o.text)+'  (x'+o.count+')').join('\n')+'</pre>';
   return h}
 function showDiagnostics(s){
   const col={healthy:'var(--ok)',attention:'var(--warn)',problem:'var(--bad)'}[s.verdict],ic={ok:'&#10003;',warn:'!',bad:'&times;',info:'i'};
@@ -5154,7 +5150,7 @@ function renderDP(){document.querySelectorAll('.dpbox').forEach(box=>{const rn='
   <small style="margin-top:10px"><b>Bursts</b> (a run of photos taken a split second apart):</small>
   <label class="sub"><input type="radio" name="${rn}" data-burst="keep" ${DP.bursts!=='best'?'checked':''}> Keep every photo in a burst (recommended)</label>
   <label class="sub"><input type="radio" name="${rn}" data-burst="best" ${DP.bursts==='best'?'checked':''}> Treat burst photos like any other duplicates and keep only the best</label>
-  <small>When a group of duplicates is found, <b>one copy is kept</b>. Backstory goes down this list: the first rule that tells two copies apart decides. Untick a rule to ignore it; use the arrows to change the order. Whatever the kept copy is missing (a location, a caption, album names) is copied onto it from the others, never replacing anything.</small>
+  <small>When a group of duplicates is found, <b>one copy is kept</b>. Shoebox goes down this list: the first rule that tells two copies apart decides. Untick a rule to ignore it; use the arrows to change the order. Whatever the kept copy is missing (a location, a caption, album names) is copied onto it from the others, never replacing anything.</small>
   ${DP.order.map((k,i)=>`<div class="dprow ${DP.on.indexOf(k)>=0?'':'off'}"><span class="n">${i+1}</span><input type="checkbox" data-rule="${k}" ${DP.on.indexOf(k)>=0?'checked':''}><label>${DP_RULES[k]}</label><button class="sm" data-up="${k}" ${i?'':'disabled'} aria-label="Move up">&#9650;</button><button class="sm" data-down="${k}" ${i<DP.order.length-1?'':'disabled'} aria-label="Move down">&#9660;</button></div>`).join('')}
   <div class="hbtns"><button class="sm" data-dpreset="1">Reset to the recommended order</button></div></details>`;
   box.querySelectorAll('[data-must]').forEach(c=>c.onchange=()=>{DP.must=c.checked?DP.must.concat(c.dataset.must):DP.must.filter(x=>x!==c.dataset.must);saveDP()});

@@ -1,4 +1,4 @@
-# Backstory roadmap
+# Shoebox roadmap
 
 Goal: the safest, simplest, free tool for taking control of a photo and video library, starting with Google Takeout and growing into "get my whole library in order, then keep it that way".
 

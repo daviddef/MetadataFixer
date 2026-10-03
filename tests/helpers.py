@@ -1,4 +1,4 @@
-"""Shared fixtures for the Backstory end-to-end tests. Everything is created under a scratch folder; nothing touches real data."""
+"""Shared fixtures for the Shoebox end-to-end tests. Everything is created under a scratch folder; nothing touches real data."""
 import hashlib
 import json
 import os
@@ -114,7 +114,7 @@ def make_takeout_zips(base, n=2):
 
 
 def make_photos_library(path, files):
-    """A mock Photos library database with the columns Backstory reads. files = [(original name, size, uploaded)]."""
+    """A mock Photos library database with the columns Shoebox reads. files = [(original name, size, uploaded)]."""
     lib = Path(path)
     (lib / "database").mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(lib / "database" / "Photos.sqlite")

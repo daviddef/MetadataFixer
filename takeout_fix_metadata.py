@@ -1708,8 +1708,8 @@ def location_problem(lat, lon, place):
     return None
 
 
-GUESS_TAG = "Backstory: location guessed from folder name"
-GUESS_TAG_NB = "Backstory: location copied from nearby photos or a GPX track"
+GUESS_TAG = "Shoebox: location guessed from folder name"
+GUESS_TAG_NB = "Shoebox: location copied from nearby photos or a GPX track"
 
 # ---- Context from the other photos: nearby locations, GPX tracks and smarter dates -----------------------------------------
 CONF_RANK = {"low": 1, "medium": 2, "high": 3}
@@ -3220,7 +3220,7 @@ ZIPS_LOG = ".metadatafixer_zips.jsonl"
 
 
 def inside_photos_library(p):
-    """True for a Photos library (.photoslibrary) or anything inside one. Backstory only ever reads those."""
+    """True for a Photos library (.photoslibrary) or anything inside one. Shoebox only ever reads those."""
     q = Path(p)
     return any(part.lower().endswith(".photoslibrary") for part in q.parts)
 
@@ -4840,12 +4840,12 @@ def health_scan(roots, deep=False, progress=None, should_stop=None, exif_cap=400
             add("future", "meta", "bad", "Dates in the future", "%s photos claim to be taken in the future, which cannot be right." % f"{deep_stats['future']:,}",
                 deep_stats["future"], 0, "guided", "Open Guided", {"examples": deep_stats["future_examples"]})
         if deep_stats["fillable"]:
-            add("fillable", "meta", "info", "No date inside, but the folder name has one", "%s photos have no date taken, yet their folder name gives the year. Backstory can fill it in." % f"{deep_stats['fillable']:,}", deep_stats["fillable"], 0, "guided", "Open Guided")
+            add("fillable", "meta", "info", "No date inside, but the folder name has one", "%s photos have no date taken, yet their folder name gives the year. Shoebox can fill it in." % f"{deep_stats['fillable']:,}", deep_stats["fillable"], 0, "guided", "Open Guided")
         if deep_stats["loc_mismatch"]:
             add("locmis", "meta", "warn", "Locations that look mismatched", "%s photos have a location that is far from where their folder says they were taken (or sits at 0, 0, which is almost always an error). Nothing is changed automatically: check the examples." % f"{deep_stats['loc_mismatch']:,}",
                 deep_stats["loc_mismatch"], 0, "", "Review", {"examples": deep_stats["loc_examples"]})
         if deep_stats["guessable"]:
-            add("guessable", "meta", "info", "No location, but the folder names a place", "%s photos have no location, but the folder name mentions a place you could safely guess (for example %s). Backstory can add an approximate location and label it as a guess." % (f"{deep_stats['guessable']:,}", "; ".join(deep_stats["place_examples"][:2])),
+            add("guessable", "meta", "info", "No location, but the folder names a place", "%s photos have no location, but the folder name mentions a place you could safely guess (for example %s). Shoebox can add an approximate location and label it as a guess." % (f"{deep_stats['guessable']:,}", "; ".join(deep_stats["place_examples"][:2])),
                 deep_stats["guessable"], 0, "guided", "Open Guided", {"examples": deep_stats["place_examples"]})
     if shots:
         add("screenshots", "files", "info", "Screenshots", "%s look like screenshots (%s). Many people keep them out of the photo library." % (_pl(len(shots), "picture"), fmt_bytes(shot_b)), len(shots), shot_b, "similar", "Review similar")
@@ -4927,7 +4927,7 @@ def photos_albums_live_check(lib, root):
         if live_sql:
             out["live_found"] = con.execute(live_sql).fetchone()[0]
         else:
-            out["notes"].append("This Photos version does not record Live Photos in a way Backstory can read.")
+            out["notes"].append("This Photos version does not record Live Photos in a way Shoebox can read.")
         found = {}
         if "ZGENERICALBUM" in tables:
             gcols = {r[1] for r in con.execute("PRAGMA table_info(ZGENERICALBUM)")}
@@ -4946,7 +4946,7 @@ def photos_albums_live_check(lib, root):
                 for title, cnt in con.execute("SELECT g.ZTITLE, COUNT(*) FROM ZGENERICALBUM g JOIN %s j ON j.%s = g.Z_PK WHERE g.ZTITLE IS NOT NULL%s GROUP BY g.ZTITLE" % (join[0], join[1], trashed)):
                     found[title] = cnt
             else:
-                out["notes"].append("Backstory could not read album membership from this Photos version.")
+                out["notes"].append("Shoebox could not read album membership from this Photos version.")
         for name, n_exp in sorted(exp_albums.items()):
             n_found = found.get(name)
             out["albums"].append({"name": name, "expected": n_exp, "found": n_found if n_found is not None else 0})
@@ -5142,14 +5142,14 @@ def photos_upload_status(lib, wanted=None):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-# ---- Reading the logs Photos, iCloud and Backstory write, and saying what they mean ---------------------------
+# ---- Reading the logs Photos, iCloud and Shoebox write, and saying what they mean ---------------------------
 LOG_RULES = [
     {"id": "disk_full", "sev": "bad", "title": "The disk is full",
      "re": r"no space left on device|ENOSPC|NSPOSIXErrorDomain[^\n]{0,40}Code=28\b|insufficient (disk|storage) space|not enough (free )?(disk )?space|out of disk space",
-     "meaning": "Photos, iCloud or Backstory tried to write a file and the disk had no room.",
+     "meaning": "Photos, iCloud or Shoebox tried to write a file and the disk had no room.",
      "fixes": ["Free space: empty the Trash, delete large files you no longer need, or move files to an external drive (Apple menu > System Settings > General > Storage shows what takes space).",
                "In Photos > Settings > iCloud choose Optimize Mac Storage so originals can be replaced by small copies once they are in iCloud.",
-               "Pause sending to Photos until there is at least 20 GB free, then continue (Backstory's Photos tab can wait for room for you)."]},
+               "Pause sending to Photos until there is at least 20 GB free, then continue (Shoebox's Photos tab can wait for room for you)."]},
     {"id": "icloud_quota", "sev": "bad", "title": "iCloud storage is full",
      "re": r"CKErrorQuotaExceeded|quota ?exceeded|QuotaExceeded|iCloud storage (is )?full|not enough iCloud storage|storage limit",
      "meaning": "Your iCloud plan has no room left, so Photos cannot upload more.",
@@ -5172,11 +5172,11 @@ LOG_RULES = [
     {"id": "library_repair", "sev": "warn", "title": "Photos is repairing or rebuilding the library",
      "re": r"rebuilding (the )?(photos )?library|library (needs|is being) (repair|rebuil)|repairing (photo )?library|PLLibraryRebuild|photolibraryd[^\n]{0,60}rebuild",
      "meaning": "Photos is rebuilding its internal index. This can take hours on a large library and uses a lot of CPU and disk.",
-     "fixes": ["Leave Photos open and the Mac plugged in until it finishes.", "Avoid importing or running Backstory's Photos tab until it is done."]},
+     "fixes": ["Leave Photos open and the Mac plugged in until it finishes.", "Avoid importing or running Shoebox's Photos tab until it is done."]},
     {"id": "import_failed", "sev": "warn", "title": "Photos could not import some files",
      "re": r"(import|PHAssetCreationRequest)[^\n]{0,80}(failed|error)|PHPhotosErrorDomain[^\n]{0,30}(3300|3302|3303|3305|3311|3169)|unsupported (file )?(type|format)|cannot import|could not be imported",
      "meaning": "Specific files were rejected, usually an unsupported format (AVI, MKV, WMV...), a damaged file, or a 0-byte placeholder.",
-     "fixes": ["On Backstory's Convert tab, turn old videos into MP4 first.", "Run the Health tab to find empty (0 byte) and wrongly-named files, and fix them.",
+     "fixes": ["On Shoebox's Convert tab, turn old videos into MP4 first.", "Run the Health tab to find empty (0 byte) and wrongly-named files, and fix them.",
                "Re-run the Photos tab: files already imported are skipped, so only the missing ones are tried again."]},
     {"id": "low_power", "sev": "warn", "title": "Uploads are paused by Low Power Mode or the battery",
      "re": r"low power mode|LowPowerMode|battery[^\n]{0,40}(low|paus)|paus[a-z]{0,8} [^\n]{0,30}(battery|low power)|upload[^\n]{0,40}on battery",
@@ -5189,7 +5189,7 @@ LOG_RULES = [
     {"id": "permission", "sev": "bad", "title": "macOS blocked the request (permission)",
      "re": r"not authorized to send Apple events|errAEEventNotPermitted|NSOSStatusErrorDomain[^\n]{0,20}-1743|\(-1743\)|kTCCService|TCC[^\n]{0,30}(denied|deny)|Operation not permitted[^\n]{0,80}(photos|Pictures|Volumes)|not permitted to access",
      "meaning": "A privacy setting stops the app from controlling Photos or reading a folder.",
-     "fixes": ["System Settings > Privacy & Security > Automation: allow Backstory to control Photos.", "Privacy & Security > Files and Folders (or Full Disk Access): allow Backstory to read your library folder or external drive.", "Quit and reopen Backstory after changing a permission."]},
+     "fixes": ["System Settings > Privacy & Security > Automation: allow Shoebox to control Photos.", "Privacy & Security > Files and Folders (or Full Disk Access): allow Shoebox to read your library folder or external drive.", "Quit and reopen Shoebox after changing a permission."]},
     {"id": "thermal", "sev": "info", "title": "The Mac is hot and slowing down",
      "re": r"thermal (pressure|state|level)[^\n]{0,20}(serious|critical|heavy)|thermalPressure|thermal[^\n]{0,20}throttl",
      "meaning": "macOS slows background work to cool down, so uploads and analysis crawl.",
@@ -5197,7 +5197,7 @@ LOG_RULES = [
     {"id": "crash", "sev": "bad", "title": "Photos (or a Photos helper) crashed",
      "re": r"EXC_BAD_ACCESS|EXC_CRASH|Termination Reason|Process (Photos|photolibraryd|cloudphotod|assetsd|mediaanalysisd)[^\n]{0,40}(crash|exited abnormally|terminated)|jetsam|Application Specific Information",
      "meaning": "A Photos process stopped unexpectedly. If it repeats, a damaged file or a damaged library is a common cause.",
-     "fixes": ["Quit and reopen Photos. If it repeats, restart the Mac.", "Use smaller batches in Backstory's Photos tab and check the Health tab for damaged files.", "Try the Photos repair (Option + Command while opening Photos), after backing up."]},
+     "fixes": ["Quit and reopen Photos. If it repeats, restart the Mac.", "Use smaller batches in Shoebox's Photos tab and check the Health tab for damaged files.", "Try the Photos repair (Option + Command while opening Photos), after backing up."]},
     {"id": "bad_asset", "sev": "warn", "title": "A photo or video could not be read",
      "re": r"(asset|image|photo|video)[^\n]{0,60}(corrupt|damaged|unreadable|cannot be decoded|could not be decoded)|CGImageSource[^\n]{0,60}(failed|err)|AVFoundationErrorDomain[^\n]{0,20}-11800|kCGImageSourceStatus(Corrupt|ReadingHeader|UnknownType)",
      "meaning": "One or more files are damaged or in an unreadable format, so Photos could not show, analyse or upload them.",
@@ -5206,23 +5206,23 @@ LOG_RULES = [
      "re": r"input/output error|I/O error|\bEIO\b|Errno 5\b|NSPOSIXErrorDomain[^\n]{0,40}Code=(5|6)\b|disk (read|write) error|device not configured|Errno 6\b",
      "meaning": "The drive stopped answering or has a bad sector. This is common with loose cables, drives that sleep, or failing drives.",
      "fixes": ["Reconnect the cable, try another port, and avoid hubs.", "Run Disk Utility > First Aid on the drive.", "Copy the affected files in Finder. If it fails, the drive may be failing: back up everything else now.",
-               "Run Backstory again with the same Destination: finished files are skipped."]},
+               "Run Shoebox again with the same Destination: finished files are skipped."]},
     {"id": "volume_gone", "sev": "warn", "title": "A drive or library was not available",
      "re": r"volume[^\n]{0,40}(ejected|not mounted|unavailable|went away|disconnected)|library[^\n]{0,40}(not found|missing|unavailable|could not be opened)|No such file or directory[^\n]{0,60}\.photoslibrary",
      "meaning": "The drive holding the library was disconnected or asleep, or the library was moved.",
-     "fixes": ["Reconnect the drive and make sure it is mounted before opening Photos or Backstory.", "If you moved the library, open it again with Option held while opening Photos."]},
+     "fixes": ["Reconnect the drive and make sure it is mounted before opening Photos or Shoebox.", "If you moved the library, open it again with Option held while opening Photos."]},
     {"id": "analysis", "sev": "info", "title": "Photos is analysing your library (busy, not broken)",
      "re": r"(mediaanalysisd|photoanalysisd)[^\n]{0,80}(analy[sz]|running|progress|started)|analysis (is )?(running|in progress)|scene analysis|face (detection|clustering)",
      "meaning": "After a big import Photos spends hours indexing faces and scenes. It is heavy on CPU and can slow uploads.",
      "fixes": ["Leave the Mac plugged in and awake: it finishes by itself.", "Wait for it to finish before importing the next big batch."]},
-    {"id": "backstory_space", "sev": "bad", "title": "Backstory: not enough free space",
+    {"id": "backstory_space", "sev": "bad", "title": "Shoebox: not enough free space",
      "re": r"Not enough free space",
-     "meaning": "Backstory checked before unpacking a zip and found too little room on the Destination drive.",
+     "meaning": "Shoebox checked before unpacking a zip and found too little room on the Destination drive.",
      "fixes": ["Choose a Destination on a bigger or external drive.", "You need about twice your largest single zip while it is processed, plus room for the finished library."]},
-    {"id": "backstory_exiftool", "sev": "bad", "title": "Backstory: ExifTool is missing",
+    {"id": "backstory_exiftool", "sev": "bad", "title": "Shoebox: ExifTool is missing",
      "re": r"exiftool not found",
      "meaning": "The tool that writes dates and locations into photos could not be found.",
-     "fixes": ["The Mac app includes it. If you run from source: brew install exiftool, then restart Backstory."]},
+     "fixes": ["The Mac app includes it. If you run from source: brew install exiftool, then restart Shoebox."]},
 ]
 
 
@@ -5283,7 +5283,7 @@ def collect_crash_reports(days=7):
     try:
         cutoff = time.time() - days * 86400
         for p in base.iterdir():
-            if p.suffix.lower() in (".ips", ".crash", ".hang", ".diag") and re.match(r"(Photos|photolibraryd|cloudphotod|assetsd|mediaanalysisd|photoanalysisd|Backstory)", p.name):
+            if p.suffix.lower() in (".ips", ".crash", ".hang", ".diag") and re.match(r"(Photos|photolibraryd|cloudphotod|assetsd|mediaanalysisd|photoanalysisd|Shoebox)", p.name):
                 if p.stat().st_mtime >= cutoff:
                     out.append("%s Process %s crashed or hung (%s)" % (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(p.stat().st_mtime)), p.name.split("_")[0], p.suffix[1:]))
     except OSError:

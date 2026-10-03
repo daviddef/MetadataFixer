@@ -1,6 +1,6 @@
-# Backstory
+# Shoebox
 
-Gives every photo its backstory back. A free, local, private app for taking control of a photo and video library, starting with Google Photos Takeout: it puts the real dates, locations, captions and people back, merges and de-duplicates libraries, tidies the mess, checks the library's health and sends the result to Apple Photos. Nothing is uploaded; everything runs on your own computer.
+Gets every photo out of the shoebox and back where it belongs. A free, local, private app for taking control of a photo and video library, starting with Google Photos Takeout: it puts the real dates, locations, captions and people back, merges and de-duplicates libraries, tidies the mess, checks the library's health and sends the result to Apple Photos. Nothing is uploaded; everything runs on your own computer.
 
 ## What it does
 - **Fix metadata** from Google Takeout `.json` files (dates, locations, captions, people, favourites), across zip files and batches, with Live Photo re-pairing, edited-copy handling and dates from file names.

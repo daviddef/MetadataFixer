@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds "Backstory.app" and a .dmg. Run on a Mac (the GitHub workflow does this for you).
+# Builds "Shoebox.app" and a .dmg. Run on a Mac (the GitHub workflow does this for you).
 # Optional environment variables for signing + notarizing:
 #   SIGN_ID        "Developer ID Application: Your Name (TEAMID)"
 #   APPLE_ID  APPLE_APP_PASSWORD  APPLE_TEAM_ID     (for notarization)
@@ -37,7 +37,7 @@ iconutil -c icns "$ISET" -o "$WORK/icon.icns"
 
 echo "== PyInstaller"
 python3 -m pip install --quiet pyinstaller pywebview
-python3 -m PyInstaller --noconfirm --windowed --name "Backstory" \
+python3 -m PyInstaller --noconfirm --windowed --name "Shoebox" \
   --icon "$WORK/icon.icns" \
   --osx-bundle-identifier com.daviddef.metadatafixer \
   ${SIGN_ID:+--codesign-identity "$SIGN_ID" --osx-entitlements-file packaging/entitlements.plist} \
@@ -47,11 +47,11 @@ python3 -m PyInstaller --noconfirm --windowed --name "Backstory" \
   --hidden-import takeout_gui --hidden-import takeout_fix_metadata \
   --distpath dist --workpath "$WORK/pyi" --specpath "$WORK" \
   packaging/app_main.py
-APP="dist/Backstory.app"
+APP="dist/Shoebox.app"
 /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $APPVER" "$APP/Contents/Info.plist" 2>/dev/null || \
   /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $APPVER" "$APP/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c "Add :NSDesktopFolderUsageDescription string Backstory saves its reports on your Desktop." "$APP/Contents/Info.plist" 2>/dev/null || true
-/usr/libexec/PlistBuddy -c "Add :NSRemovableVolumesUsageDescription string Backstory reads and organises the photos on your drives." "$APP/Contents/Info.plist" 2>/dev/null || true
+/usr/libexec/PlistBuddy -c "Add :NSDesktopFolderUsageDescription string Shoebox saves its reports on your Desktop." "$APP/Contents/Info.plist" 2>/dev/null || true
+/usr/libexec/PlistBuddy -c "Add :NSRemovableVolumesUsageDescription string Shoebox reads and organises the photos on your drives." "$APP/Contents/Info.plist" 2>/dev/null || true
 
 if [ -n "${SIGN_ID:-}" ]; then
   echo "== Sign (inside out)"
@@ -62,10 +62,10 @@ if [ -n "${SIGN_ID:-}" ]; then
   codesign --verify --deep --strict --verbose=2 "$APP"
 fi
 
-DMG="dist/Backstory-${APPVER}-${ARCH}.dmg"
+DMG="dist/Shoebox-${APPVER}-${ARCH}.dmg"
 echo "== DMG"
 STAGE="$WORK/dmg"; mkdir -p "$STAGE"; cp -R "$APP" "$STAGE/"; ln -s /Applications "$STAGE/Applications"
-hdiutil create -volname "Backstory" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+hdiutil create -volname "Shoebox" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
 [ -n "${SIGN_ID:-}" ] && codesign --force --timestamp -s "$SIGN_ID" "$DMG"
 
 if [ -n "${SIGN_ID:-}" ] && [ -n "${APPLE_ID:-}" ]; then

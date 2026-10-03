@@ -1,4 +1,4 @@
-# Backstory user guide
+# Shoebox user guide
 
 Restores the real date, location, caption and people to photos and videos exported from Google Photos with Google Takeout, and helps you tidy the result. Free. Everything runs on your own computer; nothing is uploaded.
 
@@ -6,7 +6,7 @@ Questions or problems: **thestocksoup@gmail.com** (see [Support](#support)).
 
 ## Quick start
 
-1. **Back up first.** Keep your original Takeout zip files (or folders) somewhere safe. Backstory never changes your zips and, by default, only makes copies, but a backup is always the right first step.
+1. **Back up first.** Keep your original Takeout zip files (or folders) somewhere safe. Shoebox never changes your zips and, by default, only makes copies, but a backup is always the right first step.
 2. Open the app and go to the **Guided** tab.
 3. In the bar at the top, press **Add zip files...** (or **Add folders...**) and choose your Takeout. Then choose a **Destination**: a new, empty folder on a drive with enough free space.
 4. Pick your **style** at the top of Guided (Safest, Balanced, Fastest, Thorough or I like risk). Balanced is the default.
@@ -56,7 +56,7 @@ A page opens at `http://127.0.0.1:8765`. It is served only on your own computer.
 
 ## A short, light screen
 
-Backstory keeps each screen short:
+Shoebox keeps each screen short:
 - The five styles do the work: only **Preview only** stays on screen. Every other option is under **Customise**; tap it only if you want to change a single option.
 - Each option's explanation hides behind its small **i** button; tap the **i** to read it.
 - Results are a few tiles and tips with every section folded away. Tap a heading to open it, or use **Expand all** / **Collapse all**. Recommendations and route steps open when you tap them.
@@ -117,7 +117,7 @@ It changes nothing. The recommendations are suggestions, not guarantees: always 
 
 ## Merging several libraries into one
 
-Add every library to the Source list: Takeout zip files, folders, and even a Photos library (`.photoslibrary`, read-only) in any mix. Then use **Guided** (or **Fix**). Backstory builds one library in the Destination:
+Add every library to the Source list: Takeout zip files, folders, and even a Photos library (`.photoslibrary`, read-only) in any mix. Then use **Guided** (or **Fix**). Shoebox builds one library in the Destination:
 - folders with the same name combine, and identical photos are kept once, even across libraries;
 - different photos that happen to share a name are both kept (the second becomes `name_1`);
 - your folder structures are kept; nothing is flattened;
@@ -128,7 +128,7 @@ For Google Takeout sources the dates, locations and captions are restored from t
 
 ### Comparing two libraries ("how alike are they?")
 
-Open the **Merge** tab and use **Compare libraries** (it follows the matching and keeper rules in the duplicate settings). Pick two libraries (folders, a Photos library or zips) and Backstory tells you, without changing anything:
+Open the **Merge** tab and use **Compare libraries** (it follows the matching and keeper rules in the duplicate settings). Pick two libraries (folders, a Photos library or zips) and Shoebox tells you, without changing anything:
 - how alike they are, as a percentage;
 - which photos are in both, which are only in the first and which are only in the second;
 - photos that are **nearly the same** (the same picture saved at a different size or quality) and not just byte-for-byte copies, with small thumbnails so you can see the difference.
@@ -189,7 +189,7 @@ Every run is recorded automatically:
 - A plain-text **log**: the settings used, what happened step by step, how long it took, the version and tools, and a list of any problems. Useful if something goes wrong.
 - A **History** tab listing every run with its headline result, and buttons to open the report, the log, or the folder.
 
-Reports and logs are saved in `Documents/Backstory Reports`, one folder per run. Nothing is uploaded. If you need help, press **Copy diagnostic info** in the History tab and paste it into your message (check it for private paths first).
+Reports and logs are saved in `Documents/Shoebox Reports`, one folder per run. Nothing is uploaded. If you need help, press **Copy diagnostic info** in the History tab and paste it into your message (check it for private paths first).
 
 On the Guided tab, a short **checklist** shows whether your Takeout and Destination are set, whether the Destination has enough free space for your zip files, and whether ExifTool and ffmpeg are installed.
 
@@ -212,7 +212,7 @@ Before you start, in **Photos > Settings > iCloud**, turn on **iCloud Photos** a
 2. Either send it to Photos in batches as above, or move your **Photos library itself to the external drive** (quit Photos, copy the library there, hold Option while opening Photos and choose it, then Photos > Settings > General > Use as System Photo Library). With iCloud Photos on, the library on the drive is kept in sync.
 3. Keep the external drive and your Takeout zips until you have checked everything in Photos and iCloud.
 
-**Important:** Photos has no undo for imports and Backstory cannot take photos back out of Photos. Sending to Photos needs permission: the first time, macOS asks if Backstory may control Photos (allow it in System Settings > Privacy & Security > Automation).
+**Important:** Photos has no undo for imports and Shoebox cannot take photos back out of Photos. Sending to Photos needs permission: the first time, macOS asks if Shoebox may control Photos (allow it in System Settings > Privacy & Security > Automation).
 
 ## Library health (Health tab)
 
@@ -222,14 +222,14 @@ What it looks for:
 - **Space and duplicates:** duplicate files (same size and content at both ends), the same file saved in several formats, temporary and partial files (`.part`, `.tmp`, `.bak`), leftover set-aside folders, `.json` files, junk and cache files, and an estimate of **possible wasted space**.
 - **Folders:** empty folders, look-alike names (`Japan 2025`, `delete-Japan 2025`), `(1)` and `copy` markers, stray spaces, folders that differ only by capital letters, and very long paths.
 - **Files and ghosts:** empty (0-byte) files, files with the wrong extension (a `.jpg` that is really a `.heic`), old-format videos, and `.json` files whose photo is gone.
-- **iCloud and missing files:** files that are only in iCloud Drive and not on this disk (placeholders), which cannot be backed up, merged or imported until downloaded. If you add a Photos library, Backstory also reads a copy of its database for **experimental hints** such as items not yet uploaded to iCloud. Apple does not document that database, so treat those numbers as hints.
+- **iCloud and missing files:** files that are only in iCloud Drive and not on this disk (placeholders), which cannot be backed up, merged or imported until downloaded. If you add a Photos library, Shoebox also reads a copy of its database for **experimental hints** such as items not yet uploaded to iCloud. Apple does not document that database, so treat those numbers as hints.
 - **Dates and metadata:** photos with no date inside and photos in the wrong "Photos from YYYY" folder. A quick check reads a sample of about 400 files; tick **Deep check** to read up to 40,000.
 
-**The same file in different formats.** When a video is converted and the old copy is kept, you end up with `IMG_1.mov`, `IMG_1.mp4` and `IMG_1.avi`. Backstory finds files with the same name in the same folder that are the same video (their lengths match within about a second) or the same picture in different formats (for example HEIC and JPEG). A Live Photo (a still plus a video) is not counted. Each group shows the formats, sizes, lengths and resolutions, keeps the best one (preferring MP4, then the largest picture) and ticks the older ones. **Set aside the ticked older formats** moves them into an `_older_formats` folder. Nothing is deleted, and you can undo it from History.
+**The same file in different formats.** When a video is converted and the old copy is kept, you end up with `IMG_1.mov`, `IMG_1.mp4` and `IMG_1.avi`. Shoebox finds files with the same name in the same folder that are the same video (their lengths match within about a second) or the same picture in different formats (for example HEIC and JPEG). A Live Photo (a still plus a video) is not counted. Each group shows the formats, sizes, lengths and resolutions, keeps the best one (preferring MP4, then the largest picture) and ticks the older ones. **Set aside the ticked older formats** moves them into an `_older_formats` folder. Nothing is deleted, and you can undo it from History.
 
-**Statistics.** Library size by file type, photos and videos by year, the biggest folders and files, RAW photos (how many have a JPEG or HEIC with the same name, and how much space each takes; Backstory never deletes RAW files), Live Photos and the most common cameras.
+**Statistics.** Library size by file type, photos and videos by year, the biggest folders and files, RAW photos (how many have a JPEG or HEIC with the same name, and how much space each takes; Shoebox never deletes RAW files), Live Photos and the most common cameras.
 
-**Check again automatically.** Choose every hour, 6 hours or day. This runs only while Backstory is open and never while another job is running. A health check that runs in the background all the time, even when the app is closed, is on the roadmap.
+**Check again automatically.** Choose every hour, 6 hours or day. This runs only while Shoebox is open and never while another job is running. A health check that runs in the background all the time, even when the app is closed, is on the roadmap.
 
 ## Full diagnostics (Health tab)
 
@@ -243,13 +243,13 @@ Nothing is changed by diagnostics.
 
 ## Speed and safety notes
 
-- A repeat scan of an unchanged library is fast: Backstory remembers how each picture looks.
+- A repeat scan of an unchanged library is fast: Shoebox remembers how each picture looks.
 - A zip with a damaged or password-protected file inside no longer stops the run: that file is listed in the report, the rest carry on, and that zip is not marked as finished so you can run it again.
 - The app only answers requests from its own window.
 
 ## Time zones (Guided and Fix: *Correct the time zone of dates*)
 
-Google stores every photo time in **UTC**. Apple Photos reads a time with no zone as **local time**, so a photo taken at noon in Johannesburg could show 10:00, and one taken late in the evening could land on the wrong day. With this option on (it is on in every style), Backstory writes the **local wall-clock time together with its UTC offset** (for example *12:00 +02:00*):
+Google stores every photo time in **UTC**. Apple Photos reads a time with no zone as **local time**, so a photo taken at noon in Johannesburg could show 10:00, and one taken late in the evening could land on the wrong day. With this option on (it is on in every style), Shoebox writes the **local wall-clock time together with its UTC offset** (for example *12:00 +02:00*):
 - if the photo has a location, the time zone of that place is used (daylight saving included, from the computer's built-in time-zone data);
 - if it has no location, **this Mac's time zone** is used;
 - **videos keep UTC**, because video files define their times that way.
@@ -261,13 +261,13 @@ The zone for a location comes from the nearest of about 100 reference cities. Ne
 
 ## Smarter dates and locations (Guided and Fix, under Customise)
 
-- **Reconstruct missing dates from every clue.** For a photo with no date inside, Backstory combines the date in its **file name**, the **photos numbered either side of it** (IMG_0412 between two dated neighbours), its **folder name** and the file's **modified time**. Each result gets a **confidence** (high, medium, low; two clues that agree raise it) and says why in the report (*date_note*, *date_conf*). Choose the lowest confidence you will accept: *only when sure*, *fairly sure*, or *best guess*. A date that already exists is never changed.
+- **Reconstruct missing dates from every clue.** For a photo with no date inside, Shoebox combines the date in its **file name**, the **photos numbered either side of it** (IMG_0412 between two dated neighbours), its **folder name** and the file's **modified time**. Each result gets a **confidence** (high, medium, low; two clues that agree raise it) and says why in the report (*date_note*, *date_conf*). Choose the lowest confidence you will accept: *only when sure*, *fairly sure*, or *best guess*. A date that already exists is never changed.
 - **Fill missing locations from photos taken minutes apart** (⚠️). A photo with no location takes the location of photos taken within about 30 minutes before and after it when those are close together (or one very close neighbour within 15 minutes). It never replaces a location and is labelled with a keyword.
 - **Fill missing locations from a GPX track** (optional). Choose a `.gpx` file from a watch or app; each photo's time is matched to where the track says you were (interpolated between points, within about 10 minutes of a point). Use it with *Correct the time zone*. A GPX location beats a nearby-photo location, which beats a folder-name guess.
 
 ## Offline place names (Guided and Fix: *Write place names*)
 
-Backstory can turn a location into a place name **without going online**. It ships with a list of about **144,000 towns and cities** (from GeoNames, see the notices) and finds the nearest one to a photo's location in a fraction of a millisecond. With **Write place names (city, region, country) from the location** on, every photo that has a location (from Google's info file, already inside the photo, copied from nearby photos or a GPX track, or guessed from a folder) gets its **city, region and country** written into it (IPTC and XMP fields), unless it already has a city. Apple Photos works out place names for itself from the GPS location; **Lightroom, digiKam, Synology Photos** and most other apps read the ones written here.
+Shoebox can turn a location into a place name **without going online**. It ships with a list of about **144,000 towns and cities** (from GeoNames, see the notices) and finds the nearest one to a photo's location in a fraction of a millisecond. With **Write place names (city, region, country) from the location** on, every photo that has a location (from Google's info file, already inside the photo, copied from nearby photos or a GPX track, or guessed from a folder) gets its **city, region and country** written into it (IPTC and XMP fields), unless it already has a city. Apple Photos works out place names for itself from the GPS location; **Lightroom, digiKam, Synology Photos** and most other apps read the ones written here.
 - The town is only named when it is within about 60 km; farther out, only the region and country are written; in the middle of an ocean nothing is written.
 - It is nearest *town in the list*, so a spot in a suburb may name the neighbouring town.
 - The **Health** tab shows *Where your photos were taken* (the commonest places in the files it checked), the **location-mismatch** warning now also says where the location actually is, and the **migration receipt** reports how many photos have a place name.
@@ -276,7 +276,7 @@ Backstory can turn a location into a place name **without going online**. It shi
 
 ## Albums and Live Photos in Apple Photos
 
-After you check upload status (Monitor tab), Backstory also checks **whether your albums and Live Photos arrived**: how many album folders became albums with all their photos, which are missing or short, and how many Live Photos Photos holds against how many were sent. This reads a copy of Photos' own database, which Apple does not document, so treat it as a strong hint.
+After you check upload status (Monitor tab), Shoebox also checks **whether your albums and Live Photos arrived**: how many album folders became albums with all their photos, which are missing or short, and how many Live Photos Photos holds against how many were sent. This reads a copy of Photos' own database, which Apple does not document, so treat it as a strong hint.
 
 ## Migration receipt
 
@@ -292,32 +292,32 @@ Pixel *Motion Photos* (files like *PXL_…MP.jpg* or *MVIMG_…*) are a picture 
 
 ## Dates and places from folder names (Guided and Fix)
 
-Folder names carry clues. A folder called **2017**, **2026-06**, **June 2015** or **Photos from 2019** tells us when its pictures were probably taken; a folder called **Johannesburg**, **South Africa** or **Japan 2025** tells us where. Backstory can use these clues, **only to fill gaps or to flag things that look wrong**. Each option below is also recommended (with your own numbers) by **Check my files**, and each is in Guided and on the Fix tab. Preview first.
+Folder names carry clues. A folder called **2017**, **2026-06**, **June 2015** or **Photos from 2019** tells us when its pictures were probably taken; a folder called **Johannesburg**, **South Africa** or **Japan 2025** tells us where. Shoebox can use these clues, **only to fill gaps or to flag things that look wrong**. Each option below is also recommended (with your own numbers) by **Check my files**, and each is in Guided and on the Fix tab. Preview first.
 
 - **Fill missing dates from the folder name** (on by default, safe). A photo with *no* date inside, in a dated folder, gets the date from the folder (the middle of the year or month when only that is known). A date that already exists is never changed by this.
 - **Correct dates that disagree with the folder name, and dates in the future** (⚠️, off by default). A wrong *year* is only judged against folders that are just a date (*2017*, *2026-06*, *June 2015*, *Photos from 2019*), never against a name like *Room 2019 items*; a future date is corrected from any dated folder. If a photo in the *2017* folder says 2025, it probably lost its metadata somewhere (a "metadata strip"), and a date in the future (say 2028) cannot be right. This sets the date from the folder name. Only turn it on if you trust your folder names. Dates that are only a few months off from a month-named folder are flagged in the report, not changed.
-- **Guess a location from the folder name** (⚠️, off by default). Only for photos with **no** location, in a folder whose whole name is about a city or country (with years and words like *trip* or *holiday* allowed, so *Johannesburg 2019* and *Japan trip* count, but *Paris Hilton*, *Turkey Trot* and *Jordan's birthday* do not) (Backstory has a built-in offline list of about 300 well-known places). The location is the middle of that place, so it is approximate. Each guessed photo carries the keyword *Backstory: location guessed from folder name* so you can find or remove them, and the report says which folder it came from. A location a photo already has is **never** touched.
+- **Guess a location from the folder name** (⚠️, off by default). Only for photos with **no** location, in a folder whose whole name is about a city or country (with years and words like *trip* or *holiday* allowed, so *Johannesburg 2019* and *Japan trip* count, but *Paris Hilton*, *Turkey Trot* and *Jordan's birthday* do not) (Shoebox has a built-in offline list of about 300 well-known places). The location is the middle of that place, so it is approximate. Each guessed photo carries the keyword *Shoebox: location guessed from folder name* so you can find or remove them, and the report says which folder it came from. A location a photo already has is **never** touched.
 
 The **Health** tab also reports *Dates in the future*, *Dates that do not fit the folder*, *No date inside, but the folder name has one* and *No location, but the folder names a place*, with examples, and **Open Guided** takes you to the fix. It also reports **Locations that look mismatched**: a photo whose stored location is far from the place its folder names (more than about 300 km for a city, 1,500 km for a country, more for very large countries), or sits at 0, 0, which is almost always an error. These are only flagged (and listed in the report's *gps_flag* column), never changed.
 
 ## Slow or faulty drives (copying and moving)
 
-External drives hiccup. Every copy and move in Backstory is now built to cope:
+External drives hiccup. Every copy and move in Shoebox is now built to cope:
 - a file is written under a temporary name and only given its real name when it is complete and the right size;
-- if the drive reports an error, Backstory **waits, slows down and tries again** (up to six times with growing pauses), resuming a partly copied file instead of starting again;
-- if the drive disappears (cable pulled, drive asleep), Backstory waits up to ten minutes for it to come back;
+- if the drive reports an error, Shoebox **waits, slows down and tries again** (up to six times with growing pauses), resuming a partly copied file instead of starting again;
+- if the drive disappears (cable pulled, drive asleep), Shoebox waits up to ten minutes for it to come back;
 - when you **move** between drives, the original is only removed after the copy is complete and checked;
-- if the drive stops answering altogether, Backstory pauses instead of failing every file, and tells you. Reconnect the drive and press **Continue where I left off** (in the results, or on the run in **History**): everything that finished is remembered, so it carries on from where it stopped.
+- if the drive stops answering altogether, Shoebox pauses instead of failing every file, and tells you. Reconnect the drive and press **Continue where I left off** (in the results, or on the run in **History**): everything that finished is remembered, so it carries on from where it stopped.
 
-A banner under the progress bar shows when Backstory is pausing for the drive. If it keeps happening, the drive or its cable may be failing: back up what you can.
+A banner under the progress bar shows when Shoebox is pausing for the drive. If it keeps happening, the drive or its cable may be failing: back up what you can.
 
 ## Duplicate matching and which copy to keep
 
-Wherever Backstory finds the same picture twice (the **Similar** tab, **Guided**, and **Fix** with *skip near-identical pictures*), a panel called **How duplicates are matched, and which copy is kept** lets you set the rules. Your choices are remembered.
+Wherever Shoebox finds the same picture twice (the **Similar** tab, **Guided**, and **Fix** with *skip near-identical pictures*), a panel called **How duplicates are matched, and which copy is kept** lets you set the rules. Your choices are remembered.
 
 **Matching.** Pictures are always compared by how they *look*. Tick any of these to be stricter: the file name must match, the date and time taken must match, the width and height must match, the file format must match, the file size must match. Leave them all unticked to match by looks only.
 
-**Keeping one copy.** From each group of duplicates one copy is kept. Backstory goes down your list: the first rule that tells two copies apart decides. The recommended order is:
+**Keeping one copy.** From each group of duplicates one copy is kept. Shoebox goes down your list: the first rule that tells two copies apart decides. The recommended order is:
 1. a **favourite** (5 stars) beats one that is not;
 2. an **edited** version beats an untouched one, so your crops and colour fixes are not lost;
 3. **more pixels** (higher resolution) wins;
@@ -336,19 +336,19 @@ On the Similar tab you still review every group yourself: the best copy is marke
 
 ## Storyboard: before and after
 
-Before you commit, Backstory shows what will happen to a few of **your real photos**. In **Check my files** and in the Guided and Fix summaries (preview and real runs) you see cards with a thumbnail, the folder it goes to, and for each of **Date**, **Place** and **Caption** what it is now and what it becomes. Changed values are highlighted; unchanged ones are marked. Notes explain special cases: a date read from the file name, a Live Photo re-paired, an identical copy kept once (and the album name saved as a keyword), or a copy left out. A four-step strip above it summarises the run: found, restored, merged, result. The thumbnails are saved inside the report, so the report still shows them later.
+Before you commit, Shoebox shows what will happen to a few of **your real photos**. In **Check my files** and in the Guided and Fix summaries (preview and real runs) you see cards with a thumbnail, the folder it goes to, and for each of **Date**, **Place** and **Caption** what it is now and what it becomes. Changed values are highlighted; unchanged ones are marked. Notes explain special cases: a date read from the file name, a Live Photo re-paired, an identical copy kept once (and the album name saved as a keyword), or a copy left out. A four-step strip above it summarises the run: found, restored, merged, result. The thumbnails are saved inside the report, so the report still shows them later.
 
 ## Photos and iCloud monitor (Monitor tab)
 
-**Is everything in iCloud yet?** Backstory reads a copy of your Photos library's database (never the original) and shows how many items are in Photos, how many are uploaded to iCloud, and how many are waiting. If you check again later it works out your **upload speed and the time left**, and if the number waiting has not fallen for about 45 minutes it tells you uploads look **stuck** and offers to check the logs for the cause. It also checks **the files Backstory itself sent** (by name and size) against Photos, so you can see that every one of them arrived and uploaded. When they all have, it shows a short **Ready to retire the staging copy?** checklist. Keep your Takeout zip files and the staging drive until you have looked through Photos and iCloud.com. The zips hold Google's original information.
+**Is everything in iCloud yet?** Shoebox reads a copy of your Photos library's database (never the original) and shows how many items are in Photos, how many are uploaded to iCloud, and how many are waiting. If you check again later it works out your **upload speed and the time left**, and if the number waiting has not fallen for about 45 minutes it tells you uploads look **stuck** and offers to check the logs for the cause. It also checks **the files Shoebox itself sent** (by name and size) against Photos, so you can see that every one of them arrived and uploaded. When they all have, it shows a short **Ready to retire the staging copy?** checklist. Keep your Takeout zip files and the staging drive until you have looked through Photos and iCloud.com. The zips hold Google's original information.
 
-Apple does not document this database, and it changes between macOS versions, so these numbers are a strong hint rather than a guarantee. If it cannot be read, Backstory says so, and the Photos tab falls back to waiting for free space.
+Apple does not document this database, and it changes between macOS versions, so these numbers are a strong hint rather than a guarantee. If it cannot be read, Shoebox says so, and the Photos tab falls back to waiting for free space.
 
-**Log issues.** Photos and iCloud write errors that you never see in Console. **Check the logs** reads the last hour, 6 hours, day or week of Photos and iCloud errors from the macOS log, recent Photos crash reports, and Backstory's own failed runs. It groups them and explains each in plain language with what to do: a full disk, a full iCloud plan, a dropped network, an iCloud sign-in problem, a damaged Photos database, a repair or rebuild in progress, files Photos refused to import, Low Power Mode, a paused sync, permissions that block Backstory, a hot Mac, crashes, unreadable files, and drive I/O errors. Errors it does not recognise are listed so you can send them to support. You can also **paste log text** (from Console or a crash report) to have it interpreted, on any computer. **Check automatically** repeats the check while Backstory is open and can show a notification for a new serious problem. Reading the macOS log needs no special permission for normal use, but some entries may be hidden by macOS privacy rules.
+**Log issues.** Photos and iCloud write errors that you never see in Console. **Check the logs** reads the last hour, 6 hours, day or week of Photos and iCloud errors from the macOS log, recent Photos crash reports, and Shoebox's own failed runs. It groups them and explains each in plain language with what to do: a full disk, a full iCloud plan, a dropped network, an iCloud sign-in problem, a damaged Photos database, a repair or rebuild in progress, files Photos refused to import, Low Power Mode, a paused sync, permissions that block Shoebox, a hot Mac, crashes, unreadable files, and drive I/O errors. Errors it does not recognise are listed so you can send them to support. You can also **paste log text** (from Console or a crash report) to have it interpreted, on any computer. **Check automatically** repeats the check while Shoebox is open and can show a notification for a new serious problem. Reading the macOS log needs no special permission for normal use, but some entries may be hidden by macOS privacy rules.
 
 ## Albums and Google-edited copies
 
-**Albums.** Google saves a photo once in its year folder and again in each album it belongs to. When duplicates are removed, the album copies are skipped, so Backstory saves the album names as **keywords** on the kept photo (Apple Photos and Lightroom show keywords) and writes a list of albums with the reports (`takeout_report_albums.csv`). It is ticked by default in Guided and Fix.
+**Albums.** Google saves a photo once in its year folder and again in each album it belongs to. When duplicates are removed, the album copies are skipped, so Shoebox saves the album names as **keywords** on the kept photo (Apple Photos and Lightroom show keywords) and writes a list of albums with the reports (`takeout_report_albums.csv`). It is ticked by default in Guided and Fix.
 
 **Edited copies.** When you edit a photo in Google Photos, Takeout contains both `IMG_1.jpg` and `IMG_1-edited.jpg` (in other languages the word differs; the common ones are recognised). Choose **Keep both** (default), **Keep only the edited version** or **Keep only the original**. The copies left out are not copied into the new library; they stay in your Takeout.
 
@@ -608,13 +608,13 @@ If you are stuck, open **History**, press **Copy diagnostic info**, and email it
 - It does not guarantee that your photo app (Apple Photos, Lightroom, etc.) will display or import the results the way you expect.
 
 ### Disclaimer
-Backstory is free software provided **"as is"**, without warranty of any kind, express or implied, including but not limited to merchantability, fitness for a particular purpose, accuracy, and non-infringement. **You use it entirely at your own risk.**
+Shoebox is free software provided **"as is"**, without warranty of any kind, express or implied, including but not limited to merchantability, fitness for a particular purpose, accuracy, and non-infringement. **You use it entirely at your own risk.**
 
 It changes, copies, moves, renames and (when you choose the relevant options) deletes files. You are responsible for your own backups and for checking what each option does before you run it, including by using Preview. **To the maximum extent permitted by law, the author and contributors are not liable for any loss or damage of any kind arising from the use of, or inability to use, this software**, including but not limited to loss, corruption or alteration of photos, videos, metadata or other data, loss of albums or organisation, incorrect dates or locations, hardware or drive problems, lost time, or any indirect or consequential loss, whether or not caused by a bug, a mistake, or by you choosing the wrong option.
 
 Nothing in this disclaimer excludes or limits any right or liability that cannot lawfully be excluded or limited, such as rights you may have under consumer protection law where you live.
 
-Backstory is an independent project. It is **not affiliated with, endorsed by or sponsored by Google, Apple or any other company**. Google, Google Photos, Takeout, Apple, iPhone, Live Photos, macOS and other names are trademarks of their owners and are used only to describe compatibility.
+Shoebox is an independent project. It is **not affiliated with, endorsed by or sponsored by Google, Apple or any other company**. Google, Google Photos, Takeout, Apple, iPhone, Live Photos, macOS and other names are trademarks of their owners and are used only to describe compatibility.
 
 The software is released under the MIT License (see `LICENSE`). Third-party components and their licenses are listed in `THIRD_PARTY_NOTICES.md`.
 
