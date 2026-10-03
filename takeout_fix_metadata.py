@@ -5051,6 +5051,270 @@ def photos_db_health(lib):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+_APPLE_EPOCH = 978307200
+_PHOTO_EXTS = {".jpg", ".jpeg", ".heic", ".heif", ".png", ".gif", ".tif", ".tiff", ".bmp", ".webp", ".dng", ".arw", ".cr2", ".cr3", ".nef", ".orf", ".raf", ".rw2", ".mov", ".mp4", ".m4v", ".avi", ".3gp", ".mpg", ".mpeg"}
+_UUID_RX = re.compile(r"\b[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\b")
+_PATH_RX = re.compile(r"(/[^\s\"'<>|]{3,300}\.(?:jpe?g|heic|heif|png|gif|tiff?|dng|mov|mp4|m4v|avi|cr2|cr3|nef|arw|raf|orf|rw2|webp))", re.I)
+
+
+def _photos_db_open(lib):
+    """Read-only connection to a COPY of the library's Photos.sqlite. Returns (con, tmpdir, cols) or raises ValueError."""
+    import sqlite3
+    db = Path(lib) / "database" / "Photos.sqlite"
+    if not db.exists():
+        raise ValueError("no Photos database found in %s" % Path(lib).name)
+    tmp = tempfile.mkdtemp(prefix="backstory_pdb_")
+    try:
+        for suf in ("", "-wal", "-shm"):
+            src = Path(str(db) + suf)
+            if src.exists():
+                shutil.copy2(src, Path(tmp) / ("Photos.sqlite" + suf))
+        con = sqlite3.connect("file:%s?mode=ro" % (Path(tmp) / "Photos.sqlite"), uri=True)
+        cols = {r[1] for r in con.execute("PRAGMA table_info(ZASSET)")}
+        if not cols:
+            raise ValueError("this Photos version stores things differently")
+        return con, tmp, cols
+    except Exception:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
+
+
+def _asset_rows(con, cols):
+    """Yield dicts for every asset: pk, uuid, dir, file, orig_name, size, created (epoch), kind, trashed, cloud_state, cloud_guid."""
+    acols = {r[1] for r in con.execute("PRAGMA table_info(ZADDITIONALASSETATTRIBUTES)")}
+    join = ""
+    if "ZADDITIONALATTRIBUTES" in cols:
+        join = "LEFT JOIN ZADDITIONALASSETATTRIBUTES a ON a.Z_PK = s.ZADDITIONALATTRIBUTES"
+    elif "ZASSET" in acols:
+        join = "LEFT JOIN ZADDITIONALASSETATTRIBUTES a ON a.ZASSET = s.Z_PK"
+    sel = ["s.Z_PK"]
+    for c in ("ZUUID", "ZDIRECTORY", "ZFILENAME", "ZDATECREATED", "ZKIND", "ZTRASHEDSTATE", "ZCLOUDLOCALSTATE", "ZCLOUDASSETGUID"):
+        sel.append("s.%s" % c if c in cols else "NULL")
+    sel.append("a.ZORIGINALFILENAME" if join and "ZORIGINALFILENAME" in acols else "NULL")
+    sel.append("a.ZORIGINALFILESIZE" if join and "ZORIGINALFILESIZE" in acols else "NULL")
+    for r in con.execute("SELECT %s FROM ZASSET s %s" % (", ".join(sel), join)):
+        yield {"pk": r[0], "uuid": r[1], "dir": r[2], "file": r[3], "created": (r[4] + _APPLE_EPOCH) if isinstance(r[4], (int, float)) else None,
+               "kind": r[5], "trashed": bool(r[6]), "cloud_state": r[7], "cloud_guid": r[8], "orig_name": r[9], "size": r[10]}
+
+
+def _sniff_ext(path):
+    """What a file really is, from its first bytes: a lowercase extension or None."""
+    try:
+        with open(path, "rb") as fh:
+            h = fh.read(16)
+    except OSError:
+        return None
+    if h[:3] == b"\xff\xd8\xff":
+        return ".jpg"
+    if h[:8] == b"\x89PNG\r\n\x1a\n":
+        return ".png"
+    if h[4:8] == b"ftyp":
+        brand = h[8:12]
+        if brand in (b"heic", b"heix", b"mif1", b"msf1", b"hevc"):
+            return ".heic"
+        if brand == b"qt  ":
+            return ".mov"
+        return ".mp4"
+    if h[:4] in (b"II*\x00", b"MM\x00*"):
+        return ".tif"
+    if h[:3] == b"GIF":
+        return ".gif"
+    return None
+
+
+def photos_library_audit(lib, limit=500):
+    """Files on disk vs the database. Returns exact lists: orphans (in originals/ but not in Photos), missing_local (database says
+    a file should be local but it is not there, and it is not in iCloud: the dangerous kind), cloud_only (not local but in iCloud:
+    normal with Optimize Storage), zero_byte, wrong_extension. Read-only."""
+    lib = Path(lib)
+    try:
+        con, tmp, cols = _photos_db_open(lib)
+    except Exception as ex:
+        return {"ok": False, "why": str(ex)[:140]}
+    try:
+        known, stems, rows = set(), set(), []
+        for r in _asset_rows(con, cols):
+            rows.append(r)
+            if r["dir"] and r["file"]:
+                known.add((r["dir"], r["file"]))
+                stems.add(os.path.splitext(r["file"])[0].split("_")[0].lower())
+        missing, cloud_only, zero, wrongext = [], [], [], []
+        for r in rows:
+            if not (r["dir"] and r["file"]):
+                continue
+            p = lib / "originals" / r["dir"] / r["file"]
+            label = r["orig_name"] or r["file"]
+            if not p.exists():
+                item = {"file": label, "uuid": r["uuid"], "path": "originals/%s/%s" % (r["dir"], r["file"]), "trashed": r["trashed"], "date": r["created"]}
+                (cloud_only if (r["cloud_state"] == 1 or r["cloud_guid"]) else missing).append(item)
+            else:
+                try:
+                    sz = p.stat().st_size
+                except OSError:
+                    continue
+                if sz == 0:
+                    zero.append({"file": label, "uuid": r["uuid"], "path": str(p.relative_to(lib)), "trashed": r["trashed"]})
+                else:
+                    real, ext = _sniff_ext(p), p.suffix.lower()
+                    norm = {".jpeg": ".jpg", ".tiff": ".tif", ".heif": ".heic", ".m4v": ".mp4"}
+                    if real and ext in _PHOTO_EXTS and norm.get(ext, ext) != real and not (real == ".tif" and ext in (".dng", ".arw", ".cr2", ".nef", ".orf", ".raf", ".rw2")) and not (real == ".mp4" and ext == ".mov"):
+                        wrongext.append({"file": label, "uuid": r["uuid"], "path": str(p.relative_to(lib)), "says": ext, "really": real})
+        orphans, scanned = [], 0
+        root = lib / "originals"
+        if root.is_dir():
+            for dp, _dn, fns in os.walk(root):
+                for fn in fns:
+                    if fn.startswith("."):
+                        continue
+                    scanned += 1
+                    rel_dir = os.path.relpath(dp, root)
+                    if (rel_dir, fn) in known:
+                        continue
+                    if os.path.splitext(fn)[0].split("_")[0].lower() in stems:       # a Live Photo video or edit partner of a known picture
+                        continue
+                    try:
+                        sz = os.path.getsize(os.path.join(dp, fn))
+                    except OSError:
+                        sz = 0
+                    orphans.append({"file": fn, "path": "originals/%s/%s" % (rel_dir, fn), "size": sz})
+        out = {"ok": True, "assets": len(rows), "files_on_disk": scanned,
+               "orphans": orphans[:limit], "orphans_total": len(orphans), "orphans_bytes": sum(o["size"] for o in orphans),
+               "missing_local": missing[:limit], "missing_local_total": len(missing),
+               "cloud_only_total": len(cloud_only), "cloud_only": cloud_only[:50],
+               "zero_byte": zero[:limit], "zero_byte_total": len(zero),
+               "wrong_extension": wrongext[:limit], "wrong_extension_total": len(wrongext)}
+        out["clean"] = not (orphans or missing or zero or wrongext)
+        return out
+    except Exception as ex:
+        return {"ok": False, "why": str(ex)[:140]}
+    finally:
+        try:
+            con.close()
+        except Exception:
+            pass
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def photos_pending_files(lib, limit=500):
+    """The exact pictures not yet uploaded to iCloud (database state 'not in cloud'), with the likely reason for each. Read-only."""
+    lib = Path(lib)
+    try:
+        con, tmp, cols = _photos_db_open(lib)
+    except Exception as ex:
+        return {"ok": False, "why": str(ex)[:140]}
+    try:
+        if "ZCLOUDLOCALSTATE" not in cols:
+            return {"ok": False, "why": "this Photos version does not record upload state"}
+        items, total = [], 0
+        for r in _asset_rows(con, cols):
+            if r["trashed"] or r["cloud_state"] != 0:
+                continue
+            total += 1
+            name = r["orig_name"] or r["file"] or "?"
+            ext = os.path.splitext(name)[1].lower()
+            p = (lib / "originals" / r["dir"] / r["file"]) if (r["dir"] and r["file"]) else None
+            hints, size = [], r["size"] or 0
+            if p is not None and p.exists():
+                try:
+                    size = p.stat().st_size
+                except OSError:
+                    pass
+                if size == 0:
+                    hints.append("file is empty (0 bytes)")
+                real = _sniff_ext(p) if size else None
+                if real and ext in _PHOTO_EXTS and {".jpeg": ".jpg", ".tiff": ".tif", ".heif": ".heic", ".m4v": ".mp4"}.get(ext, ext) != real and not (real == ".tif" and ext != ".tif" and ext not in (".jpg", ".jpeg", ".png", ".heic", ".gif")) and not (real == ".mp4" and ext == ".mov"):
+                    hints.append("extension says %s but the contents look like %s" % (ext, real))
+            elif p is not None:
+                hints.append("original file is missing from the library")
+            if ext and ext not in _PHOTO_EXTS:
+                hints.append("unusual file type (%s)" % ext)
+            if size > 20 * 1024 ** 3:
+                hints.append("very large (over 20 GB)")
+            elif size > 5 * 1024 ** 3:
+                hints.append("large (over 5 GB): slow to upload")
+            items.append({"file": name, "uuid": r["uuid"], "size": size, "date": r["created"], "video": r["kind"] == 1, "hints": hints})
+        items.sort(key=lambda i: (not i["hints"], i["file"].lower()))
+        out = {"ok": True, "pending_total": total, "items": items[:limit], "with_hints": sum(1 for i in items if i["hints"])}
+        return out
+    except Exception as ex:
+        return {"ok": False, "why": str(ex)[:140]}
+    finally:
+        try:
+            con.close()
+        except Exception:
+            pass
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def files_in_lines(lines, cap=400):
+    """UUIDs and file paths mentioned in log lines (so a log can point at exact files). Returns {"uuids": [...], "paths": [...]}."""
+    uu, pp = {}, {}
+    for ln in lines:
+        ln = ln[:1500]
+        for m in _UUID_RX.finditer(ln):
+            uu.setdefault(m.group(0).upper(), 0)
+            uu[m.group(0).upper()] += 1
+        for m in _PATH_RX.finditer(ln):
+            pp[m.group(1)] = pp.get(m.group(1), 0) + 1
+        if len(uu) >= cap and len(pp) >= cap:
+            break
+    return {"uuids": sorted(uu, key=lambda k: -uu[k])[:cap], "paths": sorted(pp, key=lambda k: -pp[k])[:cap]}
+
+
+def resolve_uuids(lib, uuids):
+    """Map Photos asset UUIDs (as seen in logs) to the real file names. Returns {"ok", "found": [...], "unknown": n}."""
+    want = {u.upper() for u in uuids if _UUID_RX.fullmatch(u or "")}
+    if not want:
+        return {"ok": True, "found": [], "unknown": 0}
+    try:
+        con, tmp, cols = _photos_db_open(lib)
+    except Exception as ex:
+        return {"ok": False, "why": str(ex)[:140]}
+    try:
+        found = []
+        for r in _asset_rows(con, cols):
+            if (r["uuid"] or "").upper() in want:
+                found.append({"uuid": r["uuid"], "file": r["orig_name"] or r["file"], "stored_as": "originals/%s/%s" % (r["dir"], r["file"]) if r["dir"] else "", "date": r["created"],
+                              "in_cloud": r["cloud_state"] == 1, "trashed": r["trashed"]})
+        return {"ok": True, "found": found, "unknown": len(want) - len(found)}
+    except Exception as ex:
+        return {"ok": False, "why": str(ex)[:140]}
+    finally:
+        try:
+            con.close()
+        except Exception:
+            pass
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+PLAYBOOKS_FILE = Path(__file__).resolve().parent / "photos_playbooks.json"
+
+
+def load_playbooks():
+    """Step-by-step playbooks. Steps are tagged who: shoebox (a button in this app), you (do it in Photos/Finder), terminal (copy a command).
+    Steps pointing at unknown issue ids are dropped from links, never the playbook."""
+    try:
+        data = json.loads(PLAYBOOKS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    known = {e["id"] for e in load_issues()}
+    out = []
+    for p in data if isinstance(data, list) else []:
+        if not isinstance(p, dict) or not p.get("id") or not p.get("title"):
+            continue
+        steps = []
+        for s in p.get("steps", []):
+            if isinstance(s, dict) and s.get("text"):
+                steps.append({"who": s.get("who") if s.get("who") in ("shoebox", "you", "terminal") else "you", "text": str(s["text"])[:400],
+                              "cmd": str(s.get("cmd") or "")[:400], "action": str(s.get("action") or "")[:30], "risk": s.get("risk") if s.get("risk") in ("safe", "caution", "destructive") else "safe",
+                              "why": str(s.get("why") or "")[:300]})
+        out.append({"id": str(p["id"])[:60], "title": str(p["title"])[:140], "icon": str(p.get("icon") or "")[:4], "symptom": str(p.get("symptom") or "")[:400],
+                    "issue_ids": [i for i in p.get("issue_ids", []) if i in known], "steps": steps, "identify": [str(x)[:300] for x in p.get("identify", [])][:8],
+                    "prevention": [str(x)[:300] for x in p.get("prevention", [])][:8], "confidence": p.get("confidence") if p.get("confidence") in ("high", "medium", "low") else "medium",
+                    "provenance": str(p.get("provenance") or "")[:200]})
+    return out
+
+
 def find_photos_libraries():
     """Photos libraries in the usual places (read-only listing)."""
     out = []
@@ -5319,7 +5583,8 @@ def load_issues(force=False):
                "severity": e.get("severity") if e.get("severity") in ("info", "warn", "bad") else "warn", "meaning": str(e.get("meaning") or "")[:600],
                "causes": lst("likely_causes"), "fixes": lst("fixes"), "codes": lst("codes"), "processes": lst("processes"), "sources": lst("sources"),
                "risk": e.get("risk") if e.get("risk") in ("safe", "caution", "destructive") else "caution",
-               "confidence": e.get("confidence") if e.get("confidence") in ("high", "medium", "low") else "low", "verified": bool(e.get("verified", False))}
+               "confidence": e.get("confidence") if e.get("confidence") in ("high", "medium", "low") else "low", "verified": bool(e.get("verified", False)),
+               "identify": str(e.get("identify") if isinstance(e.get("identify"), str) else " ".join(lst("identify")))[:500], "prevention": lst("prevention"), "provenance": str(e.get("provenance") or "")[:120]}
         ent["_rx"] = [rx for rx in (_safe_regex(x) for x in lst("signatures")) if rx]
         ent["signatures"] = len(ent["_rx"])
         seen.add(ent["id"])

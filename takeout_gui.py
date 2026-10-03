@@ -30,7 +30,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.05-b"
+VERSION = "2026.10.06"
 class Cancelled(Exception):
     pass
 
@@ -1577,7 +1577,7 @@ def run_clean(folders, include_other):
 UPDATE_BASE = os.environ.get("METADATAFIXER_UPDATE_BASE", "https://raw.githubusercontent.com/daviddef/MetadataFixer/main/")
 UPDATE_FILES = ["takeout_gui.py", "takeout_fix_metadata.py"]
 PLACES_DATA = "places.csv.gz"
-DOC_FILES = ["photos_issues.json", "USER_GUIDE.md", "THIRD_PARTY_NOTICES.md", "LICENSE"]   # documents travel with updates too (a missing one is ignored)
+DOC_FILES = ["photos_issues.json", "photos_playbooks.json", "USER_GUIDE.md", "THIRD_PARTY_NOTICES.md", "LICENSE"]   # documents travel with updates too (a missing one is ignored)
 SUPPORT_EMAIL = "thestocksoup@gmail.com"
 HERE = Path(__file__).resolve().parent
 
@@ -2632,6 +2632,45 @@ def _monitor_log_path():
     return APP_HOME / "monitor.jsonl"
 
 
+def _write_csv(name, header, rows):
+    """Write rows to a CSV in the reports folder; returns the path (or "")."""
+    import csv
+    try:
+        REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+        path = REPORTS_DIR / ("%s-%s.csv" % (name, time.strftime("%Y%m%d-%H%M%S")))
+        with open(path, "w", newline="", encoding="utf-8") as fh:
+            w = csv.writer(fh)
+            w.writerow(header)
+            w.writerows(rows)
+        return str(path)
+    except OSError:
+        return ""
+
+
+def _library_or_first(body):
+    return str(body.get("library") or "") or (fx.find_photos_libraries() or [""])[0]
+
+
+def attach_log_files(issues, lib):
+    """Point log findings at exact files: asset UUIDs seen in each issue's example lines are looked up in the library."""
+    if not lib or not issues:
+        return
+    per = {}
+    for i in issues:
+        found = fx.files_in_lines(i.get("examples", []), cap=40)
+        per[i["id"]] = found
+    allu = sorted({u for f in per.values() for u in f["uuids"]})
+    names = {}
+    if allu:
+        r = fx.resolve_uuids(lib, allu)
+        names = {x["uuid"].upper(): x for x in r.get("found", [])} if r.get("ok") else {}
+    for i in issues:
+        f = per[i["id"]]
+        files = [{"uuid": u, "file": names[u]["file"], "in_cloud": names[u]["in_cloud"]} for u in f["uuids"] if u in names]
+        if files or f["paths"]:
+            i["files"] = {"resolved": files[:20], "unresolved_uuids": [u for u in f["uuids"] if u not in names][:10], "paths": f["paths"][:20]}
+
+
 def run_monitor(hours, pasted):
     with LOCK:
         STATE.update(state="scanning", cancel=False, total=0, done=0, counts={}, message="Reading the Photos and iCloud logs...", report="",
@@ -2656,6 +2695,10 @@ def run_monitor(hours, pasted):
             lines += mine
             src["backstory"] = len(mine)
         issues, other = fx.interpret_log_lines(lines)
+        try:
+            attach_log_files(issues, (fx.find_photos_libraries() or [""])[0])
+        except Exception:
+            pass
         prev = {}
         try:
             last = _monitor_log_path().read_text(encoding="utf-8").splitlines()[-1]
@@ -2875,6 +2918,10 @@ def run_diagnostics(roots, library, hours):
             if e_.get("state") in ("failed", "stopped") and e_.get("message") and time.time() - e_["started"] < max(hours, 24) * 3600:
                 lines.append("%s Shoebox %s: %s" % (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(e_["started"])), e_["title"], e_["message"]))
         issues, other = fx.interpret_log_lines(lines)
+        try:
+            attach_log_files(issues, lib)
+        except Exception:
+            pass
         step(3, "looking at the Mac")
         snap = fx.system_snapshot(True)
         step(4, "putting it together")
@@ -3551,6 +3598,28 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps(open_path(body.get("id", ""), body.get("what", "report"))))
         elif path == "/api/issues":
             self._send(200, json.dumps({"issues": fx.issue_catalog()}))
+        elif path == "/api/playbooks":
+            self._send(200, json.dumps({"playbooks": fx.load_playbooks()}))
+        elif path in ("/api/library_audit", "/api/pending_files"):
+            lib = _library_or_first(body)
+            if not lib:
+                return self._send(200, json.dumps({"ok": False, "why": "no Photos library found"}))
+            audit = path == "/api/library_audit"
+            r = fx.photos_library_audit(lib, 100000 if body.get("csv") else 300) if audit else fx.photos_pending_files(lib, 100000 if body.get("csv") else 300)
+            if r.get("ok") and body.get("csv"):
+                if audit:
+                    rows = [["kind", "file", "path", "detail"]]
+                    rows += [["orphan (on disk, not in Photos)", o["file"], o["path"], "%d bytes" % o["size"]] for o in r["orphans"]]
+                    rows += [["missing (in Photos, not on disk, not in iCloud)", o["file"], o["path"], o["uuid"] or ""] for o in r["missing_local"]]
+                    rows += [["empty file", o["file"], o["path"], o["uuid"] or ""] for o in r["zero_byte"]]
+                    rows += [["wrong extension", o["file"], o["path"], "says %s, looks like %s" % (o["says"], o["really"])] for o in r["wrong_extension"]]
+                    r["csv"] = _write_csv("library-audit", rows[0], rows[1:])
+                else:
+                    rows = [[i["file"], i["uuid"] or "", i["size"], i["date"] and time.strftime("%Y-%m-%d", time.gmtime(i["date"])) or "", "; ".join(i["hints"])] for i in r["items"]]
+                    r["csv"] = _write_csv("not-uploaded", ["file", "uuid", "bytes", "date", "likely cause"], rows)
+                for key in ("orphans", "missing_local", "zero_byte", "wrong_extension", "items"):
+                    r.pop(key, None)
+            self._send(200, json.dumps(r))
         elif path == "/api/receipt":
             dest_ = str(body.get("dest") or (body.get("root") or ""))
             try:
@@ -4327,6 +4396,10 @@ body[data-tab=history] .route,body[data-tab=help] .route{display:none}
 <div class="hbtns"><button class="p" id="mongo">Check the logs</button></div>
 <div class="opt"><div style="flex:1"><label for="mpaste" style="font-weight:600">Or paste log text</label><textarea id="mpaste" placeholder="Paste lines from Console or a crash report here" spellcheck="false" style="min-height:70px"></textarea></div></div>
 <div class="hbtns"><button id="mpastego">Interpret the pasted text</button></div></div>
+<div class="card" id="pbcard"><details id="pbdet"><summary style="cursor:pointer;font-weight:700">&#129521; Fix guides and checklists <span class="mutes" id="pbcount"></span></summary>
+<div class="secbody"><small style="margin-top:0">Pick what you are seeing. Each guide is an ordered checklist: some steps are buttons in Shoebox, some you do in Photos or Finder, some are a Terminal command you can copy. Ticks are remembered on this Mac.</small>
+<div class="hbtns"><button class="sm" id="pbaudit">&#128269; Library audit: orphan and missing files</button><button class="sm" id="pbpend">&#9729;&#65039; Which files have not uploaded?</button></div>
+<div id="pbres"></div><div id="pblist"></div></div></details></div>
 <div class="card" id="kbcard"><details id="kbdet"><summary style="cursor:pointer;font-weight:700">&#128214; Known Photos problems <span class="mutes" id="kbcount"></span></summary>
 <small style="margin-top:6px"><b>Draft knowledge base.</b> Built from general knowledge of Photos, iCloud and macOS, not yet checked line by line against Apple&#39;s pages, so treat fixes beyond the safe ones as leads and always back up first. A built-in list of Apple Photos, iCloud and macOS problems and the error codes and log messages they show in Console, with the likely causes and the fixes to try, safest first. Search by a word, an error code (like 4097) or a process name (like cloudphotod).</small>
 <div class="row" style="margin:8px 0"><input type="text" id="kbq" placeholder="Search: error code, message, symptom..." spellcheck="false"><select id="kbcat" class="sel" style="margin-left:0"><option value="">All</option></select></div>
@@ -4941,7 +5014,7 @@ $('cmpgo').onclick=async()=>{
 
 function issuesHTML(issues,other){
   let h=(issues||[]).map(i=>`<div class="card"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="font-size:16px">${esc(i.title)}</b><span class="badge ${i.sev==='bad'?'badb':i.sev==='warn'?'warnb':''}">${i.sev==='bad'?'Fix':i.sev==='warn'?'Worth fixing':'For your information'}</span>${i.new?'<span class="badge okb">New</span>':''}<span class="mutes">${i.count.toLocaleString()} time${i.count===1?'':'s'}${i.last&&i.last!==i.first?' &middot; last '+esc(i.last):''}</span></div>
-  <div class="why" style="margin:6px 0">${esc(i.meaning)}</div>${(i.causes||[]).length?'<b style="font-size:13px">Likely causes</b><ul style="margin:4px 0 8px;padding-left:20px">'+i.causes.map(f=>'<li>'+esc(f)+'</li>').join('')+'</ul>':''}<b style="font-size:13px">What to do</b><ol style="margin:4px 0 8px;padding-left:20px">${i.fixes.map(f=>'<li>'+esc(f)+'</li>').join('')}</ol>${i.confidence?'<small>Confidence: <b>'+esc(i.confidence)+'</b> &middot; riskiest step: <b>'+esc(i.risk||'')+'</b></small>':''}
+  <div class="why" style="margin:6px 0">${esc(i.meaning)}</div>${(i.causes||[]).length?'<b style="font-size:13px">Likely causes</b><ul style="margin:4px 0 8px;padding-left:20px">'+i.causes.map(f=>'<li>'+esc(f)+'</li>').join('')+'</ul>':''}<b style="font-size:13px">What to do</b><ol style="margin:4px 0 8px;padding-left:20px">${i.fixes.map(f=>'<li>'+esc(f)+'</li>').join('')}</ol>${i.files?'<b style="font-size:13px">Files named in the log</b><ul style="margin:4px 0 8px;padding-left:20px">'+i.files.resolved.map(f=>'<li>'+esc(f.file)+(f.in_cloud?' <span class="mutes">(in iCloud)</span>':'')+'</li>').join('')+i.files.paths.map(f=>'<li><code>'+esc(f)+'</code></li>').join('')+(i.files.unresolved_uuids.length?'<li class="mutes">'+i.files.unresolved_uuids.length+' item id(s) not found in this library</li>':'')+'</ul>':''}${i.confidence?'<small>Confidence: <b>'+esc(i.confidence)+'</b> &middot; riskiest step: <b>'+esc(i.risk||'')+'</b></small>':''}
   <details><summary class="mutes">Show the log lines</summary><pre style="white-space:pre-wrap;font-size:11.5px;margin:6px 0">${i.examples.map(esc).join('\n')}</pre></details></div>`).join('');
   if((other||[]).length)h+='<h2>Errors Shoebox does not recognise</h2><small style="margin-top:0">These are errors without a known explanation. If something is not working, copy them into an email to support.</small><pre style="white-space:pre-wrap;font-size:11.5px">'+other.map(o=>esc(o.text)+'  (x'+o.count+')').join('\n')+'</pre>';
   return h}
@@ -5273,9 +5346,52 @@ function renderKB(){const q=($('kbq').value||'').toLowerCase().trim(),c=$('kbcat
    ${e.codes.length?'<small>Codes: '+e.codes.map(x=>'<code>'+esc(x)+'</code>').join(' ')+'</small>':''}${e.processes.length?'<small>Seen from: '+e.processes.map(esc).join(', ')+'</small>':''}
    ${e.causes.length?'<b style="font-size:13px">Likely causes</b><ul style="margin:3px 0 6px;padding-left:20px">'+e.causes.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>':''}
    ${e.fixes.length?'<b style="font-size:13px">What to try (in order)</b><ol style="margin:3px 0 6px;padding-left:20px">'+e.fixes.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ol>':''}
-   <small>Riskiest step: <b>${esc(e.risk)}</b> &middot; Confidence: <b>${esc(e.confidence)}</b>${e.verified?' &middot; checked against its sources':' &middot; <i>draft: not yet checked against its sources</i>'}${e.confidence==='low'?' (treat as a lead, not a fact)':''}</small>
+   ${e.identify?'<b style="font-size:13px">Finding the exact files</b><div class="why">'+esc(e.identify)+'</div>':''}${(e.prevention||[]).length?'<b style="font-size:13px">Next time</b><ul style="margin:3px 0 6px;padding-left:20px">'+e.prevention.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>':''}<small>Riskiest step: <b>${esc(e.risk)}</b> &middot; Confidence: <b>${esc(e.confidence)}</b>${e.verified?' &middot; checked against its sources':' &middot; <i>draft: not yet checked against its sources</i>'}${e.confidence==='low'?' (treat as a lead, not a fact)':''}</small>
    ${e.sources.length?'<small>Sources: '+e.sources.map(esc).join('; ')+'</small>':''}</div></details>`).join(''):'<small>Nothing matches. Try fewer words, or just the error number.</small>'}
 $('kbdet').addEventListener('toggle',()=>{if($('kbdet').open)loadKB()});$('kbq').oninput=()=>{if(KB)renderKB()};$('kbcat').onchange=()=>{if(KB)renderKB()};
+
+// ---- Fix guides ----
+let PB=null;const WHO={shoebox:['&#129520;','Shoebox'],you:['&#128587;','You'],terminal:['&#9000;&#65039;','Terminal']};
+function pbKey(id,i){return 'pb:'+id+':'+i}
+function pbGet(k){try{return localStorage.getItem(k)==='1'}catch(e){return false}}
+function pbSet(k,v){try{v?localStorage.setItem(k,'1'):localStorage.removeItem(k)}catch(e){}}
+async function copyTxt(t){try{await navigator.clipboard.writeText(t);return true}catch(e){const a=document.createElement('textarea');a.value=t;document.body.appendChild(a);a.select();let ok=false;try{ok=document.execCommand('copy')}catch(_){}a.remove();if(!ok)prompt('Copy this:',t);return ok}}
+async function loadPB(){if(PB)return;try{PB=(await post('/api/playbooks',{})).playbooks||[]}catch(e){PB=[]}await loadKB();$('pbcount').textContent='('+PB.length+')';renderPB()}
+function pbProgress(p){const n=p.steps.length;let d=0;p.steps.forEach((_,i)=>{if(pbGet(pbKey(p.id,i)))d++});return [d,n]}
+function pbMarkdown(p){return '## '+p.title+'\n'+(p.symptom?p.symptom+'\n\n':'')+p.steps.map((st,i)=>'- ['+(pbGet(pbKey(p.id,i))?'x':' ')+'] ('+WHO[st.who][1]+') '+st.text+(st.cmd?'\n      `'+st.cmd+'`':'')).join('\n')+'\n'}
+function renderPB(){const L=PB||[];const kbById={};(KB||[]).forEach(e=>kbById[e.id]=e);
+  $('pblist').innerHTML=L.map(p=>{const [d,n]=pbProgress(p);return `<details class="sec" data-pb="${esc(p.id)}"><summary>${p.icon||''} ${esc(p.title)} <span class="mutes pbprog">${d}/${n}</span></summary><div class="secbody"><div class="why">${esc(p.symptom)}</div>
+  ${p.steps.map((st,i)=>`<label class="pbstep" style="display:flex;gap:8px;align-items:flex-start;margin:7px 0"><input type="checkbox" data-k="${esc(pbKey(p.id,i))}" ${pbGet(pbKey(p.id,i))?'checked':''} style="margin-top:3px;flex:none"><span style="flex:1;min-width:0"><span title="${WHO[st.who][1]}">${WHO[st.who][0]}</span> ${st.risk==='destructive'?'&#9888;&#65039; ':st.risk==='caution'?'&#9888; ':''}${esc(st.text)}${st.why?'<br><small style="margin:2px 0">'+esc(st.why)+'</small>':''}${st.cmd?'<br><code style="display:inline-block;max-width:100%;overflow-x:auto;white-space:pre">'+esc(st.cmd)+'</code> <button type="button" class="sm" data-copy="'+esc(st.cmd)+'">Copy</button>':''}${st.action?' <button type="button" class="sm" data-act="'+esc(st.action)+'">Open</button>':''}</span></label>`).join('')}
+  ${p.identify.length?'<b style="font-size:13px">Finding the exact files</b><ul style="margin:3px 0 6px;padding-left:20px">'+p.identify.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>':''}
+  ${p.prevention.length?'<b style="font-size:13px">Next time</b><ul style="margin:3px 0 6px;padding-left:20px">'+p.prevention.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>':''}
+  ${p.issue_ids.length?'<small>Related errors: '+p.issue_ids.map(id=>esc(kbById[id]?kbById[id].title:id)).join(' &middot; ')+'</small>':''}
+  <small>Confidence: <b>${esc(p.confidence)}</b> &middot; <i>draft: ${esc(p.provenance||'not yet checked')}</i></small>
+  <div class="hbtns"><button type="button" class="sm" data-pbcopy="${esc(p.id)}">Copy as checklist</button><button type="button" class="sm" data-pbreset="${esc(p.id)}">Clear ticks</button></div></div></details>`}).join('')||'<small>No guides found.</small>'}
+function pbAct(a){if(a==='audit')runAudit();else if(a==='pending')runPending();else if(a==='monitor')showTab('monitor');else if(a==='health')showTab('health');else if(a==='guide')showTab('merge')}
+$('pblist').addEventListener('change',e=>{const c=e.target;if(c.dataset&&c.dataset.k){pbSet(c.dataset.k,c.checked);const det=c.closest('details');const p=PB.find(x=>x.id===det.dataset.pb);const [d,n]=pbProgress(p);det.querySelector('.pbprog').textContent=d+'/'+n}});
+$('pblist').addEventListener('click',async e=>{const b=e.target.closest('button');if(!b)return;
+  if(b.dataset.copy){const ok=await copyTxt(b.dataset.copy);b.textContent=ok?'Copied':'Copy';setTimeout(()=>b.textContent='Copy',1500)}
+  else if(b.dataset.act)pbAct(b.dataset.act);
+  else if(b.dataset.pbcopy){const p=PB.find(x=>x.id===b.dataset.pbcopy);const ok=await copyTxt(pbMarkdown(p));b.textContent=ok?'Copied':'Copy as checklist';setTimeout(()=>b.textContent='Copy as checklist',1500)}
+  else if(b.dataset.pbreset){const p=PB.find(x=>x.id===b.dataset.pbreset);p.steps.forEach((_,i)=>pbSet(pbKey(p.id,i),false));renderPB();const d=document.querySelector('[data-pb="'+p.id+'"]');if(d)d.open=true}});
+function fmtB(n){return n>=1e9?(n/1e9).toFixed(1)+' GB':n>=1e6?(n/1e6).toFixed(1)+' MB':n>=1e3?Math.round(n/1e3)+' KB':n+' B'}
+function csvLine(r){return r.csv?'<div class="tip" style="margin:6px 0">Full list saved: <code>'+esc(r.csv)+'</code> <button class="sm" id="pbfolder">Open reports folder</button></div>':''}
+async function runAudit(){showTab('monitor');$('pbdet').open=true;await loadPB();$('pbres').innerHTML='<small>Reading the library&hellip; this can take a minute on a big library.</small>';
+  const lib=$('uplib').value;let r=await post('/api/library_audit',{library:lib});
+  if(!r.ok){$('pbres').innerHTML='<div class="tip">'+esc(r.why||'Could not read the library')+'</div>';return}
+  const rows=(t,L,f)=>L.length?'<b style="font-size:13px">'+t+'</b>'+tbl(['File','Where'],L.slice(0,40).map(f)):'';
+  let h='<div class="card"><b>'+(r.clean?'&#10003; Nothing wrong found':'Found problems')+'</b> <span class="mutes">'+r.assets.toLocaleString()+' items in Photos &middot; '+r.files_on_disk.toLocaleString()+' files on disk</span><ul style="margin:6px 0;padding-left:20px"><li>Orphan files (on disk, not in Photos): <b>'+r.orphans_total+'</b>'+(r.orphans_total?' ('+fmtB(r.orphans_bytes)+')':'')+'</li><li>Missing files (Photos expects them, not on disk, not in iCloud): <b>'+r.missing_local_total+'</b></li><li>Empty files: <b>'+r.zero_byte_total+'</b></li><li>Wrong extension: <b>'+r.wrong_extension_total+'</b></li><li>Stored only in iCloud (normal with Optimize Storage): '+r.cloud_only_total+'</li></ul>'
+   +rows('Orphans',r.orphans,o=>[esc(o.file),esc(o.path)])+rows('Missing',r.missing_local,o=>[esc(o.file),esc(o.path)])+rows('Empty',r.zero_byte,o=>[esc(o.file),esc(o.path)])+rows('Wrong extension',r.wrong_extension,o=>[esc(o.file),esc(o.says+' vs '+o.really)])
+   +'<div class="hbtns"><button class="sm" id="pbcsv">Save the full list as a spreadsheet</button></div><div id="pbcsvres"></div></div>';
+  $('pbres').innerHTML=h;$('pbcsv').onclick=async()=>{const x=await post('/api/library_audit',{library:lib,csv:true});$('pbcsvres').innerHTML=csvLine(x);if($('pbfolder'))$('pbfolder').onclick=()=>post('/api/open_reports')}}
+async function runPending(){showTab('monitor');$('pbdet').open=true;await loadPB();$('pbres').innerHTML='<small>Reading the library&hellip;</small>';
+  const lib=$('uplib').value;const r=await post('/api/pending_files',{library:lib});
+  if(!r.ok){$('pbres').innerHTML='<div class="tip">'+esc(r.why||'Could not read the library')+'</div>';return}
+  $('pbres').innerHTML='<div class="card"><b>'+(r.pending_total?r.pending_total.toLocaleString()+' not uploaded yet':'&#10003; Everything is uploaded')+'</b>'+(r.pending_total?' <span class="mutes">'+r.with_hints+' have a likely cause</span>':'')
+   +(r.items.length?tbl(['File','Size','Likely cause'],r.items.slice(0,50).map(i=>[esc(i.file),fmtB(i.size),esc(i.hints.join('; ')||'none seen: probably just waiting')])):'')
+   +(r.pending_total?'<small>A big queue with no likely causes is usually just waiting for the network. Ones with a cause are the ones to fix first.</small><div class="hbtns"><button class="sm" id="pbcsv">Save the full list as a spreadsheet</button></div><div id="pbcsvres"></div>':'')+'</div>';
+  if($('pbcsv'))$('pbcsv').onclick=async()=>{const x=await post('/api/pending_files',{library:lib,csv:true});$('pbcsvres').innerHTML=csvLine(x);if($('pbfolder'))$('pbfolder').onclick=()=>post('/api/open_reports')}}
+$('pbaudit').onclick=runAudit;$('pbpend').onclick=runPending;$('pbdet').addEventListener('toggle',()=>{if($('pbdet').open)loadPB()});
 </script></main></body></html>"""
 
 

@@ -4529,5 +4529,541 @@
    "https://support.apple.com/en-us/102194"
   ],
   "verified": false
+ },
+ {
+  "id": "photos-5600-unsupported-filesystem",
+  "category": "disk",
+  "title": "Photos could not open the library (5600): unsupported drive format",
+  "signatures": [
+   "unable to open the library.{0,6}5600",
+   "\\(5600\\)"
+  ],
+  "processes": [
+   "Photos",
+   "photolibraryd"
+  ],
+  "codes": [],
+  "severity": "bad",
+  "meaning": "The library sits on a drive format Photos refuses (ExFAT, FAT32, NTFS, or a network share). This is a whole-volume problem, not one bad file.",
+  "likely_causes": [
+   "Library on ExFAT/FAT32/NTFS",
+   "Library on a NAS or network share",
+   "Case-sensitive volume"
+  ],
+  "fixes": [
+   "Check the drive format: Finder > Get Info on the drive, or run: diskutil info /Volumes/NAME | grep 'File System'",
+   "Copy the library to a drive formatted APFS or Mac OS Extended (Journaled), plugged in directly",
+   "On that drive tick 'Ignore ownership on this volume' (Get Info)",
+   "Hold Option while opening Photos and choose the library"
+  ],
+  "risk": "safe",
+  "confidence": "low",
+  "sources": [
+   "supplied: Grok CSV (AI-generated, unverified)"
+  ],
+  "verified": false,
+  "provenance": "supplied: Grok CSV (AI-generated, unverified)",
+  "identify": [
+   "Not file specific: the whole volume is the cause. Shoebox's drive check shows the format."
+  ],
+  "prevention": [
+   "Keep the library on the Mac's internal drive, or an APFS/Mac OS Extended external drive."
+  ]
+ },
+ {
+  "id": "photos-error-47001-adjustment-data",
+  "category": "library",
+  "title": "photolibraryd loops on 'bad adjustment data' (Code 47001)",
+  "signatures": [
+   "com\\.apple\\.photos\\.error.{0,12}47001",
+   "bad adjustment data"
+  ],
+  "processes": [
+   "photolibraryd"
+  ],
+  "codes": [
+   "com.apple.photos.error 47001"
+  ],
+  "severity": "warn",
+  "meaning": "The background service keeps failing on the saved edit information of one picture, which can burn CPU. Meaning of the number is from a supplied, unverified source.",
+  "likely_causes": [
+   "Corrupt edit data (adjustments) on one asset",
+   "Interrupted edit sync"
+  ],
+  "fixes": [
+   "Quit Photos, then hold Option+Command while reopening it and choose Repair",
+   "Find the picture: use Shoebox 'Find the exact files' on the log, or Activity Monitor > photolibraryd > Open Files",
+   "Revert the picture to original (Image > Revert to Original) or re-import its exported original"
+  ],
+  "risk": "caution",
+  "confidence": "low",
+  "sources": [
+   "supplied: Grok CSV (AI-generated, unverified)"
+  ],
+  "verified": false,
+  "provenance": "supplied: Grok CSV (AI-generated, unverified)",
+  "identify": [
+   "Log lines may contain an asset UUID; Shoebox maps UUIDs to file names. Or Activity Monitor > photolibraryd > Info > Open Files and Ports."
+  ],
+  "prevention": []
+ },
+ {
+  "id": "photos-error-41013-needs-upgrade",
+  "category": "library",
+  "title": "Photos library 'requires upgrading' or cannot be opened (Code 41013)",
+  "signatures": [
+   "Code=41013",
+   "requires upgrading"
+  ],
+  "processes": [
+   "photolibraryd"
+  ],
+  "codes": [
+   "com.apple.photos.error 41013"
+  ],
+  "severity": "bad",
+  "meaning": "The library database and the running macOS disagree on version, or something else holds it open.",
+  "likely_causes": [
+   "Library last opened by a newer macOS",
+   "Stale lock from a crash",
+   "Interrupted upgrade"
+  ],
+  "fixes": [
+   "Update macOS to at least the version that last opened the library",
+   "Reboot to clear stale locks, then open Photos",
+   "Back up the library, then Option+Command repair"
+  ],
+  "risk": "caution",
+  "confidence": "low",
+  "sources": [
+   "supplied: Grok CSV (AI-generated, unverified)"
+  ],
+  "verified": false,
+  "provenance": "supplied: Grok CSV (AI-generated, unverified)",
+  "identify": [
+   "Not file specific."
+  ],
+  "prevention": []
+ },
+ {
+  "id": "finder-36-copy-unreadable",
+  "category": "disk",
+  "title": "Finder error -36 copying a library or folder",
+  "signatures": [
+   "error code -36",
+   "some data .{0,40}can.t be read or written"
+  ],
+  "processes": [
+   "Finder"
+  ],
+  "codes": [
+   "OSStatus -36"
+  ],
+  "severity": "warn",
+  "meaning": "A copy stopped because one file or sector could not be read. Often a bad spot on the drive, a damaged file, or a FAT32/ExFAT destination.",
+  "likely_causes": [
+   "Failing drive or cable",
+   "One unreadable file",
+   "Destination is FAT32/ExFAT",
+   "Stray ._ and .DS_Store files"
+  ],
+  "fixes": [
+   "Run Disk Utility > First Aid on source and destination",
+   "Run: dot_clean /path/to/library (removes stray ._ files)",
+   "Copy in chunks (originals/0, originals/1 ...) to find the exact folder where it stops",
+   "Shoebox 'copy with retries' keeps going past unreadable files and lists them"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "supplied: Grok CSV (AI-generated, unverified)"
+  ],
+  "verified": false,
+  "provenance": "supplied: Grok CSV (AI-generated, unverified)",
+  "identify": [
+   "Shoebox copy logs the exact files it could not read. In Terminal, 'cp -Rv' shows the last file before it stops."
+  ],
+  "prevention": [
+   "Replace failing drives. Keep two copies."
+  ]
+ },
+ {
+  "id": "analysis-daemon-crash-loop",
+  "category": "library",
+  "title": "photoanalysisd / mediaanalysisd keeps crashing on a picture",
+  "signatures": [
+   "(photoanalysisd|mediaanalysisd).{0,80}(crash|fault|uncaught exception)"
+  ],
+  "processes": [
+   "photoanalysisd",
+   "mediaanalysisd"
+  ],
+  "codes": [],
+  "severity": "warn",
+  "meaning": "The background face/scene analysis trips over one file (half-downloaded Live Photo, odd codec) and restarts again and again.",
+  "likely_causes": [
+   "Damaged or half-downloaded media",
+   "Very old or unusual codec",
+   "Analysis cache damaged"
+  ],
+  "fixes": [
+   "Leave the Mac on power and let analysis finish (can take days on big libraries)",
+   "Quit Photos, restart the Mac, reopen",
+   "Clear analysis caches (see 'Photos is slow, hot or the disk is full')",
+   "If it stalls on one item, find it (Shoebox: Find the exact files) and re-import its original"
+  ],
+  "risk": "caution",
+  "confidence": "low",
+  "sources": [
+   "supplied: Grok CSV (AI-generated, unverified)"
+  ],
+  "verified": false,
+  "provenance": "supplied: Grok CSV (AI-generated, unverified)",
+  "identify": [
+   "Terminal: log stream --process mediaanalysisd | grep -i fail   shows the asset in play. Shoebox maps UUIDs to file names."
+  ],
+  "prevention": []
+ },
+ {
+  "id": "mediaanalysisd-cache-bloat",
+  "category": "disk",
+  "title": "mediaanalysisd cache growing very large",
+  "signatures": [
+   "mediaanalysisd.{0,80}(cache|no space)"
+  ],
+  "processes": [
+   "mediaanalysisd"
+  ],
+  "codes": [],
+  "severity": "warn",
+  "meaning": "Analysis caches can grow to many GB after a big import or a bug. They rebuild on demand.",
+  "likely_causes": [
+   "Large import",
+   "OS bug fixed in later releases"
+  ],
+  "fixes": [
+   "Update macOS",
+   "Quit Photos",
+   "Remove ~/Library/Containers/com.apple.mediaanalysisd/Data/Library/Caches contents (rebuilds itself)",
+   "Restart the Mac"
+  ],
+  "risk": "caution",
+  "confidence": "low",
+  "sources": [
+   "supplied: Google-manifest CSV (AI-generated, unverified)"
+  ],
+  "verified": false,
+  "provenance": "supplied: Google-manifest CSV (AI-generated, unverified)",
+  "identify": [
+   "Terminal: du -sh ~/Library/Containers/com.apple.mediaanalysisd"
+  ],
+  "prevention": []
+ },
+ {
+  "id": "unable-to-upload-album",
+  "category": "icloud",
+  "title": "Photos shows 'Unable to Upload' or 'Couldn't sync N items'",
+  "signatures": [
+   "Unable to Upload",
+   "Upload failed for assetID",
+   "Batch exceeded max retry count",
+   "permanent failure"
+  ],
+  "processes": [
+   "cloudphotod",
+   "photolibraryd"
+  ],
+  "codes": [],
+  "severity": "bad",
+  "meaning": "Specific pictures failed to upload to iCloud after retries. They are listed in Photos' own 'Unable to Upload' view, and their local state is 'not uploaded' in Photos.sqlite.",
+  "likely_causes": [
+   "Corrupt or unusual file",
+   "Unsupported format or wrong extension",
+   "Odd metadata",
+   "Quota full",
+   "Network dropped mid-upload"
+  ],
+  "fixes": [
+   "Run Shoebox 'Pending uploads' to list the exact files",
+   "Export the originals (File > Export > Export Unmodified Original), delete the stuck ones, re-import",
+   "If still failing, convert or repair the file (Shoebox Health check) and re-import",
+   "Check iCloud storage and network first"
+  ],
+  "risk": "caution",
+  "confidence": "medium",
+  "sources": [
+   "supplied: Google-manifest CSV (AI-generated, unverified) + supplied: Grok CSV (AI-generated, unverified)"
+  ],
+  "verified": false,
+  "provenance": "supplied: Google-manifest CSV (AI-generated, unverified) + supplied: Grok CSV (AI-generated, unverified)",
+  "identify": [
+   "Shoebox 'Pending uploads' reads Photos.sqlite (ZCLOUDLOCALSTATE) and lists filename, size, date and likely cause. In Photos: open the 'Unable to Upload' view from the status link."
+  ],
+  "prevention": [
+   "Keep storage free in iCloud, avoid giant imports on flaky Wi-Fi."
+  ]
+ },
+ {
+  "id": "cloud-sync-stalled-generic",
+  "category": "icloud",
+  "title": "iCloud Photos sync stalled or paused for a long time",
+  "signatures": [
+   "Sync session in push got error",
+   "CloudPhotoLibraryErrorDomain"
+  ],
+  "processes": [
+   "cloudphotod",
+   "cloudd"
+  ],
+  "codes": [
+   "CloudPhotoLibraryErrorDomain 1"
+  ],
+  "severity": "warn",
+  "meaning": "Syncing started and stopped making progress. It is usually network, power, quota or one bad asset blocking the queue.",
+  "likely_causes": [
+   "Low Power / Low Data mode",
+   "iCloud quota full",
+   "One bad asset",
+   "Sleeping Mac",
+   "Apple outage"
+  ],
+  "fixes": [
+   "Plug in, use stable Wi-Fi, turn off Low Power Mode",
+   "Check iCloud storage and Apple System Status",
+   "Find stuck items with Shoebox 'Pending uploads'",
+   "Restart the Mac (do not repeat killall loops)",
+   "Only then: toggle iCloud Photos off/on, after confirming originals are local"
+  ],
+  "risk": "caution",
+  "confidence": "low",
+  "sources": [
+   "supplied: Google-manifest CSV (AI-generated, unverified) + supplied: Grok CSV (AI-generated, unverified)"
+  ],
+  "verified": false,
+  "provenance": "supplied: Google-manifest CSV (AI-generated, unverified) + supplied: Grok CSV (AI-generated, unverified)",
+  "identify": [
+   "Shoebox 'Pending uploads' shows which files have not uploaded."
+  ],
+  "prevention": []
+ },
+ {
+  "id": "ghost-orphan-files",
+  "category": "library",
+  "title": "Orphan or ghost files: space used by Photos but pictures not visible",
+  "signatures": [
+   "orphan(ed)? (asset|file|resource)"
+  ],
+  "processes": [
+   "photolibraryd"
+  ],
+  "codes": [],
+  "severity": "warn",
+  "meaning": "Files exist inside the library package that Photos.sqlite does not know about (orphans) or the database lists files that are not on disk (missing). Common after failed imports, aborted syncs or damaged repairs.",
+  "likely_causes": [
+   "Aborted import/delete",
+   "Interrupted sync",
+   "Damaged library repair",
+   "Manual edits inside the package"
+  ],
+  "fixes": [
+   "Back up the whole library first",
+   "Run Shoebox 'Library audit' to list orphans and missing files by exact path",
+   "Try Option+Command repair and re-audit",
+   "Re-import real orphans (copy them out first), then leave the originals folder alone"
+  ],
+  "risk": "caution",
+  "confidence": "medium",
+  "sources": [
+   "supplied: Google-manifest CSV (AI-generated, unverified)"
+  ],
+  "verified": false,
+  "provenance": "supplied: Google-manifest CSV (AI-generated, unverified)",
+  "identify": [
+   "Shoebox 'Library audit' compares originals/ on disk against Photos.sqlite and lists both directions with exact paths and a CSV."
+  ],
+  "prevention": [
+   "Never move or delete files inside the .photoslibrary package by hand."
+  ]
+ },
+ {
+  "id": "export-unknown-error",
+  "category": "import",
+  "title": "Photos export fails ('Unknown Error' / 'export complete with errors')",
+  "signatures": [
+   "failed to create a file for the photo",
+   "export (complete )?with errors"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [],
+  "severity": "warn",
+  "meaning": "One or more pictures could not be written out. Usually the original is not downloaded (Optimize Storage) or an edit is damaged.",
+  "likely_causes": [
+   "Original lives only in iCloud",
+   "Damaged edit",
+   "Destination full or read-only"
+  ],
+  "fixes": [
+   "Download the originals first (Photos > Settings > iCloud > Download Originals, or right-click > Download)",
+   "Export 'Unmodified Original' instead of edited",
+   "Export one at a time to find the offender",
+   "Check free space and destination permissions"
+  ],
+  "risk": "safe",
+  "confidence": "low",
+  "sources": [
+   "supplied: Google-manifest CSV (AI-generated, unverified)"
+  ],
+  "verified": false,
+  "provenance": "supplied: Google-manifest CSV (AI-generated, unverified)",
+  "identify": [
+   "Export a few at a time; failures name the file. Shoebox library audit shows items whose original is not on disk."
+  ],
+  "prevention": []
+ },
+ {
+  "id": "shared-album-add-fails",
+  "category": "icloud",
+  "title": "'There was an error adding the selected items' to a Shared Album",
+  "signatures": [
+   "error adding the selected items"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [],
+  "severity": "info",
+  "meaning": "Sharing fails for some Live Photos or odd formats, or while analysis is still running.",
+  "likely_causes": [
+   "Live Photo pair issue",
+   "Unusual HEIC",
+   "Just imported"
+  ],
+  "fixes": [
+   "Turn Live Photo off on the failing items, then share",
+   "Wait for analysis to finish after imports",
+   "Export and re-import the picture, then share"
+  ],
+  "risk": "safe",
+  "confidence": "low",
+  "sources": [
+   "supplied: Google-manifest CSV (AI-generated, unverified)"
+  ],
+  "verified": false,
+  "provenance": "supplied: Google-manifest CSV (AI-generated, unverified)",
+  "identify": [
+   "Failing items are the ones the error names; try them one by one."
+  ],
+  "prevention": []
+ },
+ {
+  "id": "camera-import-corrupt",
+  "category": "import",
+  "title": "Imported camera files differ from the card (checksum mismatch)",
+  "signatures": [
+   "checksum mismatch"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [],
+  "severity": "warn",
+  "meaning": "The imported copy is not byte-identical to the file on the card.",
+  "likely_causes": [
+   "Photos import bug on some cameras",
+   "Card/reader fault",
+   "Delete-after-import hid it"
+  ],
+  "fixes": [
+   "Turn off 'Delete items after import'",
+   "Compare checksums before wiping the card: shasum -a 256 file",
+   "Use Image Capture or the camera maker's tool for the copy, then import from disk"
+  ],
+  "risk": "safe",
+  "confidence": "low",
+  "sources": [
+   "supplied: Google-manifest CSV (AI-generated, unverified)"
+  ],
+  "verified": false,
+  "provenance": "supplied: Google-manifest CSV (AI-generated, unverified)",
+  "identify": [
+   "Compare shasum of the card file and the imported original."
+  ],
+  "prevention": []
+ },
+ {
+  "id": "ios-something-went-wrong",
+  "category": "icloud",
+  "title": "iPhone/iPad: 'Something Went Wrong' or cannot load higher quality image",
+  "signatures": [
+   "unable to load higher quality",
+   "Something went wrong"
+  ],
+  "processes": [
+   "cloudphotod"
+  ],
+  "codes": [],
+  "severity": "info",
+  "meaning": "The device could not download the full-size original from iCloud right now.",
+  "likely_causes": [
+   "Poor network",
+   "Low storage",
+   "iCloud outage",
+   "Damaged cloud copy"
+  ],
+  "fixes": [
+   "Restart the device, toggle Airplane Mode",
+   "Free device storage and update iOS",
+   "Check Apple System Status",
+   "View the item on iCloud.com or a Mac"
+  ],
+  "risk": "safe",
+  "confidence": "low",
+  "sources": [
+   "supplied: Google-manifest CSV (AI-generated, unverified)"
+  ],
+  "verified": false,
+  "provenance": "supplied: Google-manifest CSV (AI-generated, unverified)",
+  "identify": [
+   "Not file specific; the picture you tapped is the file."
+  ],
+  "prevention": []
+ },
+ {
+  "id": "library-locked-permissions",
+  "category": "permissions",
+  "title": "'Library is locked or you do not have permissions'",
+  "signatures": [
+   "photo library is locked or you do not have permissions"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [],
+  "severity": "bad",
+  "meaning": "Owner or permission flags on the library package are wrong, often after a migration or restore.",
+  "likely_causes": [
+   "Migration Assistant / restore",
+   "Drive 'ignore ownership' off",
+   "Root-owned files"
+  ],
+  "fixes": [
+   "Finder > Get Info on the library > Sharing & Permissions: set your user to Read & Write > Apply to enclosed items",
+   "Terminal to inspect: ls -le@ ~/Pictures/'Photos Library.photoslibrary'",
+   "On a drive: tick 'Ignore ownership on this volume'",
+   "Option+Command repair"
+  ],
+  "risk": "caution",
+  "confidence": "medium",
+  "sources": [
+   "supplied: Google-manifest CSV (AI-generated, unverified) + supplied: Grok CSV (AI-generated, unverified)"
+  ],
+  "verified": false,
+  "provenance": "supplied: Google-manifest CSV (AI-generated, unverified) + supplied: Grok CSV (AI-generated, unverified)",
+  "identify": [
+   "ls -le shows root ownership or flags on the package; Shoebox drive check shows format and ownership."
+  ],
+  "prevention": []
  }
 ]

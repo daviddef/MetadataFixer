@@ -1142,12 +1142,63 @@ def t_issue_catalog():
         srv.shutdown()
 
 
+def t_audit_pending_playbooks():
+    import sqlite3
+    base = Path(tempfile.mkdtemp(prefix="auditlib_"))
+    lib = make_photos_library(base / "T.photoslibrary", [("a.jpg", 10, False), ("b.jpg", 10, False), ("c.jpg", 10, False), ("d.jpg", 10, False), ("e.jpg", 10, True), ("f.xyz", 10, False)])
+    o = lib / "originals" / "0"
+    o.mkdir(parents=True)
+    (o / "U1.jpeg").write_bytes(b"\xff\xd8\xff\xe0" + b"0" * 50)
+    (o / "U2.jpeg").write_bytes(b"")
+    (o / "U3.jpeg").write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 50)
+    (o / "ZZZ.jpeg").write_bytes(b"orphan!")
+    (o / "U1_3.mov").write_bytes(b"live partner")
+    (o / "U6.jpeg").write_bytes(b"\xff\xd8\xff\xe0" + b"0" * 50)
+    a = fx.photos_library_audit(lib)
+    assert a["ok"] and a["orphans_total"] == 1 and a["orphans"][0]["file"] == "ZZZ.jpeg", a["orphans"]
+    assert a["missing_local_total"] == 1 and a["missing_local"][0]["file"] == "d.jpg"
+    assert a["cloud_only_total"] == 1 and a["zero_byte_total"] == 1 and a["zero_byte"][0]["file"] == "b.jpg"
+    assert a["wrong_extension_total"] >= 1 and any(w["file"] == "c.jpg" for w in a["wrong_extension"]), a["wrong_extension"]
+    pf = fx.photos_pending_files(lib)
+    names = {i["file"]: i for i in pf["items"]}
+    assert pf["pending_total"] == 5 and "e.jpg" not in names
+    assert any("empty" in h for h in names["b.jpg"]["hints"]) and any("PNG" in h.upper() or ".png" in h for h in names["c.jpg"]["hints"]), names["c.jpg"]
+    assert any("missing" in h for h in names["d.jpg"]["hints"]) and any("unusual" in h for h in names["f.xyz"]["hints"])
+    assert fx.photos_library_audit(base / "nope")["ok"] is False
+    # uuids in logs map to real names
+    c = sqlite3.connect(lib / "database" / "Photos.sqlite")
+    c.execute("alter table ZASSET add column ZUUID text")
+    c.execute("update ZASSET set ZUUID='11111111-2222-3333-4444-555555555555' where Z_PK=2")
+    c.commit(); c.close()
+    lines = ["2026-01-01 cloudphotod: Upload failed for assetID=11111111-2222-3333-4444-555555555555 path=/Users/x/Pictures/a.heic", "no ids here"]
+    f = fx.files_in_lines(lines)
+    assert f["uuids"] == ["11111111-2222-3333-4444-555555555555"] and f["paths"] == ["/Users/x/Pictures/a.heic"], f
+    r = fx.resolve_uuids(lib, f["uuids"])
+    assert r["ok"] and r["found"][0]["file"] == "b.jpg", r
+    iss, _ = fx.interpret_log_lines(lines)
+    g.attach_log_files(iss, str(lib))
+    assert iss and iss[0]["files"]["resolved"][0]["file"] == "b.jpg" and iss[0]["files"]["paths"] == ["/Users/x/Pictures/a.heic"], iss
+    # playbooks: valid ids, steps, new catalog fields
+    pbs = fx.load_playbooks()
+    raw = json.loads(fx.PLAYBOOKS_FILE.read_text())
+    known = {e["id"] for e in fx.load_issues()}
+    assert len(pbs) >= 10 and all(p["steps"] for p in pbs)
+    for p in raw:
+        assert all(i in known for i in p["issue_ids"]), p["id"]
+        assert all(st["who"] in ("shoebox", "you", "terminal") for st in p["steps"]), p["id"]
+        assert not any(st.get("action") and st["action"] not in ("audit", "pending", "monitor", "health", "guide") for st in p["steps"]), p["id"]
+    sup = [e for e in fx.load_issues() if e.get("provenance", "").startswith("supplied")]
+    assert len(sup) >= 10 and all(not e["verified"] and e["confidence"] != "high" for e in sup)
+    shutil.rmtree(base, ignore_errors=True)
+    return "%d playbooks, %d supplied entries" % (len(pbs), len(sup))
+
+
 ORDER = ["t_fix_copy", "t_fix_namedate", "t_fix_inplace", "t_fix_move", "t_fix_dryrun_changes_nothing", "t_fix_zip", "t_zip_resume", "t_zip_needs_dest", "t_zip_corrupt",
          "t_edited_policies", "t_cancel_mid_run", "t_unreadable_and_zero", "t_dest_not_writable", "t_exiftool_missing", "t_low_disk_zip", "t_assess_and_recommend",
          "t_assess_multi_and_photoslib", "t_guided_end_to_end", "t_guided_no_dest", "t_merge_variants", "t_merge_refuses_unsafe", "t_merge_move_in_place", "t_cleanup_all",
          "t_cleanup_refuses_broad", "t_consolidate", "t_convert", "t_convert_stop", "t_similar_apply_undo", "t_health_and_formats", "t_undo_copy_run", "t_photos_plan_and_run",
          "t_photos_applescript_injection_safe", "t_photos_errors", "t_monitor_rules", "t_monitor_job_paste", "t_compare_and_near", "t_diagnostics", "t_history_report",
-         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs", "t_audit_regressions", "t_dates_and_places", "t_resilient_copy", "t_rerun_over_http", "t_keeper_rules_and_matching", "t_bursts_and_compare_rules", "t_qa_hunt_regressions", "t_timezone_correct_dates", "t_preflight_report", "t_albums_and_live_arrival", "t_receipt", "t_context_dates_and_locations", "t_blur_and_screenshots", "t_motion_photo_extract", "t_offline_place_names", "t_issue_catalog"]
+         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs", "t_audit_regressions", "t_dates_and_places", "t_resilient_copy", "t_rerun_over_http", "t_keeper_rules_and_matching", "t_bursts_and_compare_rules", "t_qa_hunt_regressions", "t_timezone_correct_dates", "t_preflight_report", "t_albums_and_live_arrival", "t_receipt", "t_context_dates_and_locations", "t_blur_and_screenshots", "t_motion_photo_extract", "t_offline_place_names", "t_issue_catalog", "t_audit_pending_playbooks"]
 if __name__ == "__main__":
     only = sys.argv[1:]
     for n in ORDER:

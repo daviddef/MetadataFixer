@@ -1,0 +1,639 @@
+[
+ {
+  "id": "sync-stuck",
+  "icon": "☁️",
+  "title": "iCloud Photos is stuck, paused or never finishes",
+  "symptom": "Status says Syncing paused, Uploading N items for days, or Preparing... forever.",
+  "issue_ids": [
+   "cloud-sync-stalled-generic",
+   "photos-paused-low-power",
+   "ck-quota-exceeded",
+   "ck-network-failure",
+   "ck-not-authenticated",
+   "preparing-to-upload-large-import",
+   "photos-waiting-to-upload"
+  ],
+  "steps": [
+   {
+    "who": "you",
+    "text": "Plug in, join stable Wi-Fi, turn off Low Power Mode and Low Data Mode, keep the Mac awake.",
+    "risk": "safe",
+    "why": "These pause uploads silently."
+   },
+   {
+    "who": "you",
+    "text": "Check iCloud storage is not full (System Settings > Apple ID > iCloud) and Apple System Status shows iCloud Photos green.",
+    "risk": "safe"
+   },
+   {
+    "who": "you",
+    "text": "Scroll to the very bottom of All Photos and read the status line. Note the number of items.",
+    "risk": "safe"
+   },
+   {
+    "who": "shoebox",
+    "text": "List the exact files that have not uploaded.",
+    "risk": "safe",
+    "action": "pending",
+    "why": "One bad picture can hold the queue."
+   },
+   {
+    "who": "shoebox",
+    "text": "Check the Photos log for sync errors and see what they mean.",
+    "risk": "safe",
+    "action": "monitor"
+   },
+   {
+    "who": "terminal",
+    "text": "Optional: see the raw sync errors.",
+    "risk": "safe",
+    "cmd": "log show --predicate 'process == \"cloudphotod\" OR process == \"photolibraryd\"' --last 1d --info | grep -iE 'fail|error|asset'"
+   },
+   {
+    "who": "you",
+    "text": "Restart the Mac. Wait a few hours before trying anything else.",
+    "risk": "safe",
+    "why": "Large libraries take hours or days."
+   },
+   {
+    "who": "you",
+    "text": "Only if still stuck AND originals are all on this Mac: toggle iCloud Photos off then on (Photos > Settings > iCloud).",
+    "risk": "caution",
+    "why": "With Optimize Storage on, turning it off can delete full-size local copies. Check Download Originals first."
+   }
+  ],
+  "identify": [
+   "Shoebox 'Pending uploads' lists each file and why it may be stuck.",
+   "Photos > Library > the 'Unable to Upload' view lists items Apple gave up on."
+  ],
+  "prevention": [
+   "Keep iCloud storage below ~90%.",
+   "Do big imports on wired or strong Wi-Fi with the Mac on power."
+  ],
+  "confidence": "medium",
+  "provenance": "supplied CSVs (AI-generated) + general macOS knowledge; not yet checked against Apple pages or real Console output"
+ },
+ {
+  "id": "unable-to-upload",
+  "icon": "⚠️",
+  "title": "'Unable to Upload' / 'Couldn't sync N items'",
+  "symptom": "A banner or album lists items Photos could not send to iCloud.",
+  "issue_ids": [
+   "unable-to-upload-album",
+   "unsupported-format-upload",
+   "large-file-limit",
+   "live-photo-video-upload-fail",
+   "ck-asset-file-not-found"
+  ],
+  "steps": [
+   {
+    "who": "shoebox",
+    "text": "List the stuck files with likely cause (empty file, wrong extension, huge, odd type).",
+    "risk": "safe",
+    "action": "pending"
+   },
+   {
+    "who": "you",
+    "text": "In Photos open the Unable to Upload view. Select the items.",
+    "risk": "safe"
+   },
+   {
+    "who": "you",
+    "text": "File > Export > Export Unmodified Original into a new folder.",
+    "risk": "safe",
+    "why": "Edits and keywords are lost on re-import, so note them if they matter."
+   },
+   {
+    "who": "shoebox",
+    "text": "Run the Health check on that export folder to catch broken files, wrong extensions and bad dates before re-importing.",
+    "risk": "safe",
+    "action": "health"
+   },
+   {
+    "who": "you",
+    "text": "Delete the originals from Photos, empty Recently Deleted, then import the exported files again.",
+    "risk": "destructive",
+    "why": "Only after you confirm the export folder has every file."
+   },
+   {
+    "who": "terminal",
+    "text": "If a file still fails, remove stray flags that block import.",
+    "risk": "safe",
+    "cmd": "xattr -rc /path/to/exported-folder"
+   }
+  ],
+  "identify": [
+   "File name, size and date for each item from Shoebox 'Pending uploads'."
+  ],
+  "prevention": [
+   "Avoid unusual formats and multi-GB videos in the main library."
+  ],
+  "confidence": "medium",
+  "provenance": "supplied CSVs (AI-generated) + general macOS knowledge; not yet checked against Apple pages or real Console output"
+ },
+ {
+  "id": "ghost-files",
+  "icon": "👻",
+  "title": "Ghost, orphan or phantom files",
+  "symptom": "Photos reports lots of storage but you see few pictures, deleted pictures still count, or the library folder is bigger than expected.",
+  "issue_ids": [
+   "ghost-orphan-files",
+   "missing-originals",
+   "zero-byte-assets",
+   "icloud-drive-dataless"
+  ],
+  "steps": [
+   {
+    "who": "you",
+    "text": "Back up first: copy the whole .photoslibrary package to another drive (Finder, hold Option to copy, or Time Machine).",
+    "risk": "safe",
+    "why": "Every repair step below is safer with a copy."
+   },
+   {
+    "who": "shoebox",
+    "text": "Run the Library audit: lists files on disk that Photos does not know (orphans) and items Photos lists but cannot find, with exact paths.",
+    "risk": "safe",
+    "action": "audit"
+   },
+   {
+    "who": "you",
+    "text": "Open the CSV from the audit. Orphans: copy them somewhere safe (do not delete inside the package).",
+    "risk": "safe"
+   },
+   {
+    "who": "you",
+    "text": "Quit Photos, then hold Option+Command while reopening it and choose Repair.",
+    "risk": "caution"
+   },
+   {
+    "who": "shoebox",
+    "text": "Run the audit again to see what changed.",
+    "risk": "safe",
+    "action": "audit"
+   },
+   {
+    "who": "you",
+    "text": "Re-import real orphan files you want to keep from your safe copy.",
+    "risk": "safe"
+   },
+   {
+    "who": "terminal",
+    "text": "Optional: size of the package versus what Photos reports.",
+    "risk": "safe",
+    "cmd": "du -sh ~/Pictures/'Photos Library.photoslibrary'"
+   }
+  ],
+  "identify": [
+   "Shoebox Library audit: orphans by exact path, missing-by-database list, empty files, wrong extensions.",
+   "In iCloud-synced libraries, 'cloud only' items are normal and not counted as missing."
+  ],
+  "prevention": [
+   "Never move or delete files inside the .photoslibrary package by hand."
+  ],
+  "confidence": "medium",
+  "provenance": "supplied CSVs (AI-generated) + general macOS knowledge; not yet checked against Apple pages or real Console output"
+ },
+ {
+  "id": "format-problems",
+  "icon": "🎞️",
+  "title": "Unsupported format, 'Unable to load', or won't open",
+  "symptom": "A picture or video shows a grey tile, 'Unable to Load Photo or Video', or fails to import.",
+  "issue_ids": [
+   "import-file-not-supported",
+   "import-wrong-extension",
+   "imageio-decode-failure",
+   "import-raw-dng-proraw",
+   "import-legacy-video-containers",
+   "import-hevc-prores",
+   "unsupported-format-upload"
+  ],
+  "steps": [
+   {
+    "who": "shoebox",
+    "text": "Run the Health check on the folder: it finds broken files, wrong extensions and unsupported types.",
+    "risk": "safe",
+    "action": "health"
+   },
+   {
+    "who": "terminal",
+    "text": "Check what a file really is.",
+    "risk": "safe",
+    "cmd": "file -b --mime-type /path/to/file; exiftool -FileType -FileTypeExtension /path/to/file"
+   },
+   {
+    "who": "you",
+    "text": "If the extension is wrong, rename it to match (Shoebox Health can fix this in bulk).",
+    "risk": "safe"
+   },
+   {
+    "who": "you",
+    "text": "For unsupported RAW or video, convert it (Preview, ffmpeg, or the camera maker's tool) and import the converted copy; keep the original.",
+    "risk": "safe"
+   },
+   {
+    "who": "you",
+    "text": "Update macOS: newer releases add camera and codec support.",
+    "risk": "safe"
+   }
+  ],
+  "identify": [
+   "Shoebox Health check lists each file and what is wrong with it."
+  ],
+  "prevention": [
+   "Convert unusual formats before importing."
+  ],
+  "confidence": "medium",
+  "provenance": "supplied CSVs (AI-generated) + general macOS knowledge; not yet checked against Apple pages or real Console output"
+ },
+ {
+  "id": "import-fails",
+  "icon": "📥",
+  "title": "Import fails: 'Unknown Error', 'Operation not permitted'",
+  "symptom": "Photos or Shoebox's Send to Photos reports errors for some or all files.",
+  "issue_ids": [
+   "full-disk-access-photos",
+   "posix-1-eperm",
+   "tcc-files-and-folders",
+   "applescript-1743",
+   "import-zero-byte-damaged",
+   "phphotos-3302-invalid-resource",
+   "import-huge-file"
+  ],
+  "steps": [
+   {
+    "who": "you",
+    "text": "System Settings > Privacy & Security > Full Disk Access: switch on Photos and Shoebox. Also Photos and Files-and-Folders / Removable Volumes if the files are on a drive.",
+    "risk": "safe"
+   },
+   {
+    "who": "shoebox",
+    "text": "Run the Health check to find empty or damaged files before importing.",
+    "risk": "safe",
+    "action": "health"
+   },
+   {
+    "who": "terminal",
+    "text": "Look at one failing file.",
+    "risk": "safe",
+    "cmd": "ls -le@ /path/to/file; xattr -l /path/to/file"
+   },
+   {
+    "who": "terminal",
+    "text": "Clear quarantine and extended flags.",
+    "risk": "safe",
+    "cmd": "xattr -rc /path/to/folder"
+   },
+   {
+    "who": "you",
+    "text": "Import from the Mac's own drive, not a network share. Try a small batch first.",
+    "risk": "safe"
+   },
+   {
+    "who": "shoebox",
+    "text": "Watch the Photos log while retrying; Shoebox explains each error.",
+    "risk": "safe",
+    "action": "monitor"
+   }
+  ],
+  "identify": [
+   "The failing path appears in Console lines; Shoebox pulls file names out of the log for you."
+  ],
+  "confidence": "medium",
+  "provenance": "supplied CSVs (AI-generated) + general macOS knowledge; not yet checked against Apple pages or real Console output"
+ },
+ {
+  "id": "library-wont-open",
+  "icon": "🔒",
+  "title": "Library locked, won't open, or crashes",
+  "symptom": "'Library is locked or you do not have permissions', error 5600, error 41013, Photos hangs on launch.",
+  "issue_ids": [
+   "library-locked-permissions",
+   "photos-5600-unsupported-filesystem",
+   "photos-error-41013-needs-upgrade",
+   "library-cannot-open",
+   "external-drive-format",
+   "external-drive-ignore-ownership",
+   "library-damaged-needs-repair",
+   "repair-library-fails-or-loops"
+  ],
+  "steps": [
+   {
+    "who": "you",
+    "text": "Back up first: copy the whole .photoslibrary package to another drive (Finder, hold Option to copy, or Time Machine).",
+    "risk": "safe",
+    "why": "Every repair step below is safer with a copy."
+   },
+   {
+    "who": "shoebox",
+    "text": "Library health check: format of the drive, permissions, free space, database state.",
+    "risk": "safe",
+    "action": "health"
+   },
+   {
+    "who": "you",
+    "text": "If the library is on an external drive: it must be APFS or Mac OS Extended (Journaled), connected directly, with 'Ignore ownership on this volume' ticked in Get Info.",
+    "risk": "safe"
+   },
+   {
+    "who": "you",
+    "text": "Finder > Get Info on the library > Sharing & Permissions: your user = Read & Write, then Apply to enclosed items.",
+    "risk": "caution"
+   },
+   {
+    "who": "terminal",
+    "text": "See owners and flags.",
+    "risk": "safe",
+    "cmd": "ls -le@ ~/Pictures/'Photos Library.photoslibrary' | head"
+   },
+   {
+    "who": "you",
+    "text": "Quit Photos, hold Option+Command while opening it, and choose Repair.",
+    "risk": "caution"
+   },
+   {
+    "who": "you",
+    "text": "If repair fails: make a new empty library (hold Option, Create New). If that works, the old one is damaged: import its originals folder into the new one in batches.",
+    "risk": "caution"
+   }
+  ],
+  "identify": [
+   "Not file specific for lock/format errors; the repair log lists damaged items."
+  ],
+  "prevention": [
+   "Keep a Time Machine backup of the library."
+  ],
+  "confidence": "medium",
+  "provenance": "supplied CSVs (AI-generated) + general macOS knowledge; not yet checked against Apple pages or real Console output"
+ },
+ {
+  "id": "copy-fails",
+  "icon": "📦",
+  "title": "Copying or moving a library fails (error -36)",
+  "symptom": "Finder says some data can't be read or written, or a copy stops partway.",
+  "issue_ids": [
+   "finder-36-copy-unreadable",
+   "posix-5-eio",
+   "external-drive-sleep-disconnect"
+  ],
+  "steps": [
+   {
+    "who": "you",
+    "text": "Disk Utility > First Aid on the source and the destination.",
+    "risk": "safe"
+   },
+   {
+    "who": "terminal",
+    "text": "Remove stray resource files.",
+    "risk": "safe",
+    "cmd": "dot_clean ~/Pictures/'Photos Library.photoslibrary'"
+   },
+   {
+    "who": "shoebox",
+    "text": "Use Shoebox's copy: it retries, skips unreadable files, and lists exactly which ones.",
+    "risk": "safe",
+    "action": "guide"
+   },
+   {
+    "who": "you",
+    "text": "Make sure the destination is APFS or Mac OS Extended, not FAT32/ExFAT.",
+    "risk": "safe"
+   }
+  ],
+  "identify": [
+   "Shoebox's copy report lists each file it could not read, by path."
+  ],
+  "confidence": "medium",
+  "provenance": "supplied CSVs (AI-generated) + general macOS knowledge; not yet checked against Apple pages or real Console output"
+ },
+ {
+  "id": "slow-hot",
+  "icon": "🔥",
+  "title": "Photos is slow, hot, or the disk fills up",
+  "symptom": "photolibraryd, mediaanalysisd or photoanalysisd use lots of CPU or disk for days.",
+  "issue_ids": [
+   "analysis-daemon-crash-loop",
+   "mediaanalysisd-cache-bloat",
+   "photos-hangs-analyzing",
+   "daemon-crash"
+  ],
+  "steps": [
+   {
+    "who": "you",
+    "text": "Leave the Mac on power and awake overnight; after a big import analysis can take days.",
+    "risk": "safe"
+   },
+   {
+    "who": "shoebox",
+    "text": "Check the log for a crash loop on one item.",
+    "risk": "safe",
+    "action": "monitor"
+   },
+   {
+    "who": "terminal",
+    "text": "See the cache size.",
+    "risk": "safe",
+    "cmd": "du -sh ~/Library/Containers/com.apple.mediaanalysisd 2>/dev/null"
+   },
+   {
+    "who": "you",
+    "text": "If huge: quit Photos, delete the contents of that Caches folder, restart (it rebuilds).",
+    "risk": "caution"
+   },
+   {
+    "who": "you",
+    "text": "Update macOS; many analysis bugs are fixed in point releases.",
+    "risk": "safe"
+   }
+  ],
+  "identify": [
+   "Activity Monitor > photolibraryd > Open Files and Ports shows the file being worked on."
+  ],
+  "confidence": "low",
+  "provenance": "supplied CSVs (AI-generated) + general macOS knowledge; not yet checked against Apple pages or real Console output"
+ },
+ {
+  "id": "export-errors",
+  "icon": "📤",
+  "title": "Export fails or 'Unknown Error'",
+  "symptom": "Export stops, or says it completed with errors.",
+  "issue_ids": [
+   "export-unknown-error",
+   "missing-originals",
+   "optimise-storage-downloads"
+  ],
+  "steps": [
+   {
+    "who": "you",
+    "text": "Photos > Settings > iCloud: choose Download Originals (or right-click items > Download), wait for it to finish.",
+    "risk": "safe"
+   },
+   {
+    "who": "shoebox",
+    "text": "Library audit shows items whose original is not on disk.",
+    "risk": "safe",
+    "action": "audit"
+   },
+   {
+    "who": "you",
+    "text": "Export 'Unmodified Original' rather than edited versions.",
+    "risk": "safe"
+   },
+   {
+    "who": "you",
+    "text": "Export a few at a time to find the one that fails; that one is the damaged item.",
+    "risk": "safe"
+   }
+  ],
+  "identify": [
+   "Failing items are the ones the export names; the audit lists those without a local original."
+  ],
+  "confidence": "low",
+  "provenance": "supplied CSVs (AI-generated) + general macOS knowledge; not yet checked against Apple pages or real Console output"
+ },
+ {
+  "id": "shared-albums",
+  "icon": "🤝",
+  "title": "Shared Album won't take items",
+  "symptom": "'There was an error adding the selected items.'",
+  "issue_ids": [
+   "shared-album-add-fails",
+   "shared-library-album-sync",
+   "live-photo-video-upload-fail"
+  ],
+  "steps": [
+   {
+    "who": "you",
+    "text": "Turn Live Photo off on the failing items and try again.",
+    "risk": "safe"
+   },
+   {
+    "who": "you",
+    "text": "Wait until analysis finishes after a big import.",
+    "risk": "safe"
+   },
+   {
+    "who": "you",
+    "text": "Export and re-import the item, then share.",
+    "risk": "safe"
+   }
+  ],
+  "identify": [
+   "The items that fail when added one by one."
+  ],
+  "confidence": "low",
+  "provenance": "supplied CSVs (AI-generated) + general macOS knowledge; not yet checked against Apple pages or real Console output"
+ },
+ {
+  "id": "permissions",
+  "icon": "🛡️",
+  "title": "Shoebox or another app can't see Photos",
+  "symptom": "'Not authorized', Operation not permitted, or an automation prompt never appears.",
+  "issue_ids": [
+   "tcc-photos-permission",
+   "tcc-full-disk-access",
+   "tcc-automation-1743",
+   "applescript-1743",
+   "phphotos-3311-access-user-denied"
+  ],
+  "steps": [
+   {
+    "who": "you",
+    "text": "System Settings > Privacy & Security > Photos / Automation / Full Disk Access: switch the app on.",
+    "risk": "safe"
+   },
+   {
+    "who": "terminal",
+    "text": "Reset a stuck permission, then reopen the app and allow again.",
+    "risk": "caution",
+    "cmd": "tccutil reset Photos"
+   },
+   {
+    "who": "shoebox",
+    "text": "Re-run the Photos log check.",
+    "risk": "safe",
+    "action": "monitor"
+   }
+  ],
+  "identify": [
+   "Not file specific."
+  ],
+  "confidence": "medium",
+  "provenance": "supplied CSVs (AI-generated) + general macOS knowledge; not yet checked against Apple pages or real Console output"
+ },
+ {
+  "id": "camera-import",
+  "icon": "📷",
+  "title": "Camera import corrupts or changes files",
+  "symptom": "Checksum of the imported file differs from the card.",
+  "issue_ids": [
+   "camera-import-corrupt",
+   "import-raw-dng-proraw"
+  ],
+  "steps": [
+   {
+    "who": "you",
+    "text": "Turn off 'Delete items after import'.",
+    "risk": "safe"
+   },
+   {
+    "who": "terminal",
+    "text": "Compare the card copy and the imported copy.",
+    "risk": "safe",
+    "cmd": "shasum -a 256 /Volumes/CARD/file.ext /path/to/imported/file.ext"
+   },
+   {
+    "who": "you",
+    "text": "Copy the card to a folder with Image Capture or Finder first, then import from there.",
+    "risk": "safe"
+   },
+   {
+    "who": "you",
+    "text": "Format the card only after you have verified the copy.",
+    "risk": "safe"
+   }
+  ],
+  "identify": [
+   "The files whose checksums differ."
+  ],
+  "confidence": "low",
+  "provenance": "supplied CSVs (AI-generated) + general macOS knowledge; not yet checked against Apple pages or real Console output"
+ },
+ {
+  "id": "ios-cloud-load",
+  "icon": "📱",
+  "title": "iPhone/iPad: 'Something Went Wrong' or won't load full quality",
+  "symptom": "Pictures stay blurry or show an error on the device.",
+  "issue_ids": [
+   "ios-something-went-wrong",
+   "optimise-storage-downloads",
+   "ck-network-unavailable"
+  ],
+  "steps": [
+   {
+    "who": "you",
+    "text": "Restart the device and toggle Airplane Mode.",
+    "risk": "safe"
+   },
+   {
+    "who": "you",
+    "text": "Free device storage and update iOS.",
+    "risk": "safe"
+   },
+   {
+    "who": "you",
+    "text": "Check Apple System Status for iCloud Photos.",
+    "risk": "safe"
+   },
+   {
+    "who": "you",
+    "text": "Open the same picture on a Mac or iCloud.com: if it loads there, the cloud copy is fine.",
+    "risk": "safe"
+   }
+  ],
+  "identify": [
+   "The picture you tapped."
+  ],
+  "confidence": "low",
+  "provenance": "supplied CSVs (AI-generated) + general macOS knowledge; not yet checked against Apple pages or real Console output"
+ }
+]

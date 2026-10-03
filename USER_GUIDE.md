@@ -286,6 +286,20 @@ Two ways to use it. **Log issues** on the same tab reads your recent Console mes
 
 **Please read this honestly:** this catalog is a **draft**. It was built from general knowledge of Photos, iCloud and macOS, and the web pages it cites could not be opened while it was written, so each entry says *draft: not yet checked against its sources* and carries a confidence level. The numeric error codes were cross-checked against what is documented for CloudKit and PhotoKit, but the exact wording of log messages is the weakest part. Treat any fix beyond the safe steps as a lead, and **back up your library before any repair step**. It is meant to grow: when you find a real error line that is not recognised, send it to support and it can be added.
 
+## Fix guides, checklists and finding the exact files (Monitor tab)
+
+The **Fix guides and checklists** box on the Monitor tab has about a dozen step-by-step guides for the things that actually go wrong: iCloud stuck or paused, "Unable to Upload", ghost or orphan files, unsupported formats, imports that fail, a library that will not open, copy errors (-36), a slow or hot Mac, export errors, shared albums, permissions, camera imports and "Something went wrong" on an iPhone.
+
+Each guide is an ordered checklist. Every step is tagged with who does it: 🧰 **Shoebox** (an Open button jumps to the right tool), 🙋 **You** (do it in Photos or Finder) or ⌨️ **Terminal** (a command you can copy). Risky steps carry a warning. Your ticks are remembered on this Mac, and **Copy as checklist** gives you the whole thing as text to paste into notes or an email.
+
+Two buttons find the **exact files**, read-only (they read a copy of the Photos database and change nothing):
+- **Library audit** lists files that are inside the library but unknown to Photos (orphans, ghost files), pictures Photos expects but cannot find on disk and not in iCloud, empty files, and files whose extension does not match what they really are. Pictures that are only in iCloud (normal with Optimize Storage) are counted separately, not as missing.
+- **Which files have not uploaded?** lists every picture still waiting for iCloud with its size and date, and flags the likely cause (empty file, wrong extension, unusual type, huge file, original missing). Both can save the full list as a spreadsheet.
+
+When **Log issues** finds an error that mentions a picture's id or path, Shoebox looks the id up in your library and shows the real file name under **Files named in the log**.
+
+The error catalog now also lists, for each entry where it applies, how to find the exact files and how to avoid the problem next time. About 14 entries came from two spreadsheets of AI-generated notes you supplied; they are marked as supplied, unverified and low confidence, and their quoted log messages are leads to check, not facts.
+
 ## Albums and Live Photos in Apple Photos
 
 After you check upload status (Monitor tab), Shoebox also checks **whether your albums and Live Photos arrived**: how many album folders became albums with all their photos, which are missing or short, and how many Live Photos Photos holds against how many were sent. This reads a copy of Photos' own database, which Apple does not document, so treat it as a strong hint.

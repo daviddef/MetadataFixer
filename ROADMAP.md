@@ -79,7 +79,7 @@ Most Takeout tools are one-shot scripts: they fix dates and stop, with no previe
 
 
 ## Ideas under consideration
-- **Verify the Photos problem catalog** against Apple's pages and real Console output, raise confidence levels, and add the exact log lines users send in.
+- **Verify the Photos problem catalog** against Apple's pages and real Console output, raise confidence levels, and add the exact log lines users send in. Also: check the supplied-CSV entries (marked supplied, unverified) and the 13 fix guides against real Macs.
 - See `BACKLOG.md` for pricing/licensing notes and more ideas.
 - **Always-on library health:** a background agent that rechecks and notifies.
 - ~~**Verify uploads to iCloud**~~ DONE (Photos tab; reads a copy of Photos' own database, so treat it as a hint).
