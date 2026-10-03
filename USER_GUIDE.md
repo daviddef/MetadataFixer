@@ -274,6 +274,18 @@ Shoebox can turn a location into a place name **without going online**. It ships
 - It is on in every style except *Fastest*.
 - The data file is `places.csv.gz`, kept next to the app. If it is missing, the option quietly does nothing.
 
+## Known Photos problems (Monitor tab)
+
+Shoebox carries a built-in **catalog of about 140 Apple Photos, iCloud and macOS problems**, with the error codes and log messages each one shows in Console, the likely causes, and fixes to try in order, safest first. It covers four areas:
+- **Library:** a library that will not open or says it needs repair, Repair Library behaviour, external-drive format and ownership problems, damaged databases (SQLite errors), connection (XPC) interruptions, Core Data store errors, a library from a newer Photos, missing originals, stuck upgrades.
+- **iCloud:** quota full, uploads that stall or sit at "waiting", paused sync, Low Power Mode, sign-in and account problems, CloudKit error codes (such as 25 quota exceeded, 23 zone busy, 9 not authenticated) and network error codes.
+- **Import and media:** Photos' own error codes (the 3300 series), AppleScript errors (-1743 not allowed, -1712 timed out, -600 not running), video errors, unsupported formats, zero-byte and damaged files.
+- **Permissions and drives:** Full Disk Access and Automation prompts, drives that sleep or disconnect, no space left, read-only volumes.
+
+Two ways to use it. **Log issues** on the same tab reads your recent Console messages (or text you paste) and recognises these problems by their messages *and* by their error codes, then shows what it means, the likely causes and the fixes. And the **Known Photos problems** box lists the whole catalog: search by a word, a code (try *4097*) or a process name (try *cloudphotod*), or filter by area.
+
+**Please read this honestly:** this catalog is a **draft**. It was built from general knowledge of Photos, iCloud and macOS, and the web pages it cites could not be opened while it was written, so each entry says *draft: not yet checked against its sources* and carries a confidence level. The numeric error codes were cross-checked against what is documented for CloudKit and PhotoKit, but the exact wording of log messages is the weakest part. Treat any fix beyond the safe steps as a lead, and **back up your library before any repair step**. It is meant to grow: when you find a real error line that is not recognised, send it to support and it can be added.
+
 ## Albums and Live Photos in Apple Photos
 
 After you check upload status (Monitor tab), Shoebox also checks **whether your albums and Live Photos arrived**: how many album folders became albums with all their photos, which are missing or short, and how many Live Photos Photos holds against how many were sent. This reads a copy of Photos' own database, which Apple does not document, so treat it as a strong hint.

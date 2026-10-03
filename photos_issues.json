@@ -1,0 +1,4533 @@
+[
+ {
+  "id": "coredata-store-errors",
+  "category": "library",
+  "title": "Core Data store error opening Photos library",
+  "signatures": [
+   "NSCocoaErrorDomain.{0,6}1340[0-9]{2}",
+   "NSCocoaErrorDomain.{0,6}1341[0-9]{2}"
+  ],
+  "processes": [
+   "photolibraryd"
+  ],
+  "codes": [
+   "NSCocoaErrorDomain 134030",
+   "NSCocoaErrorDomain 134060",
+   "NSCocoaErrorDomain 134100",
+   "NSCocoaErrorDomain 134110"
+  ],
+  "severity": "bad",
+  "meaning": "Core Data could not load or migrate the persistent store. 134030 save/ 134060 migration needed / 134100 version mismatch / 134110 migration failed (per Foundation headers).",
+  "likely_causes": [
+   "Library from a different Photos version",
+   "Interrupted migration",
+   "Corruption"
+  ],
+  "fixes": [
+   "Use macOS version that created the library",
+   "Back up the whole .photoslibrary package (copy it to another disk) first.",
+   "Run repair",
+   "Restore from backup"
+  ],
+  "risk": "caution",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/foundation/1448136-nserror_codes (NSCocoaError codes)",
+   "https://eclecticlight.co (Howard Oakley posts on Photos libraries; not fetched, egress blocked)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "daemon-crash",
+  "category": "library",
+  "title": "photolibraryd / assetsd / mediaanalysisd crashes",
+  "signatures": [
+   "photolibraryd.{0,30}(crash|terminated)"
+  ],
+  "processes": [
+   "photolibraryd",
+   "assetsd",
+   "mediaanalysisd"
+  ],
+  "codes": [],
+  "severity": "bad",
+  "meaning": "Crash reports in Console > Crash Reports show helper daemons crashing, often due to corrupt data.",
+  "likely_causes": [
+   "Corrupt library",
+   "Memory pressure",
+   "macOS bug"
+  ],
+  "fixes": [
+   "Read crash report",
+   "Update macOS",
+   "Repair library",
+   "Back up the whole .photoslibrary package (copy it to another disk) first."
+  ],
+  "risk": "caution",
+  "confidence": "low",
+  "sources": [
+   "https://eclecticlight.co (Howard Oakley posts on Photos libraries; not fetched, egress blocked)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "disk-full-import",
+  "category": "library",
+  "title": "Import fails because disk is full",
+  "signatures": [
+   "no space left on device"
+  ],
+  "processes": [
+   "photolibraryd"
+  ],
+  "codes": [
+   "NSPOSIXErrorDomain 28"
+  ],
+  "severity": "bad",
+  "meaning": "Not enough space on library disk or startup disk (temp files) for import.",
+  "likely_causes": [
+   "Low free space",
+   "Library on small disk"
+  ],
+  "fixes": [
+   "Free space",
+   "Move library to larger disk"
+  ],
+  "risk": "safe",
+  "confidence": "high",
+  "sources": [
+   "https://support.apple.com/en-us/109361 (Apple: If Photos can't open library / Repair library; not fetched, egress blocked)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "icloud-drive-dataless",
+  "category": "library",
+  "title": "Library stored in iCloud Drive with Optimise Storage",
+  "signatures": [],
+  "processes": [
+   "Photos",
+   "fileproviderd"
+  ],
+  "codes": [],
+  "severity": "bad",
+  "meaning": "Libraries in iCloud Drive/Desktop & Documents can have files evicted as dataless, breaking Photos. Apple says do not store libraries there.",
+  "likely_causes": [
+   "Optimise Mac Storage"
+  ],
+  "fixes": [
+   "Move library out of iCloud-synced folders",
+   "Back up the whole .photoslibrary package (copy it to another disk) first.",
+   "Download everything first (Keep Downloaded)",
+   "Repair"
+  ],
+  "risk": "caution",
+  "confidence": "medium",
+  "sources": [
+   "https://eclecticlight.co (Howard Oakley posts on Photos libraries; not fetched, egress blocked)",
+   "https://support.apple.com/en-us/109361 (Apple: If Photos can't open library / Repair library; not fetched, egress blocked)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "library-cannot-open",
+  "category": "library",
+  "title": "Photos says it can't open your library",
+  "signatures": [
+   "photos library could not be opened",
+   "can.?t open the library"
+  ],
+  "processes": [
+   "Photos",
+   "photolibraryd"
+  ],
+  "codes": [],
+  "severity": "bad",
+  "meaning": "Photos refused to open the selected library, usually because it is damaged, locked, from a newer macOS, or on an unavailable disk. The exact reason is in the dialog or Console.",
+  "likely_causes": [
+   "Library damaged or needs repair",
+   "Library created by a newer Photos version",
+   "Library on a disconnected/read-only/wrong-format drive",
+   "Permissions or ownership mismatch"
+  ],
+  "fixes": [
+   "Quit Photos, restart the Mac and retry",
+   "Hold Option while launching Photos and choose the library again",
+   "Back up the whole .photoslibrary package (copy it to another disk) first.",
+   "Hold Option+Command while launching Photos and run Repair Library",
+   "If on an external drive, check it is mounted and Ignore ownership is off (Get Info)",
+   "If repair fails, restore from Time Machine or use PowerPhotos to rebuild"
+  ],
+  "risk": "destructive",
+  "confidence": "medium",
+  "sources": [
+   "https://support.apple.com/en-us/109361 (Apple: If Photos can't open library / Repair library; not fetched, egress blocked)",
+   "https://www.fatcatsoftware.com/powerphotos/ (PowerPhotos support pages; not fetched)",
+   "https://eclecticlight.co (Howard Oakley posts on Photos libraries; not fetched, egress blocked)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "library-damaged-needs-repair",
+  "category": "library",
+  "title": "Photos says the library is damaged and must be repaired",
+  "signatures": [
+   "library (is|was) damaged",
+   "needs? (to be )?repair"
+  ],
+  "processes": [
+   "Photos",
+   "photolibraryd"
+  ],
+  "codes": [],
+  "severity": "bad",
+  "meaning": "Photos found internal inconsistencies at launch and offers Repair Library. Repair rebuilds the database from the files; it normally keeps photos but can take hours.",
+  "likely_causes": [
+   "Unclean shutdown or crash during write",
+   "Disk errors or full disk",
+   "Interrupted migration",
+   "Cloud sync inconsistency"
+  ],
+  "fixes": [
+   "Back up the whole .photoslibrary package (copy it to another disk) first.",
+   "Plug in power, ensure ample free space (at least size of database plus several GB)",
+   "Hold Option+Command while opening Photos and click Repair",
+   "Let it finish; do not force-quit",
+   "If it fails, run Disk Utility First Aid on the volume, then repeat"
+  ],
+  "risk": "caution",
+  "confidence": "medium",
+  "sources": [
+   "https://support.apple.com/en-us/109361 (Apple: If Photos can't open library / Repair library; not fetched, egress blocked)",
+   "https://eclecticlight.co (Howard Oakley posts on Photos libraries; not fetched, egress blocked)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "library-from-newer-version",
+  "category": "library",
+  "title": "Library was made by a newer Photos version",
+  "signatures": [
+   "library .{0,30}(newer|later) version"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [],
+  "severity": "bad",
+  "meaning": "You can't open a library upgraded by newer macOS in an older one.",
+  "likely_causes": [
+   "Opened on a newer Mac then moved back"
+  ],
+  "fixes": [
+   "Update macOS on this Mac",
+   "Or restore an older backup"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://support.apple.com/en-us/109361 (Apple: If Photos can't open library / Repair library; not fetched, egress blocked)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "missing-originals",
+  "category": "library",
+  "title": "Photos can't find original / photos show as blank",
+  "signatures": [
+   "can.?t find (the )?original",
+   "original (file )?(is )?missing"
+  ],
+  "processes": [
+   "photolibraryd"
+  ],
+  "codes": [],
+  "severity": "bad",
+  "meaning": "Database references files missing from originals folder: deleted, moved or lost with disk problems.",
+  "likely_causes": [
+   "Files removed in Finder from package",
+   "Failed repair",
+   "Optimise Storage without cloud copy"
+  ],
+  "fixes": [
+   "Check Recently Deleted",
+   "Restore from Time Machine",
+   "Back up the whole .photoslibrary package (copy it to another disk) first.",
+   "Repair Library",
+   "Redownload from iCloud if enabled"
+  ],
+  "risk": "caution",
+  "confidence": "medium",
+  "sources": [
+   "https://www.fatcatsoftware.com/powerphotos/ (PowerPhotos support pages; not fetched)",
+   "https://github.com/RhetTbull/osxphotos/issues (osxphotos issues; not fetched)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "repair-library-fails-or-loops",
+  "category": "library",
+  "title": "Repair Library fails, hangs or keeps coming back",
+  "signatures": [
+   "repair (of|the) library (failed|did not complete)"
+  ],
+  "processes": [
+   "Photos",
+   "photolibraryd"
+  ],
+  "codes": [],
+  "severity": "bad",
+  "meaning": "Repair either never finishes or fails and the prompt reappears. Often the underlying database or disk is the problem, not Photos. Exact log text was not verified.",
+  "likely_causes": [
+   "Disk or filesystem errors",
+   "Insufficient free space",
+   "Corrupt Photos.sqlite beyond repair",
+   "Library on unsuitable external volume"
+  ],
+  "fixes": [
+   "Run Disk Utility First Aid on the drive",
+   "Back up the whole .photoslibrary package (copy it to another disk) first.",
+   "Free up space and retry Repair",
+   "Copy the library to the internal APFS drive and repair there",
+   "Try PowerPhotos Library Rebuild/Repair on a copy",
+   "As last resort restore from Time Machine; photos in iCloud can re-download"
+  ],
+  "risk": "caution",
+  "confidence": "medium",
+  "sources": [
+   "https://support.apple.com/en-us/109361 (Apple: If Photos can't open library / Repair library; not fetched, egress blocked)",
+   "https://www.fatcatsoftware.com/powerphotos/ (PowerPhotos support pages; not fetched)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "sqlite-cantopen",
+  "category": "library",
+  "title": "Unable to open database file (SQLite error 14)",
+  "signatures": [
+   "SQLITE_CANTOPEN",
+   "unable to open database file"
+  ],
+  "processes": [
+   "photolibraryd"
+  ],
+  "codes": [
+   "SQLITE_CANTOPEN 14"
+  ],
+  "severity": "bad",
+  "meaning": "SQLite could not open Photos.sqlite: missing file, permissions or TCC block, or volume unavailable.",
+  "likely_causes": [
+   "Library moved/disconnected",
+   "Permission/ownership issue",
+   "Full Disk Access missing for tool"
+  ],
+  "fixes": [
+   "Confirm the library path exists and drive is mounted",
+   "Check permissions on the library package",
+   "Repair Library",
+   "Back up the whole .photoslibrary package (copy it to another disk) first."
+  ],
+  "risk": "caution",
+  "confidence": "medium",
+  "sources": [
+   "https://www.sqlite.org/rescode.html (SQLite result codes)",
+   "https://github.com/RhetTbull/osxphotos/issues (osxphotos issues; not fetched)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "sqlite-corrupt",
+  "category": "library",
+  "title": "Photos database is corrupt (SQLite error 11)",
+  "signatures": [
+   "SQLITE_CORRUPT",
+   "database disk image is malformed",
+   "sqlite3?_step.{0,30}\\b11\\b"
+  ],
+  "processes": [
+   "photolibraryd"
+  ],
+  "codes": [
+   "SQLITE_CORRUPT 11"
+  ],
+  "severity": "bad",
+  "meaning": "SQLite reports Photos.sqlite is malformed. Photos will crash, hang or demand repair.",
+  "likely_causes": [
+   "Unclean shutdown",
+   "Failing disk",
+   "Interrupted write on external drive"
+  ],
+  "fixes": [
+   "Back up the whole .photoslibrary package (copy it to another disk) first.",
+   "Option+Command launch, Repair Library",
+   "Disk Utility First Aid",
+   "Restore from Time Machine if repair fails"
+  ],
+  "risk": "caution",
+  "confidence": "medium",
+  "sources": [
+   "https://www.sqlite.org/rescode.html (SQLite result codes)",
+   "https://support.apple.com/en-us/109361 (Apple: If Photos can't open library / Repair library; not fetched, egress blocked)",
+   "https://github.com/RhetTbull/osxphotos/issues (osxphotos issues; not fetched)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "sqlite-full",
+  "category": "library",
+  "title": "Disk full while writing Photos database (SQLite error 13)",
+  "signatures": [
+   "SQLITE_FULL"
+  ],
+  "processes": [
+   "photolibraryd"
+  ],
+  "codes": [
+   "SQLITE_FULL 13"
+  ],
+  "severity": "bad",
+  "meaning": "The volume holding the library has no free space, so Photos can't write.",
+  "likely_causes": [
+   "Library disk full",
+   "Large import or video"
+  ],
+  "fixes": [
+   "Free space (empty Trash, remove snapshots)",
+   "Keep 10-20 percent free",
+   "Move library to a larger disk, then repair"
+  ],
+  "risk": "safe",
+  "confidence": "high",
+  "sources": [
+   "https://www.sqlite.org/rescode.html (SQLite result codes)",
+   "https://support.apple.com/en-us/109361 (Apple: If Photos can't open library / Repair library; not fetched, egress blocked)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "sqlite-ioerr",
+  "category": "library",
+  "title": "Disk read/write error on database (SQLite error 10)",
+  "signatures": [
+   "SQLITE_IOERR"
+  ],
+  "processes": [
+   "photolibraryd"
+  ],
+  "codes": [
+   "SQLITE_IOERR 10"
+  ],
+  "severity": "bad",
+  "meaning": "SQLite could not read or write disk. Points to disk, cable, or permissions trouble.",
+  "likely_causes": [
+   "Failing drive or bad cable",
+   "Volume went read-only",
+   "Permissions"
+  ],
+  "fixes": [
+   "Check Disk Utility First Aid and SMART",
+   "Back up immediately",
+   "Back up the whole .photoslibrary package (copy it to another disk) first.",
+   "Move library to healthy disk"
+  ],
+  "risk": "caution",
+  "confidence": "medium",
+  "sources": [
+   "https://www.sqlite.org/rescode.html (SQLite result codes)",
+   "https://eclecticlight.co (Howard Oakley posts on Photos libraries; not fetched, egress blocked)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "backup-lock-file",
+  "category": "library",
+  "title": "Library locked by another host / lock file",
+  "signatures": [
+   "locked by (a )?remote host",
+   "library is (already )?in use"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [],
+  "severity": "warn",
+  "meaning": "The library appears open elsewhere (network share or crashed session) so Photos refuses to open it.",
+  "likely_causes": [
+   "Library on network share",
+   "Stale lock"
+  ],
+  "fixes": [
+   "Quit Photos on other Macs",
+   "Restart",
+   "Copy library locally"
+  ],
+  "risk": "caution",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/forums/thread/117753"
+  ],
+  "verified": false
+ },
+ {
+  "id": "external-drive-disconnected",
+  "category": "library",
+  "title": "Library on a drive that was ejected or disconnected",
+  "signatures": [
+   "photos library .{0,40}(not found|missing)",
+   "volume .{0,30}(unmounted|not mounted)"
+  ],
+  "processes": [
+   "Photos",
+   "photolibraryd"
+  ],
+  "codes": [],
+  "severity": "warn",
+  "meaning": "The library's disk went away while Photos was open or at launch. Photos may quit or show the library as unavailable.",
+  "likely_causes": [
+   "Drive unplugged or asleep",
+   "Bad cable/hub/power",
+   "Drive failing"
+  ],
+  "fixes": [
+   "Quit Photos",
+   "Reconnect the drive and wait for it to mount",
+   "Reopen Photos with Option held",
+   "Run First Aid if it mounts read-only",
+   "Avoid hubs/sleep: disable drive sleep"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://support.apple.com/en-us/109361 (Apple: If Photos can't open library / Repair library; not fetched, egress blocked)",
+   "https://eclecticlight.co (Howard Oakley posts on Photos libraries; not fetched, egress blocked)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "external-drive-format",
+  "category": "library",
+  "title": "Library on an external drive with unsupported format",
+  "signatures": [],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [],
+  "severity": "warn",
+  "meaning": "Photos libraries must be on macOS Extended (HFS+) or APFS drives. exFAT, FAT32 and NTFS volumes are not supported and give open errors or corruption. No log signature verified.",
+  "likely_causes": [
+   "Library stored on exFAT/FAT/NTFS drive"
+  ],
+  "fixes": [
+   "Back up by copying the library to a supported disk",
+   "Reformat a spare drive as APFS or Mac OS Extended (Journaled) in Disk Utility - this erases it, back up first",
+   "Copy the library there and open it with Option-launch"
+  ],
+  "risk": "destructive",
+  "confidence": "high",
+  "sources": [
+   "https://support.apple.com/en-us/109361 (Apple: If Photos can't open library / Repair library; not fetched, egress blocked)",
+   "https://support.apple.com/en-us/102583 (Apple: Photos on external storage; not fetched)",
+   "https://eclecticlight.co (Howard Oakley posts on Photos libraries; not fetched, egress blocked)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "external-drive-ignore-ownership",
+  "category": "library",
+  "title": "Library on external drive with 'Ignore ownership' enabled",
+  "signatures": [],
+  "processes": [
+   "Photos",
+   "photolibraryd"
+  ],
+  "codes": [],
+  "severity": "warn",
+  "meaning": "If ownership is ignored on the volume, Photos may refuse to open or write the library. Permissions errors appear without a verified fixed log line.",
+  "likely_causes": [
+   "Ignore ownership on this volume ticked",
+   "Drive used on multiple Macs with different user IDs"
+  ],
+  "fixes": [
+   "Select the drive in Finder, Get Info, untick Ignore ownership on this volume (may need unlock)",
+   "Reopen Photos with Option held and pick the library",
+   "If still failing, copy the library to internal disk"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://support.apple.com/en-us/109361 (Apple: If Photos can't open library / Repair library; not fetched, egress blocked)",
+   "https://eclecticlight.co (Howard Oakley posts on Photos libraries; not fetched, egress blocked)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "full-disk-access-photos",
+  "category": "library",
+  "title": "Tool cannot read library: Full Disk Access/Photos permission",
+  "signatures": [
+   "operation not permitted"
+  ],
+  "processes": [],
+  "codes": [
+   "NSPOSIXErrorDomain 1"
+  ],
+  "severity": "warn",
+  "meaning": "Third-party tools reading the library package need Full Disk Access.",
+  "likely_causes": [
+   "TCC denies access"
+  ],
+  "fixes": [
+   "Add the tool to Full Disk Access",
+   "Restart the tool"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://github.com/RhetTbull/osxphotos/issues (osxphotos issues; not fetched)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "library-upgrade-stuck",
+  "category": "library",
+  "title": "Photos stuck on 'Upgrading library'",
+  "signatures": [
+   "upgrad\\w+ (the )?photos library"
+  ],
+  "processes": [
+   "Photos",
+   "photolibraryd"
+  ],
+  "codes": [],
+  "severity": "warn",
+  "meaning": "After OS update Photos migrates the library and can run for hours with little progress feedback.",
+  "likely_causes": [
+   "Large library",
+   "Slow external drive",
+   "Low disk space"
+  ],
+  "fixes": [
+   "Wait several hours with power connected",
+   "Check disk activity in Activity Monitor",
+   "Free space",
+   "Only if truly hung: force quit, back up and use repair launch"
+  ],
+  "risk": "caution",
+  "confidence": "medium",
+  "sources": [
+   "https://eclecticlight.co (Howard Oakley posts on Photos libraries; not fetched, egress blocked)",
+   "https://support.apple.com/en-us/109361 (Apple: If Photos can't open library / Repair library; not fetched, egress blocked)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "restore-errors",
+  "category": "library",
+  "title": "Restoring / restore from backup errors",
+  "signatures": [],
+  "processes": [
+   "Photos",
+   "photolibraryd"
+  ],
+  "codes": [],
+  "severity": "warn",
+  "meaning": "Restoring a library from Time Machine can fail if files are incomplete or permissions are wrong. No verified log line.",
+  "likely_causes": [
+   "Incomplete backup",
+   "Permissions"
+  ],
+  "fixes": [
+   "Restore the whole .photoslibrary package, not parts",
+   "Run repair after restore"
+  ],
+  "risk": "caution",
+  "confidence": "low",
+  "sources": [
+   "https://eclecticlight.co (Howard Oakley posts on Photos libraries; not fetched, egress blocked)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "sqlite-busy",
+  "category": "library",
+  "title": "Photos database locked (SQLite error 5)",
+  "signatures": [
+   "SQLITE_BUSY",
+   "database is locked"
+  ],
+  "processes": [
+   "photolibraryd"
+  ],
+  "codes": [
+   "SQLITE_BUSY 5"
+  ],
+  "severity": "warn",
+  "meaning": "Another process holds the Photos database lock. Usually transient; persistent with backup or sync software scanning the library.",
+  "likely_causes": [
+   "Backup/antivirus/sync tool touching the library",
+   "Second Photos instance or another Mac on network share",
+   "Stuck photolibraryd"
+  ],
+  "fixes": [
+   "Quit Photos and other apps",
+   "Exclude library from sync/AV/scanning tools",
+   "Restart Mac to clear stuck daemons",
+   "Never open one library from two Macs"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://www.sqlite.org/rescode.html (SQLite result codes)",
+   "https://github.com/RhetTbull/osxphotos/issues (osxphotos issues; not fetched)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "system-library-switch-icloud-merge",
+  "category": "library",
+  "title": "Switching System Photo Library causes iCloud re-sync or duplicates",
+  "signatures": [],
+  "processes": [
+   "Photos",
+   "cloudphotod"
+  ],
+  "codes": [],
+  "severity": "warn",
+  "meaning": "Changing which library is the System Photo Library triggers an iCloud re-sync, which can duplicate or remove items from the local view.",
+  "likely_causes": [
+   "Designating a new library while iCloud Photos is on"
+  ],
+  "fixes": [
+   "Back up both libraries",
+   "Turn off iCloud Photos in the old library before switching",
+   "Use PowerPhotos to merge instead of re-syncing"
+  ],
+  "risk": "caution",
+  "confidence": "medium",
+  "sources": [
+   "https://support.apple.com/guide/photos/ (Photos User Guide: System Photo Library, multiple libraries; not fetched)",
+   "https://www.fatcatsoftware.com/powerphotos/ (PowerPhotos support pages; not fetched)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "system-photo-library-not-set",
+  "category": "library",
+  "title": "iCloud Photos/Photos disabled because library is not the System Photo Library",
+  "signatures": [],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [],
+  "severity": "warn",
+  "meaning": "iCloud Photos works only with the System Photo Library. If you open another library the iCloud option is unavailable or unticked.",
+  "likely_causes": [
+   "Multiple libraries; wrong one designated"
+  ],
+  "fixes": [
+   "Quit Photos, hold Option, open the library you want",
+   "Photos > Settings > General > Use as System Photo Library",
+   "Then enable iCloud Photos in the iCloud tab"
+  ],
+  "risk": "caution",
+  "confidence": "high",
+  "sources": [
+   "https://support.apple.com/guide/photos/ (Photos User Guide: System Photo Library, multiple libraries; not fetched)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "tcc-automation-1743",
+  "category": "library",
+  "title": "Automation permission denied (-1743)",
+  "signatures": [
+   "not authorized to send apple events"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "-1743"
+  ],
+  "severity": "warn",
+  "meaning": "A script or tool is not allowed to control Photos via Apple Events.",
+  "likely_causes": [
+   "TCC permission denied"
+  ],
+  "fixes": [
+   "System Settings > Privacy & Security > Automation: enable Photos for the tool",
+   "tccutil reset AppleEvents to re-prompt"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://github.com/RhetTbull/osxphotos/issues (osxphotos issues; not fetched)",
+   "https://developer.apple.com/documentation/security/hardened_runtime"
+  ],
+  "verified": false
+ },
+ {
+  "id": "xpc-assetsd",
+  "category": "library",
+  "title": "Unable to obtain assetsd XPC proxy",
+  "signatures": [
+   "unable to obtain assetsd xpc proxy"
+  ],
+  "processes": [
+   "assetsd"
+  ],
+  "codes": [],
+  "severity": "warn",
+  "meaning": "An app using the Photos framework couldn't reach the assets daemon; common in sandbox/permission problems.",
+  "likely_causes": [
+   "Sandbox or entitlement missing",
+   "assetsd not running"
+  ],
+  "fixes": [
+   "Grant Photos permission in Privacy & Security",
+   "Restart Mac"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/forums/thread/126278 (assetsd XPC proxy; surfaced in search only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "xpc-interrupted",
+  "category": "library",
+  "title": "photolibraryd connection interrupted",
+  "signatures": [
+   "NSXPCConnectionInterrupted",
+   "XPC_ERROR_CONNECTION_INTERRUPTED"
+  ],
+  "processes": [
+   "photolibraryd"
+  ],
+  "codes": [
+   "NSCocoaErrorDomain 4097"
+  ],
+  "severity": "warn",
+  "meaning": "A helper service crashed or was killed, usually from memory pressure, and Photos lost contact. Often transient.",
+  "likely_causes": [
+   "Memory pressure kill",
+   "Helper crash",
+   "Corrupt library"
+  ],
+  "fixes": [
+   "Quit and reopen Photos",
+   "Restart Mac",
+   "Check Console for the crashing process",
+   "If recurring, repair library"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/forums/thread/117753",
+   "https://developer.apple.com/forums/thread/126278 (assetsd XPC proxy; surfaced in search only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "xpc-invalid",
+  "category": "library",
+  "title": "photolibraryd connection invalid",
+  "signatures": [
+   "NSXPCConnectionInvalid"
+  ],
+  "processes": [
+   "photolibraryd"
+  ],
+  "codes": [
+   "NSCocoaErrorDomain 4099"
+  ],
+  "severity": "warn",
+  "meaning": "The service connection was invalidated, often because the daemon exited or the app lacks entitlement.",
+  "likely_causes": [
+   "Daemon exit",
+   "Third-party app lacking access"
+  ],
+  "fixes": [
+   "Restart Mac",
+   "Reset by repair launch",
+   "Update macOS"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/foundation/1448136-nserror_codes (NSCocoaError codes)",
+   "https://developer.apple.com/forums/thread/126278 (assetsd XPC proxy; surfaced in search only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "zero-byte-assets",
+  "category": "library",
+  "title": "Zero-byte or orphaned assets in library",
+  "signatures": [],
+  "processes": [
+   "photolibraryd"
+  ],
+  "codes": [],
+  "severity": "warn",
+  "meaning": "Files with zero size or without database entries. Typically after interrupted copy. No log signature verified.",
+  "likely_causes": [
+   "Disk full during import",
+   "Interrupted copy"
+  ],
+  "fixes": [
+   "Back up",
+   "Use PowerPhotos or osxphotos to find them",
+   "Reimport from originals"
+  ],
+  "risk": "caution",
+  "confidence": "low",
+  "sources": [
+   "https://www.fatcatsoftware.com/powerphotos/ (PowerPhotos support pages; not fetched)",
+   "https://github.com/RhetTbull/osxphotos/issues (osxphotos issues; not fetched)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "photos-hangs-analyzing",
+  "category": "library",
+  "title": "Photos stuck on Updating / Analyzing",
+  "signatures": [],
+  "processes": [
+   "photoanalysisd",
+   "mediaanalysisd"
+  ],
+  "codes": [],
+  "severity": "info",
+  "meaning": "Background analysis (faces, scenes) runs for hours on big libraries and is normal after repair or upgrade.",
+  "likely_causes": [
+   "Large library",
+   "Mac on battery or in use"
+  ],
+  "fixes": [
+   "Leave Mac plugged in, awake, Photos open",
+   "Check CPU in Activity Monitor",
+   "Restart if idle for a day"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://eclecticlight.co (Howard Oakley posts on Photos libraries; not fetched, egress blocked)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "rebuild-library",
+  "category": "library",
+  "title": "Rebuilding a library after failed repair",
+  "signatures": [],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [],
+  "severity": "info",
+  "meaning": "Last resort: build new library from originals using PowerPhotos or reimport; loses albums unless exported.",
+  "likely_causes": [
+   "Unrecoverable database"
+  ],
+  "fixes": [
+   "Back up the whole .photoslibrary package (copy it to another disk) first.",
+   "Use PowerPhotos Rebuild",
+   "Or import Originals folder to a new library"
+  ],
+  "risk": "destructive",
+  "confidence": "medium",
+  "sources": [
+   "https://www.fatcatsoftware.com/powerphotos/ (PowerPhotos support pages; not fetched)",
+   "https://eclecticlight.co (Howard Oakley posts on Photos libraries; not fetched, egress blocked)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "apple-id-sign-in-required",
+  "category": "icloud",
+  "title": "Apple Account sign-in required / two-factor prompt blocks Photos",
+  "signatures": [
+   "accountsd.{0,60}(authenticat|credential)"
+  ],
+  "processes": [
+   "accountsd",
+   "cloudphotod",
+   "Photos"
+  ],
+  "codes": [],
+  "severity": "bad",
+  "meaning": "Photos cannot sync until the Apple Account is re-verified.",
+  "likely_causes": [
+   "Password changed",
+   "2FA prompt unanswered",
+   "Expired token"
+  ],
+  "fixes": [
+   "System Settings: click the 'Sign in' alert and enter code.",
+   "Sign out/in of iCloud if prompt loops."
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://support.apple.com/en-us/104956",
+   "https://discussions.apple.com/thread/6987031"
+  ],
+  "verified": false
+ },
+ {
+  "id": "ck-asset-file-not-found",
+  "category": "icloud",
+  "title": "CloudKit assetFileNotFound",
+  "signatures": [
+   "Domain=CKErrorDomain Code=16\\b",
+   "CKErrorDomain\\W{1,3}16\\b"
+  ],
+  "processes": [
+   "cloudphotod",
+   "photolibraryd",
+   "Photos",
+   "cloudd"
+  ],
+  "codes": [
+   "CKErrorDomain 16 (assetFileNotFound)"
+  ],
+  "severity": "bad",
+  "meaning": "The local file to upload is missing, so that item cannot upload.",
+  "likely_causes": [
+   "Original missing or evicted from the library package",
+   "Library on disconnected external drive",
+   "Corrupted library"
+  ],
+  "fixes": [
+   "Reconnect the drive holding the library.",
+   "In Photos, find the item (grey/blank thumbnail) and delete or re-import it from a backup.",
+   "Run Photos library repair (hold Option+Cmd on launch) after backing up."
+  ],
+  "risk": "caution",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/cloudkit/ckerror/code",
+   "CloudKit CKError.h (numeric raw values; Apple web docs list case names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "ck-managed-account-restricted",
+  "category": "icloud",
+  "title": "CloudKit managedAccountRestricted",
+  "signatures": [
+   "Domain=CKErrorDomain Code=32\\b",
+   "CKErrorDomain\\W{1,3}32\\b"
+  ],
+  "processes": [
+   "cloudphotod",
+   "photolibraryd",
+   "Photos",
+   "cloudd"
+  ],
+  "codes": [
+   "CKErrorDomain 32 (managedAccountRestricted)"
+  ],
+  "severity": "bad",
+  "meaning": "CloudKit blocked the request because of a managed-account restriction.",
+  "likely_causes": [
+   "Managed Apple Account/school or MDM policy"
+  ],
+  "fixes": [
+   "Contact the administrator; use a personal Apple Account for personal photos."
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/cloudkit/ckerror/code",
+   "CloudKit CKError.h (numeric raw values; Apple web docs list case names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "ck-not-authenticated",
+  "category": "icloud",
+  "title": "CloudKit notAuthenticated",
+  "signatures": [
+   "Domain=CKErrorDomain Code=9\\b",
+   "CKErrorDomain\\W{1,3}9\\b"
+  ],
+  "processes": [
+   "cloudphotod",
+   "photolibraryd",
+   "Photos",
+   "cloudd"
+  ],
+  "codes": [
+   "CKErrorDomain 9 (notAuthenticated)"
+  ],
+  "severity": "bad",
+  "meaning": "CloudKit could not authenticate the Apple Account, so iCloud Photos sync stops.",
+  "likely_causes": [
+   "Signed out of iCloud or password changed",
+   "Two-factor sign-in prompt pending",
+   "Account restriction"
+  ],
+  "fixes": [
+   "System Settings > Apple Account: complete any 'Sign in again' prompt.",
+   "Sign out and back in if needed (keep a Photos backup first).",
+   "Check Screen Time / MDM restrictions on iCloud."
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/cloudkit/ckerror/code",
+   "CloudKit CKError.h (numeric raw values; Apple web docs list case names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "ck-quota-exceeded",
+  "category": "icloud",
+  "title": "iCloud storage full (CloudKit quotaExceeded)",
+  "signatures": [
+   "Domain=CKErrorDomain Code=25\\b",
+   "CKErrorDomain\\W{1,3}25\\b"
+  ],
+  "processes": [
+   "cloudphotod",
+   "photolibraryd",
+   "Photos",
+   "cloudd"
+  ],
+  "codes": [
+   "CKErrorDomain 25 (quotaExceeded)"
+  ],
+  "severity": "bad",
+  "meaning": "CloudKit refused to save because the iCloud account has no free storage; new photos stay 'Waiting to upload'.",
+  "likely_causes": [
+   "iCloud plan full",
+   "Recently Deleted and hidden photos still count against quota",
+   "Other iCloud data (backups, Drive, Mail) using space"
+  ],
+  "fixes": [
+   "System Settings > Apple Account > iCloud > Manage: check usage.",
+   "Delete unneeded iCloud backups/files or buy a larger iCloud+ plan.",
+   "Empty Photos > Recently Deleted only after exporting anything you may need (permanent deletion; back up first).",
+   "Wait a few minutes after freeing space; sync resumes on its own."
+  ],
+  "risk": "caution",
+  "confidence": "high",
+  "sources": [
+   "https://developer.apple.com/documentation/cloudkit/ckerror/code",
+   "CloudKit CKError.h (numeric raw values; Apple web docs list case names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "ck-user-deleted-zone",
+  "category": "icloud",
+  "title": "CloudKit userDeletedZone",
+  "signatures": [
+   "Domain=CKErrorDomain Code=28\\b",
+   "CKErrorDomain\\W{1,3}28\\b"
+  ],
+  "processes": [
+   "cloudphotod",
+   "photolibraryd",
+   "Photos",
+   "cloudd"
+  ],
+  "codes": [
+   "CKErrorDomain 28 (userDeletedZone)"
+  ],
+  "severity": "bad",
+  "meaning": "The iCloud Photos zone was deleted (e.g. via iCloud storage management or turning off/removing data); local library must re-establish it.",
+  "likely_causes": [
+   "iCloud Photos data deleted from iCloud.com/Settings",
+   "Account switched or reset"
+  ],
+  "fixes": [
+   "Do not delete local library. Export originals first (back up).",
+   "Re-enable iCloud Photos in Photos Settings > iCloud, which recreates the zone and re-uploads."
+  ],
+  "risk": "caution",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/cloudkit/ckerror/code",
+   "CloudKit CKError.h (numeric raw values; Apple web docs list case names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "no-primary-sync-zone",
+  "category": "icloud",
+  "title": "'NoPrimarySyncZone' / library not designated as System Photo Library",
+  "signatures": [
+   "NoPrimarySyncZone"
+  ],
+  "processes": [
+   "cloudphotod",
+   "photolibraryd"
+  ],
+  "codes": [],
+  "severity": "bad",
+  "meaning": "iCloud Photos cannot find the primary sync zone, usually because the library is not the System Photo Library or the zone was reset.",
+  "likely_causes": [
+   "Non-system library",
+   "Zone deleted",
+   "Account change"
+  ],
+  "fixes": [
+   "Photos > Settings > General > Use as System Photo Library.",
+   "Then re-enable iCloud Photos."
+  ],
+  "risk": "caution",
+  "confidence": "medium",
+  "sources": [
+   "https://origin-discussions2-us-dr-prz.apple.com/thread/255737962"
+  ],
+  "verified": false
+ },
+ {
+  "id": "nsurl-cert",
+  "category": "icloud",
+  "title": "NSURLError server certificate untrusted (-1202)",
+  "signatures": [
+   "Domain=NSURLErrorDomain Code=-1202\\b"
+  ],
+  "processes": [
+   "cloudphotod",
+   "nsurlsessiond",
+   "cloudd",
+   "Photos"
+  ],
+  "codes": [
+   "NSURLErrorDomain -1202 (serverCertificateUntrusted)"
+  ],
+  "severity": "bad",
+  "meaning": "Apple's server certificate was not trusted by this Mac.",
+  "likely_causes": [
+   "Man-in-the-middle proxy/filter",
+   "Bad clock",
+   "Keychain trust damage"
+  ],
+  "fixes": [
+   "Fix date/time; remove inspecting proxy.",
+   "Check Keychain Access > System Roots for modified trust settings."
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/foundation/nsurlerror",
+   "Foundation NSURLError.h"
+  ],
+  "verified": false
+ },
+ {
+  "id": "nsurl-ssl",
+  "category": "icloud",
+  "title": "NSURLError secure connection failed (-1200)",
+  "signatures": [
+   "Domain=NSURLErrorDomain Code=-1200\\b"
+  ],
+  "processes": [
+   "cloudphotod",
+   "nsurlsessiond",
+   "cloudd",
+   "Photos"
+  ],
+  "codes": [
+   "NSURLErrorDomain -1200 (secureConnectionFailed)"
+  ],
+  "severity": "bad",
+  "meaning": "TLS handshake to iCloud failed.",
+  "likely_causes": [
+   "Wrong system date/time",
+   "SSL-inspecting proxy or antivirus",
+   "Outdated macOS"
+  ],
+  "fixes": [
+   "Set date/time automatically.",
+   "Disable HTTPS-scanning security software or proxy.",
+   "Update macOS."
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/foundation/nsurlerror",
+   "Foundation NSURLError.h"
+  ],
+  "verified": false
+ },
+ {
+  "id": "ck-account-temp-unavailable",
+  "category": "icloud",
+  "title": "CloudKit accountTemporarilyUnavailable",
+  "signatures": [
+   "Domain=CKErrorDomain Code=36\\b",
+   "CKErrorDomain\\W{1,3}36\\b"
+  ],
+  "processes": [
+   "cloudphotod",
+   "photolibraryd",
+   "Photos",
+   "cloudd"
+  ],
+  "codes": [
+   "CKErrorDomain 36 (accountTemporarilyUnavailable)"
+  ],
+  "severity": "warn",
+  "meaning": "The iCloud account is temporarily unavailable (e.g. being signed in, upgraded, or under Apple-side lock).",
+  "likely_causes": [
+   "Recent password/2FA change",
+   "Account lock or security hold"
+  ],
+  "fixes": [
+   "Check appleid.apple.com for alerts.",
+   "Wait and retry; sign out/in if it persists."
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/cloudkit/ckerror/code",
+   "CloudKit CKError.h (numeric raw values; Apple web docs list case names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "ck-asset-not-available",
+  "category": "icloud",
+  "title": "CloudKit assetNotAvailable",
+  "signatures": [
+   "Domain=CKErrorDomain Code=35\\b",
+   "CKErrorDomain\\W{1,3}35\\b"
+  ],
+  "processes": [
+   "cloudphotod",
+   "photolibraryd",
+   "Photos",
+   "cloudd"
+  ],
+  "codes": [
+   "CKErrorDomain 35 (assetNotAvailable)"
+  ],
+  "severity": "warn",
+  "meaning": "CloudKit could not access the asset's data during upload or download.",
+  "likely_causes": [
+   "File locked or permission problem",
+   "Optimised copy not yet downloaded"
+  ],
+  "fixes": [
+   "Ensure the library is on an APFS/Mac OS Extended volume with permissions enabled.",
+   "Retry download via File > Download Originals."
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/cloudkit/ckerror/code",
+   "CloudKit CKError.h (numeric raw values; Apple web docs list case names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "ck-change-token-expired",
+  "category": "icloud",
+  "title": "CloudKit changeTokenExpired (full resync)",
+  "signatures": [
+   "Domain=CKErrorDomain Code=21\\b",
+   "CKErrorDomain\\W{1,3}21\\b"
+  ],
+  "processes": [
+   "cloudphotod",
+   "photolibraryd",
+   "Photos",
+   "cloudd"
+  ],
+  "codes": [
+   "CKErrorDomain 21 (changeTokenExpired)"
+  ],
+  "severity": "warn",
+  "meaning": "The sync checkpoint expired so Photos must refetch the full change history, which can look like a long 'Updating' state.",
+  "likely_causes": [
+   "Mac offline for a long time",
+   "Server-side token reset",
+   "Library or account change"
+  ],
+  "fixes": [
+   "Leave Photos running on power and Wi-Fi until it finishes.",
+   "If it never completes see the stuck-resync entries."
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/cloudkit/ckerror/code",
+   "CloudKit CKError.h (numeric raw values; Apple web docs list case names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "ck-limit-exceeded",
+  "category": "icloud",
+  "title": "CloudKit limitExceeded",
+  "signatures": [
+   "Domain=CKErrorDomain Code=27\\b",
+   "CKErrorDomain\\W{1,3}27\\b"
+  ],
+  "processes": [
+   "cloudphotod",
+   "photolibraryd",
+   "Photos",
+   "cloudd"
+  ],
+  "codes": [
+   "CKErrorDomain 27 (limitExceeded)"
+  ],
+  "severity": "warn",
+  "meaning": "A request was too large; Photos should split it, but repeated failure stalls sync.",
+  "likely_causes": [
+   "Very large batch or asset metadata"
+  ],
+  "fixes": [
+   "Wait for retry; restart Mac.",
+   "If stuck on a fixed count, rebuild iCloud sync cache (see stuck entry)."
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/cloudkit/ckerror/code",
+   "CloudKit CKError.h (numeric raw values; Apple web docs list case names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "ck-missing-entitlement",
+  "category": "icloud",
+  "title": "CloudKit missingEntitlement / permissionFailure",
+  "signatures": [
+   "Domain=CKErrorDomain Code=8\\b",
+   "CKErrorDomain\\W{1,3}8\\b"
+  ],
+  "processes": [
+   "cloudphotod",
+   "photolibraryd",
+   "Photos",
+   "cloudd"
+  ],
+  "codes": [
+   "CKErrorDomain 8 (missingEntitlement)"
+  ],
+  "severity": "warn",
+  "meaning": "The process lacks permission for the requested CloudKit operation.",
+  "likely_causes": [
+   "Managed device restrictions",
+   "Damaged system install"
+  ],
+  "fixes": [
+   "Check MDM/Screen Time restrictions.",
+   "Reinstall macOS if it only happens on one system."
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/cloudkit/ckerror/code",
+   "CloudKit CKError.h (numeric raw values; Apple web docs list case names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "ck-network-failure",
+  "category": "icloud",
+  "title": "CloudKit networkFailure",
+  "signatures": [
+   "Domain=CKErrorDomain Code=4\\b",
+   "CKErrorDomain\\W{1,3}4\\b"
+  ],
+  "processes": [
+   "cloudphotod",
+   "photolibraryd",
+   "Photos",
+   "cloudd"
+  ],
+  "codes": [
+   "CKErrorDomain 4 (networkFailure)"
+  ],
+  "severity": "warn",
+  "meaning": "Network is up but CloudKit servers could not be reached.",
+  "likely_causes": [
+   "Captive portal, DNS or proxy problem",
+   "Apple service outage",
+   "Packet loss on router/ISP"
+  ],
+  "fixes": [
+   "Try another network or hotspot.",
+   "Check Apple System Status (iCloud Photos, Account & Sign In).",
+   "Ensure *.icloud.com and *.apple.com are reachable; reboot router."
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/cloudkit/ckerror/code",
+   "CloudKit CKError.h (numeric raw values; Apple web docs list case names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "ck-network-unavailable",
+  "category": "icloud",
+  "title": "CloudKit networkUnavailable",
+  "signatures": [
+   "Domain=CKErrorDomain Code=3\\b",
+   "CKErrorDomain\\W{1,3}3\\b"
+  ],
+  "processes": [
+   "cloudphotod",
+   "photolibraryd",
+   "Photos",
+   "cloudd"
+  ],
+  "codes": [
+   "CKErrorDomain 3 (networkUnavailable)"
+  ],
+  "severity": "warn",
+  "meaning": "CloudKit found no usable network, so sync pauses and retries.",
+  "likely_causes": [
+   "Mac offline or Wi-Fi dropped",
+   "VPN/firewall/content filter blocking Apple hosts",
+   "Network not yet up after wake"
+  ],
+  "fixes": [
+   "Check connectivity; disable VPN or filters temporarily.",
+   "Reconnect Wi-Fi; Photos retries automatically.",
+   "Check Apple System Status."
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/cloudkit/ckerror/code",
+   "CloudKit CKError.h (numeric raw values; Apple web docs list case names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "ck-partial-failure",
+  "category": "icloud",
+  "title": "CloudKit partialFailure",
+  "signatures": [
+   "Domain=CKErrorDomain Code=2\\b",
+   "CKErrorDomain\\W{1,3}2\\b"
+  ],
+  "processes": [
+   "cloudphotod",
+   "photolibraryd",
+   "Photos",
+   "cloudd"
+  ],
+  "codes": [
+   "CKErrorDomain 2 (partialFailure)"
+  ],
+  "severity": "warn",
+  "meaning": "A batched operation succeeded for some records and failed for others; the real cause is in the per-item errors (CKPartialErrorsByItemID).",
+  "likely_causes": [
+   "Individual assets failing (missing resource, unsupported)",
+   "Quota or conflict on some records"
+  ],
+  "fixes": [
+   "Find the nested per-record error near the same log time and match it to another entry.",
+   "Ensure originals are intact; restart Photos."
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/cloudkit/ckerror/code",
+   "CloudKit CKError.h (numeric raw values; Apple web docs list case names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "ck-request-rate-limited",
+  "category": "icloud",
+  "title": "CloudKit requestRateLimited",
+  "signatures": [
+   "Domain=CKErrorDomain Code=7\\b",
+   "CKErrorDomain\\W{1,3}7\\b"
+  ],
+  "processes": [
+   "cloudphotod",
+   "photolibraryd",
+   "Photos",
+   "cloudd"
+  ],
+  "codes": [
+   "CKErrorDomain 7 (requestRateLimited)"
+  ],
+  "severity": "warn",
+  "meaning": "Apple throttled requests from this account/device; Photos backs off and retries after a delay.",
+  "likely_causes": [
+   "Very large initial upload or bulk import",
+   "Repeated sign-in/sync restarts"
+  ],
+  "fixes": [
+   "Leave Photos open and Mac powered; do not repeatedly toggle iCloud Photos.",
+   "Allow hours to days for large libraries."
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/cloudkit/ckerror/code",
+   "CloudKit CKError.h (numeric raw values; Apple web docs list case names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "ck-server-rejected",
+  "category": "icloud",
+  "title": "CloudKit serverRejectedRequest",
+  "signatures": [
+   "Domain=CKErrorDomain Code=15\\b",
+   "CKErrorDomain\\W{1,3}15\\b"
+  ],
+  "processes": [
+   "cloudphotod",
+   "photolibraryd",
+   "Photos",
+   "cloudd"
+  ],
+  "codes": [
+   "CKErrorDomain 15 (serverRejectedRequest)"
+  ],
+  "severity": "warn",
+  "meaning": "Server rejected the request (often a bad or unacceptable record).",
+  "likely_causes": [
+   "Corrupt or unsupported asset metadata",
+   "Server-side validation failure"
+  ],
+  "fixes": [
+   "Identify the failing asset; re-import after converting to JPEG/HEIC/MOV/MP4.",
+   "Retry after restart."
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/cloudkit/ckerror/code",
+   "CloudKit CKError.h (numeric raw values; Apple web docs list case names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "ck-server-response-lost",
+  "category": "icloud",
+  "title": "CloudKit serverResponseLost",
+  "signatures": [
+   "Domain=CKErrorDomain Code=34\\b",
+   "CKErrorDomain\\W{1,3}34\\b"
+  ],
+  "processes": [
+   "cloudphotod",
+   "photolibraryd",
+   "Photos",
+   "cloudd"
+  ],
+  "codes": [
+   "CKErrorDomain 34 (serverResponseLost)"
+  ],
+  "severity": "warn",
+  "meaning": "Connection dropped before the server's reply arrived, so the upload result is unknown and is retried.",
+  "likely_causes": [
+   "Unstable Wi-Fi",
+   "Large uploads timing out"
+  ],
+  "fixes": [
+   "Use wired/stable network.",
+   "Wait for automatic retry."
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/cloudkit/ckerror/code",
+   "CloudKit CKError.h (numeric raw values; Apple web docs list case names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "ck-service-unavailable",
+  "category": "icloud",
+  "title": "CloudKit serviceUnavailable",
+  "signatures": [
+   "Domain=CKErrorDomain Code=6\\b",
+   "CKErrorDomain\\W{1,3}6\\b"
+  ],
+  "processes": [
+   "cloudphotod",
+   "photolibraryd",
+   "Photos",
+   "cloudd"
+  ],
+  "codes": [
+   "CKErrorDomain 6 (serviceUnavailable)"
+  ],
+  "severity": "warn",
+  "meaning": "CloudKit service is temporarily unavailable; the error usually carries a retry-after delay.",
+  "likely_causes": [
+   "Apple server outage or maintenance",
+   "Server-side throttling of the account"
+  ],
+  "fixes": [
+   "Check Apple System Status.",
+   "Leave the Mac on power and awake; sync retries automatically.",
+   "If it persists over days, contact Apple Support."
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/cloudkit/ckerror/code",
+   "CloudKit CKError.h (numeric raw values; Apple web docs list case names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "ck-zone-busy",
+  "category": "icloud",
+  "title": "CloudKit zoneBusy",
+  "signatures": [
+   "Domain=CKErrorDomain Code=23\\b",
+   "CKErrorDomain\\W{1,3}23\\b"
+  ],
+  "processes": [
+   "cloudphotod",
+   "photolibraryd",
+   "Photos",
+   "cloudd"
+  ],
+  "codes": [
+   "CKErrorDomain 23 (zoneBusy)"
+  ],
+  "severity": "warn",
+  "meaning": "The CloudKit record zone is busy (another device or server job is modifying it); retry later.",
+  "likely_causes": [
+   "Another device syncing/rebuilding at the same time",
+   "Server-side maintenance on the zone"
+  ],
+  "fixes": [
+   "Wait and let Photos retry.",
+   "Pause other devices' sync if one is mid-migration."
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/cloudkit/ckerror/code",
+   "CloudKit CKError.h (numeric raw values; Apple web docs list case names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "cloudphotod-stuck-cache",
+  "category": "icloud",
+  "title": "cloudphotod stuck or high CPU; CloudSync cache corrupt",
+  "signatures": [
+   "cloudphotod.{0,40}(crash|exit|terminated)"
+  ],
+  "processes": [
+   "cloudphotod"
+  ],
+  "codes": [],
+  "severity": "warn",
+  "meaning": "The sync daemon loops or crashes, blocking sync.",
+  "likely_causes": [
+   "Corrupt CloudSync.noindex cache",
+   "Damaged library"
+  ],
+  "fixes": [
+   "Quit cloudphotod in Activity Monitor and reopen Photos.",
+   "Boot into Safe Mode once.",
+   "Back up, quit Photos, delete contents of private/com.apple.cloudphotosd/CloudSync.noindex inside the library, relaunch."
+  ],
+  "risk": "caution",
+  "confidence": "medium",
+  "sources": [
+   "https://www.macworld.com/article/234147/photos-for-macos-stops-syncing-heres-one-way-to-fix-it.html"
+  ],
+  "verified": false
+ },
+ {
+  "id": "large-file-limit",
+  "category": "icloud",
+  "title": "Very large files fail to upload",
+  "signatures": [],
+  "processes": [
+   "cloudphotod"
+  ],
+  "codes": [],
+  "severity": "warn",
+  "meaning": "iCloud Photos limits file size (documented around 20 GB for videos, 200 MB for images/ratios) so larger items never upload.",
+  "likely_causes": [
+   "File exceeds iCloud Photos limit"
+  ],
+  "fixes": [
+   "Compress or trim the video; keep the original elsewhere."
+  ],
+  "risk": "safe",
+  "confidence": "low",
+  "sources": [
+   "https://support.apple.com/en-us/104956",
+   "https://discussions.apple.com/thread/6987031"
+  ],
+  "verified": false
+ },
+ {
+  "id": "live-photo-video-upload-fail",
+  "category": "icloud",
+  "title": "Live Photo or video fails to upload",
+  "signatures": [],
+  "processes": [
+   "cloudphotod"
+  ],
+  "codes": [],
+  "severity": "warn",
+  "meaning": "A Live Photo's paired video or a corrupt video resource blocks upload.",
+  "likely_causes": [
+   "Missing paired .mov",
+   "Corrupt video"
+  ],
+  "fixes": [
+   "Export as unmodified original and re-import; remove the broken item."
+  ],
+  "risk": "caution",
+  "confidence": "low",
+  "sources": [
+   "https://support.apple.com/en-us/104956",
+   "https://discussions.apple.com/thread/6987031"
+  ],
+  "verified": false
+ },
+ {
+  "id": "nsurl-cannot-connect",
+  "category": "icloud",
+  "title": "NSURLError cannot connect to host (-1004)",
+  "signatures": [
+   "Domain=NSURLErrorDomain Code=-1004\\b"
+  ],
+  "processes": [
+   "cloudphotod",
+   "nsurlsessiond",
+   "cloudd",
+   "Photos"
+  ],
+  "codes": [
+   "NSURLErrorDomain -1004 (cannotConnectToHost)"
+  ],
+  "severity": "warn",
+  "meaning": "The Mac reached the network but could not connect to Apple's host.",
+  "likely_causes": [
+   "Firewall, DNS, or Apple outage"
+  ],
+  "fixes": [
+   "Check Apple System Status.",
+   "Try another network/DNS."
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/foundation/nsurlerror",
+   "Foundation NSURLError.h"
+  ],
+  "verified": false
+ },
+ {
+  "id": "nsurl-connection-lost",
+  "category": "icloud",
+  "title": "NSURLError network connection lost (-1005)",
+  "signatures": [
+   "Domain=NSURLErrorDomain Code=-1005\\b"
+  ],
+  "processes": [
+   "cloudphotod",
+   "nsurlsessiond",
+   "cloudd",
+   "Photos"
+  ],
+  "codes": [
+   "NSURLErrorDomain -1005 (networkConnectionLost)"
+  ],
+  "severity": "warn",
+  "meaning": "The connection dropped mid-transfer.",
+  "likely_causes": [
+   "Wi-Fi roaming or sleep",
+   "Router/ISP resets"
+  ],
+  "fixes": [
+   "Use stable network or Ethernet.",
+   "Prevent Mac sleeping during upload (System Settings > Battery/Lock Screen)."
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/foundation/nsurlerror",
+   "Foundation NSURLError.h"
+  ],
+  "verified": false
+ },
+ {
+  "id": "nsurl-data-not-allowed",
+  "category": "icloud",
+  "title": "NSURLError data not allowed / constrained network (-1020)",
+  "signatures": [
+   "Domain=NSURLErrorDomain Code=-1020\\b"
+  ],
+  "processes": [
+   "cloudphotod",
+   "nsurlsessiond",
+   "cloudd",
+   "Photos"
+  ],
+  "codes": [
+   "NSURLErrorDomain -1020 (dataNotAllowed)"
+  ],
+  "severity": "warn",
+  "meaning": "The network path disallows the transfer (cellular/Low Data Mode).",
+  "likely_causes": [
+   "Low Data Mode or hotspot on Mac",
+   "Metered connection"
+  ],
+  "fixes": [
+   "Disable Low Data Mode for the Wi-Fi network (Wi-Fi details) or use another network."
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/foundation/nsurlerror",
+   "Foundation NSURLError.h"
+  ],
+  "verified": false
+ },
+ {
+  "id": "nsurl-dns",
+  "category": "icloud",
+  "title": "NSURLError cannot find host (-1003)",
+  "signatures": [
+   "Domain=NSURLErrorDomain Code=-1003\\b"
+  ],
+  "processes": [
+   "cloudphotod",
+   "nsurlsessiond",
+   "cloudd",
+   "Photos"
+  ],
+  "codes": [
+   "NSURLErrorDomain -1003 (cannotFindHost)"
+  ],
+  "severity": "warn",
+  "meaning": "DNS could not resolve an iCloud host name.",
+  "likely_causes": [
+   "DNS server problem",
+   "Content blocker/hosts file blocking Apple domains"
+  ],
+  "fixes": [
+   "Switch DNS (e.g. router default or 1.1.1.1).",
+   "Remove hosts-file or blocker entries for apple.com/icloud.com."
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/foundation/nsurlerror",
+   "Foundation NSURLError.h"
+  ],
+  "verified": false
+ },
+ {
+  "id": "nsurl-offline",
+  "category": "icloud",
+  "title": "NSURLError not connected to internet (-1009)",
+  "signatures": [
+   "Domain=NSURLErrorDomain Code=-1009\\b"
+  ],
+  "processes": [
+   "cloudphotod",
+   "nsurlsessiond",
+   "cloudd",
+   "Photos"
+  ],
+  "codes": [
+   "NSURLErrorDomain -1009 (notConnectedToInternet)"
+  ],
+  "severity": "warn",
+  "meaning": "The Mac reported no internet connection.",
+  "likely_causes": [
+   "Wi-Fi off or no route",
+   "Firewall blocking"
+  ],
+  "fixes": [
+   "Reconnect network; verify other sites load."
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/foundation/nsurlerror",
+   "Foundation NSURLError.h"
+  ],
+  "verified": false
+ },
+ {
+  "id": "nsurl-timed-out",
+  "category": "icloud",
+  "title": "NSURLError timed out (-1001)",
+  "signatures": [
+   "Domain=NSURLErrorDomain Code=-1001\\b"
+  ],
+  "processes": [
+   "cloudphotod",
+   "nsurlsessiond",
+   "cloudd",
+   "Photos"
+  ],
+  "codes": [
+   "NSURLErrorDomain -1001 (timedOut)"
+  ],
+  "severity": "warn",
+  "meaning": "A network request to iCloud timed out.",
+  "likely_causes": [
+   "Slow/unstable connection",
+   "Proxy or VPN",
+   "Big asset on slow upstream"
+  ],
+  "fixes": [
+   "Test on another network.",
+   "Disable VPN/proxy.",
+   "Leave the upload to finish; it retries."
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/foundation/nsurlerror",
+   "Foundation NSURLError.h"
+  ],
+  "verified": false
+ },
+ {
+  "id": "photos-waiting-to-upload",
+  "category": "icloud",
+  "title": "Photos stuck on 'Waiting to Upload' / 'Uploading N items' at fixed count",
+  "signatures": [
+   "cloudphotod.{0,60}(upload|CPL)"
+  ],
+  "processes": [
+   "cloudphotod",
+   "photolibraryd",
+   "Photos"
+  ],
+  "codes": [],
+  "severity": "warn",
+  "meaning": "The upload queue stops advancing at one count, often due to one unprocessable asset or a throttled process.",
+  "likely_causes": [
+   "One corrupt/unsupported item blocking queue",
+   "Low Power Mode/battery",
+   "Quota full",
+   "Stale CloudSync cache"
+  ],
+  "fixes": [
+   "Check iCloud storage and network first.",
+   "Quit Photos, then Activity Monitor: quit cloudphotod (plain Quit, not Force) and reopen Photos.",
+   "Select the pending items (Photos > Library > the 'N items' in status), try File > Export and re-import suspicious ones.",
+   "Last resort, with Photos closed: back up library, then delete contents of <Library>.photoslibrary/private/com.apple.cloudphotosd/CloudSync.noindex (cache rebuilt)."
+  ],
+  "risk": "caution",
+  "confidence": "medium",
+  "sources": [
+   "https://discussions.apple.com/thread/6987031",
+   "https://www.macworld.com/article/234147/photos-for-macos-stops-syncing-heres-one-way-to-fix-it.html"
+  ],
+  "verified": false
+ },
+ {
+  "id": "shared-library-album-sync",
+  "category": "icloud",
+  "title": "Shared Library / Shared Album not syncing",
+  "signatures": [
+   "cloudphotod.{0,60}(shared|share)"
+  ],
+  "processes": [
+   "cloudphotod",
+   "photolibraryd"
+  ],
+  "codes": [],
+  "severity": "warn",
+  "meaning": "Shared items stall when invites are pending, quota is full on the owner, or iCloud Photos is off.",
+  "likely_causes": [
+   "iCloud Photos off",
+   "Participant quota/limit reached",
+   "Pending invitation"
+  ],
+  "fixes": [
+   "Turn on iCloud Photos; accept pending invites.",
+   "Check owner's storage.",
+   "Leave and rejoin the share (back up shared content first)."
+  ],
+  "risk": "caution",
+  "confidence": "low",
+  "sources": [
+   "https://support.apple.com/en-us/104956",
+   "https://discussions.apple.com/thread/6987031"
+  ],
+  "verified": false
+ },
+ {
+  "id": "unsupported-format-upload",
+  "category": "icloud",
+  "title": "Unsupported video/image formats (AVI/MKV/WMV) not uploading",
+  "signatures": [],
+  "processes": [
+   "cloudphotod"
+  ],
+  "codes": [],
+  "severity": "warn",
+  "meaning": "iCloud Photos only uploads formats Photos can import; unusual containers/codecs stay un-uploaded.",
+  "likely_causes": [
+   "AVI/MKV/WMV or exotic codec",
+   "Corrupt file"
+  ],
+  "fixes": [
+   "Convert to MP4/MOV (H.264/HEVC) or JPEG/HEIC, then re-import; remove originals only after verifying."
+  ],
+  "risk": "caution",
+  "confidence": "low",
+  "sources": [
+   "https://support.apple.com/en-us/104956",
+   "https://discussions.apple.com/thread/6987031"
+  ],
+  "verified": false
+ },
+ {
+  "id": "ck-operation-cancelled",
+  "category": "icloud",
+  "title": "CloudKit operationCancelled",
+  "signatures": [
+   "Domain=CKErrorDomain Code=20\\b",
+   "CKErrorDomain\\W{1,3}20\\b"
+  ],
+  "processes": [
+   "cloudphotod",
+   "photolibraryd",
+   "Photos",
+   "cloudd"
+  ],
+  "codes": [
+   "CKErrorDomain 20 (operationCancelled)"
+  ],
+  "severity": "info",
+  "meaning": "An upload/fetch operation was cancelled, typically because Photos quit, the Mac slept, or conditions changed.",
+  "likely_causes": [
+   "App quit or system sleep",
+   "Network change"
+  ],
+  "fixes": [
+   "Usually harmless; keep Photos open to finish."
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/cloudkit/ckerror/code",
+   "CloudKit CKError.h (numeric raw values; Apple web docs list case names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "ck-server-record-changed",
+  "category": "icloud",
+  "title": "CloudKit serverRecordChanged",
+  "signatures": [
+   "Domain=CKErrorDomain Code=14\\b",
+   "CKErrorDomain\\W{1,3}14\\b"
+  ],
+  "processes": [
+   "cloudphotod",
+   "photolibraryd",
+   "Photos",
+   "cloudd"
+  ],
+  "codes": [
+   "CKErrorDomain 14 (serverRecordChanged)"
+  ],
+  "severity": "info",
+  "meaning": "Conflict: the server's record differs from the local one; Photos normally resolves it automatically.",
+  "likely_causes": [
+   "Edits on two devices at once"
+  ],
+  "fixes": [
+   "Usually no action; let sync finish."
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/cloudkit/ckerror/code",
+   "CloudKit CKError.h (numeric raw values; Apple web docs list case names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "icloud-photos-toggle-resync",
+  "category": "icloud",
+  "title": "Turning iCloud Photos off/on triggers long resync",
+  "signatures": [],
+  "processes": [
+   "cloudphotod",
+   "photolibraryd"
+  ],
+  "codes": [],
+  "severity": "info",
+  "meaning": "Toggling iCloud Photos makes Photos reconcile the whole library with iCloud; it can take days and may duplicate downloads.",
+  "likely_causes": [
+   "Toggled the setting",
+   "Switched System Photo Library"
+  ],
+  "fixes": [
+   "Avoid toggling; leave Mac on power and Wi-Fi.",
+   "Before disabling, ensure originals are downloaded (back up)."
+  ],
+  "risk": "caution",
+  "confidence": "medium",
+  "sources": [
+   "https://support.apple.com/en-us/104956",
+   "https://discussions.apple.com/thread/6987031"
+  ],
+  "verified": false
+ },
+ {
+  "id": "nsurl-cancelled",
+  "category": "icloud",
+  "title": "NSURLError cancelled (-999)",
+  "signatures": [
+   "Domain=NSURLErrorDomain Code=-999\\b"
+  ],
+  "processes": [
+   "cloudphotod",
+   "nsurlsessiond",
+   "cloudd",
+   "Photos"
+  ],
+  "codes": [
+   "NSURLErrorDomain -999 (cancelled)"
+  ],
+  "severity": "info",
+  "meaning": "A request was cancelled by the app/system.",
+  "likely_causes": [
+   "Photos quit or task superseded"
+  ],
+  "fixes": [
+   "Usually harmless."
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/foundation/nsurlerror",
+   "Foundation NSURLError.h"
+  ],
+  "verified": false
+ },
+ {
+  "id": "optimise-storage-downloads",
+  "category": "icloud",
+  "title": "Optimise Mac Storage: originals downloading / 'Downloading from iCloud'",
+  "signatures": [
+   "cloudphotod.{0,60}download"
+  ],
+  "processes": [
+   "cloudphotod",
+   "Photos"
+  ],
+  "codes": [],
+  "severity": "info",
+  "meaning": "With Optimise Mac Storage, full-size originals stay in iCloud and download on demand; a disk with no space leaves items blank.",
+  "likely_causes": [
+   "Low free disk space",
+   "Slow network",
+   "Setting Optimise on"
+  ],
+  "fixes": [
+   "Free disk space; Settings > iCloud > Download Originals if enough space.",
+   "Select items > File > Download Originals."
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://support.apple.com/en-us/104956",
+   "https://discussions.apple.com/thread/6987031"
+  ],
+  "verified": false
+ },
+ {
+  "id": "photos-paused-library-days",
+  "category": "icloud",
+  "title": "Photos 'Paused' / 'Library paused for 1 day' (user pause)",
+  "signatures": [],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [],
+  "severity": "info",
+  "meaning": "Photos shows a user-triggered pause (Continue / Pause for One Day) for sync after a large import or manual pause.",
+  "likely_causes": [
+   "User clicked Pause",
+   "Large import"
+  ],
+  "fixes": [
+   "Open Photos > Library, scroll to bottom, click Resume/Continue.",
+   "Check Settings > iCloud > iCloud Photos is on."
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://support.apple.com/en-us/104956"
+  ],
+  "verified": false
+ },
+ {
+  "id": "photos-paused-low-power",
+  "category": "icloud",
+  "title": "Photos paused due to Low Power Mode / battery / thermal",
+  "signatures": [
+   "photolibraryd.{0,60}(low power|thermal|battery)"
+  ],
+  "processes": [
+   "cloudphotod",
+   "photolibraryd",
+   "powerd"
+  ],
+  "codes": [],
+  "severity": "info",
+  "meaning": "Photos defers uploads when the Mac is in Low Power Mode, on low battery, or under thermal pressure.",
+  "likely_causes": [
+   "Low Power Mode enabled",
+   "Mac unplugged/low battery",
+   "Heat"
+  ],
+  "fixes": [
+   "Plug in and disable Low Power Mode (System Settings > Battery).",
+   "Let the Mac cool; Photos resumes."
+  ],
+  "risk": "safe",
+  "confidence": "low",
+  "sources": [
+   "https://support.apple.com/en-us/104956",
+   "https://discussions.apple.com/thread/6987031"
+  ],
+  "verified": false
+ },
+ {
+  "id": "preparing-to-upload-large-import",
+  "category": "icloud",
+  "title": "'Preparing to upload' for huge imports",
+  "signatures": [],
+  "processes": [
+   "cloudphotod",
+   "photolibraryd"
+  ],
+  "codes": [],
+  "severity": "info",
+  "meaning": "After large imports Photos spends a long time hashing/preparing assets before upload.",
+  "likely_causes": [
+   "Tens of thousands of new assets",
+   "Mac busy or asleep"
+  ],
+  "fixes": [
+   "Keep Mac awake on power; give it hours to days.",
+   "Import in smaller batches in future."
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://support.apple.com/en-us/104956",
+   "https://discussions.apple.com/thread/6987031"
+  ],
+  "verified": false
+ },
+ {
+  "id": "applescript-1708",
+  "category": "import",
+  "title": "Photos doesn't understand the message (-1708)",
+  "signatures": [
+   "\\(-1708\\)",
+   "error\\W{0,3}-1708\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "AppleScript -1708"
+  ],
+  "severity": "warn",
+  "meaning": "The command isn't supported for that object or in this version.",
+  "likely_causes": [
+   "See meaning"
+  ],
+  "fixes": [
+   "Check Photos dictionary in Script Editor"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/library/archive/documentation/AppleScript/Conceptual/AppleScriptLangGuide/reference/ASLR_error_codes.html",
+   "https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.automation.apple-events"
+  ],
+  "verified": false
+ },
+ {
+  "id": "applescript-1712",
+  "category": "import",
+  "title": "AppleEvent timed out",
+  "signatures": [
+   "\\(-1712\\)",
+   "error\\W{0,3}-1712\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "AppleScript -1712"
+  ],
+  "severity": "warn",
+  "meaning": "Photos did not reply within the 2-minute default timeout, common on big imports.",
+  "likely_causes": [
+   "See meaning"
+  ],
+  "fixes": [
+   "Wrap in with timeout of 3600 seconds",
+   "Import smaller batches"
+  ],
+  "risk": "safe",
+  "confidence": "high",
+  "sources": [
+   "https://developer.apple.com/library/archive/documentation/AppleScript/Conceptual/AppleScriptLangGuide/reference/ASLR_error_codes.html",
+   "https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.automation.apple-events"
+  ],
+  "verified": false
+ },
+ {
+  "id": "applescript-1728",
+  "category": "import",
+  "title": "Can't get object (AppleScript -1728)",
+  "signatures": [
+   "\\(-1728\\)",
+   "error\\W{0,3}-1728\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "AppleScript -1728"
+  ],
+  "severity": "warn",
+  "meaning": "The referenced object doesn't exist in Photos.",
+  "likely_causes": [
+   "See meaning"
+  ],
+  "fixes": [
+   "Check album/media item reference exists",
+   "Use id-based references"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/library/archive/documentation/AppleScript/Conceptual/AppleScriptLangGuide/reference/ASLR_error_codes.html",
+   "https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.automation.apple-events"
+  ],
+  "verified": false
+ },
+ {
+  "id": "applescript-600",
+  "category": "import",
+  "title": "Application isn't running (-600)",
+  "signatures": [
+   "\\(-600\\)",
+   "error\\W{0,3}-600\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "AppleScript -600"
+  ],
+  "severity": "warn",
+  "meaning": "Photos wasn't running or quit mid-script.",
+  "likely_causes": [
+   "See meaning"
+  ],
+  "fixes": [
+   "Add tell application \"Photos\" to launch / activate first"
+  ],
+  "risk": "safe",
+  "confidence": "high",
+  "sources": [
+   "https://developer.apple.com/library/archive/documentation/AppleScript/Conceptual/AppleScriptLangGuide/reference/ASLR_error_codes.html",
+   "https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.automation.apple-events"
+  ],
+  "verified": false
+ },
+ {
+  "id": "applescript-609",
+  "category": "import",
+  "title": "Connection is invalid (-609)",
+  "signatures": [
+   "\\(-609\\)",
+   "error\\W{0,3}-609\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "AppleScript -609"
+  ],
+  "severity": "warn",
+  "meaning": "Photos quit or crashed during the Apple event.",
+  "likely_causes": [
+   "See meaning"
+  ],
+  "fixes": [
+   "Relaunch Photos and rerun; check crash logs in Console"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/library/archive/documentation/AppleScript/Conceptual/AppleScriptLangGuide/reference/ASLR_error_codes.html",
+   "https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.automation.apple-events"
+  ],
+  "verified": false
+ },
+ {
+  "id": "import-file-not-supported",
+  "category": "import",
+  "title": "Photos says file is not supported / was not imported",
+  "signatures": [
+   "(was|were) not imported",
+   "file (is|was) not supported",
+   "unsupported (file|format|type)"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [],
+  "severity": "warn",
+  "meaning": "Photos refused a file whose type, codec or container it cannot handle.",
+  "likely_causes": [
+   "AVI/MKV/WMV/MPG/FLV video",
+   "Corrupt file",
+   "Wrong extension"
+  ],
+  "fixes": [
+   "Convert video to MP4/MOV (H.264/HEVC) with HandBrake or QuickTime",
+   "Convert images to JPEG/HEIC/TIFF/PNG",
+   "Keep originals untouched"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://support.apple.com/guide/photos/import-photos-and-videos-pht9a8b0a6f0/mac",
+   "Apple Support: Photos supported formats"
+  ],
+  "verified": false
+ },
+ {
+  "id": "import-huge-file",
+  "category": "import",
+  "title": "Very large file import fails or stalls",
+  "signatures": [
+   "file (is )?too large",
+   "(import|copy).{0,20}(stalled|hung)"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "PHPhotosErrorDomain 3305"
+  ],
+  "severity": "warn",
+  "meaning": "Very large videos or ProRAW can exhaust temp space or time out.",
+  "likely_causes": [
+   "Free space below file size x2",
+   "Slow external drive"
+  ],
+  "fixes": [
+   "Free space on startup disk",
+   "Import smaller batches",
+   "Trim or compress video"
+  ],
+  "risk": "safe",
+  "confidence": "low",
+  "sources": [
+   "https://developer.apple.com/documentation/photos/phphotoserror-swift.struct/code"
+  ],
+  "verified": false
+ },
+ {
+  "id": "import-live-photo-pair",
+  "category": "import",
+  "title": "Live Photo pair incomplete",
+  "signatures": [
+   "live photo.{0,30}(pair|missing|not)",
+   "\\.mov.{0,20}(not|without).{0,20}\\.heic"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [],
+  "severity": "warn",
+  "meaning": "Live Photos need the still and the MOV with matching content identifier; a lone file imports as separate still and video.",
+  "likely_causes": [
+   "Only one file copied",
+   "Metadata ContentIdentifier stripped"
+  ],
+  "fixes": [
+   "Copy both files with identical base names",
+   "Import from the device or both files together"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://github.com/RhetTbull/osxphotos"
+  ],
+  "verified": false
+ },
+ {
+  "id": "import-raw-dng-proraw",
+  "category": "import",
+  "title": "RAW/DNG/ProRAW not decoded",
+  "signatures": [
+   "(raw|dng|proraw).{0,30}(not supported|unsupported|cannot)"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [],
+  "severity": "warn",
+  "meaning": "New camera RAW formats need a macOS RAW decoder update.",
+  "likely_causes": [
+   "macOS older than camera support"
+  ],
+  "fixes": [
+   "Update macOS",
+   "Convert to DNG with Adobe DNG Converter"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://support.apple.com/en-us/HT211241"
+  ],
+  "verified": false
+ },
+ {
+  "id": "import-wrong-extension",
+  "category": "import",
+  "title": "Wrong file extension / mislabelled format",
+  "signatures": [
+   "extension.{0,30}(doesn.?t match|does not match)",
+   "image.{0,20}wrong (type|extension)"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "PHPhotosErrorDomain 3302"
+  ],
+  "severity": "warn",
+  "meaning": "Content type differs from extension (e.g. WebP or PNG named .jpg), so decoding or import fails.",
+  "likely_causes": [
+   "Downloaded images renamed",
+   "Converted by tool incorrectly"
+  ],
+  "fixes": [
+   "Run file <name> to identify, rename or convert with sips -s format jpeg"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "man sips",
+   "https://developer.apple.com/documentation/imageio"
+  ],
+  "verified": false
+ },
+ {
+  "id": "import-zero-byte-damaged",
+  "category": "import",
+  "title": "Zero-byte or damaged file refused",
+  "signatures": [
+   "zero.?byte",
+   "file (is )?(damaged|corrupt)"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "PHPhotosErrorDomain 3302"
+  ],
+  "severity": "warn",
+  "meaning": "The file is empty or truncated and cannot be decoded.",
+  "likely_causes": [
+   "Interrupted copy",
+   "Failing card or drive"
+  ],
+  "fixes": [
+   "Re-copy from source",
+   "Check size with ls -l",
+   "Run Disk Utility First Aid on source"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/photos/phphotoserror-swift.struct/code"
+  ],
+  "verified": false
+ },
+ {
+  "id": "photos-got-an-error",
+  "category": "import",
+  "title": "'Photos got an error' (AppleScript)",
+  "signatures": [
+   "Photos got an error"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [],
+  "severity": "warn",
+  "meaning": "Generic wrapper for an error thrown by Photos during a scripted command; the number after it identifies the cause.",
+  "likely_causes": [
+   "Unsupported file",
+   "Photos busy"
+  ],
+  "fixes": [
+   "Read the error number and see entries above",
+   "Try a single file"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://discussions.apple.com/"
+  ],
+  "verified": false
+ },
+ {
+  "id": "phphotos-3164-network-access-required",
+  "category": "import",
+  "title": "Photos needs network access to fetch asset",
+  "signatures": [
+   "PHPhotosErrorDomain\\D{0,12}3164\\b",
+   "PHPhotosError\\w*\\W{1,3}networkAccessRequired\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "PHPhotosErrorDomain 3164"
+  ],
+  "severity": "warn",
+  "meaning": "Fetching the asset resource failed because it requires network access (iCloud original).",
+  "likely_causes": [
+   "Optimised storage with originals in iCloud",
+   "Offline or network access disabled"
+  ],
+  "fixes": [
+   "Connect to the internet and sign in to iCloud",
+   "Allow the app to download from iCloud"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/photos/phphotoserror-swift.struct/code",
+   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "phphotos-3169-network-error",
+  "category": "import",
+  "title": "Photos network connection error",
+  "signatures": [
+   "PHPhotosErrorDomain\\D{0,12}3169\\b",
+   "PHPhotosError\\w*\\W{1,3}networkError\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "PHPhotosErrorDomain 3169"
+  ],
+  "severity": "warn",
+  "meaning": "Asset retrieval failed because of a network connection error.",
+  "likely_causes": [
+   "Flaky Wi-Fi or VPN",
+   "iCloud outage"
+  ],
+  "fixes": [
+   "Retry on a stable network",
+   "Check Apple System Status for iCloud Photos"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/photos/phphotoserror-swift.struct/code",
+   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "phphotos-3201-identifier-not-found",
+  "category": "import",
+  "title": "Photos identifier not found",
+  "signatures": [
+   "PHPhotosErrorDomain\\D{0,12}3201\\b",
+   "PHPhotosError\\w*\\W{1,3}identifierNotFound\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "PHPhotosErrorDomain 3201"
+  ],
+  "severity": "warn",
+  "meaning": "An identifier does not exist; the asset or collection was deleted or the library changed.",
+  "likely_causes": [
+   "Asset deleted between fetch and use",
+   "Library switched"
+  ],
+  "fixes": [
+   "Refetch the object and retry"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/photos/phphotoserror-swift.struct/code",
+   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "phphotos-3202-multiple-identifiers",
+  "category": "import",
+  "title": "Multiple Photos identifiers found",
+  "signatures": [
+   "PHPhotosErrorDomain\\D{0,12}3202\\b",
+   "PHPhotosError\\w*\\W{1,3}multipleIdentifiersFound\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "PHPhotosErrorDomain 3202"
+  ],
+  "severity": "warn",
+  "meaning": "More than one identifier exists for a lookup that should be unique.",
+  "likely_causes": [
+   "Library inconsistency"
+  ],
+  "fixes": [
+   "Run Library Repair after backing up"
+  ],
+  "risk": "caution",
+  "confidence": "low",
+  "sources": [
+   "https://developer.apple.com/documentation/photos/phphotoserror-swift.struct/code",
+   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "phphotos-3300-change-not-supported",
+  "category": "import",
+  "title": "Photos change request not supported",
+  "signatures": [
+   "PHPhotosErrorDomain\\D{0,12}3300\\b",
+   "PHPhotosError\\w*\\W{1,3}changeNotSupported\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "PHPhotosErrorDomain 3300"
+  ],
+  "severity": "warn",
+  "meaning": "The requested change (e.g. an edit or creation request configuration) is not supported by the system. Name verified in Apple docs; raw value 3300 from header/forum reports.",
+  "likely_causes": [
+   "Unsupported combination of request options",
+   "Asset type that cannot be modified (e.g. shared or cloud-only item)"
+  ],
+  "fixes": [
+   "Retry with a different asset or simpler request",
+   "Update macOS and the app making the request"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/photos/phphotoserror-swift.struct/code",
+   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "phphotos-3301-operation-interrupted",
+  "category": "import",
+  "title": "Photos operation interrupted",
+  "signatures": [
+   "PHPhotosErrorDomain\\D{0,12}3301\\b",
+   "PHPhotosError\\w*\\W{1,3}operationInterrupted\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "PHPhotosErrorDomain 3301"
+  ],
+  "severity": "warn",
+  "meaning": "An interruption occurred and the operation could not complete.",
+  "likely_causes": [
+   "Photos or the app quit or crashed mid-operation",
+   "Library locked by another process",
+   "Sleep or volume disconnect"
+  ],
+  "fixes": [
+   "Quit and reopen Photos, then retry",
+   "Keep the Mac awake and the library volume connected during import",
+   "If repeated, restart the Mac"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/photos/phphotoserror-swift.struct/code",
+   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "phphotos-3302-invalid-resource",
+  "category": "import",
+  "title": "Photos rejected the file as an invalid resource",
+  "signatures": [
+   "PHPhotosErrorDomain\\D{0,12}3302\\b",
+   "PHPhotosError\\w*\\W{1,3}invalidResource\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "PHPhotosErrorDomain 3302"
+  ],
+  "severity": "warn",
+  "meaning": "Asset resource validation failed: Photos could not accept the file as a photo or video. Typical for unsupported, corrupt or mis-labelled files.",
+  "likely_causes": [
+   "Corrupt, truncated or zero-byte file",
+   "Wrong extension or unsupported codec/container",
+   "Video not playable by AVFoundation",
+   "Unsupported colour or bit-depth format"
+  ],
+  "fixes": [
+   "Check the file opens in Preview or QuickTime Player",
+   "Re-export or convert (e.g. HEVC/H.264 MP4, JPEG/HEIC/TIFF)",
+   "Re-copy the file from the original source",
+   "Check size is non-zero"
+  ],
+  "risk": "safe",
+  "confidence": "high",
+  "sources": [
+   "https://developer.apple.com/documentation/photos/phphotoserror-swift.struct/code",
+   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)",
+   "https://developer.apple.com/forums/thread/696924"
+  ],
+  "verified": false
+ },
+ {
+  "id": "phphotos-3303-missing-resource",
+  "category": "import",
+  "title": "Photos asset resource missing",
+  "signatures": [
+   "PHPhotosErrorDomain\\D{0,12}3303\\b",
+   "PHPhotosError\\w*\\W{1,3}missingResource\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "PHPhotosErrorDomain 3303"
+  ],
+  "severity": "warn",
+  "meaning": "An asset resource that is needed is missing, for example the original file is not present locally.",
+  "likely_causes": [
+   "Originals stored in iCloud and not downloaded",
+   "File deleted or moved out of the library",
+   "Damaged library"
+  ],
+  "fixes": [
+   "Download originals (Photos > Settings > iCloud, Download Originals)",
+   "Run Library Repair (hold Option+Command while opening Photos) after a backup"
+  ],
+  "risk": "caution",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/photos/phphotoserror-swift.struct/code",
+   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "phphotos-3306-request-not-supported-for-asset",
+  "category": "import",
+  "title": "Request not supported for this asset",
+  "signatures": [
+   "PHPhotosErrorDomain\\D{0,12}3306\\b",
+   "PHPhotosError\\w*\\W{1,3}requestNotSupportedForAsset\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "PHPhotosErrorDomain 3306"
+  ],
+  "severity": "warn",
+  "meaning": "The system does not support the requested operation for that specific asset.",
+  "likely_causes": [
+   "Operation on a shared album/syncing item",
+   "Asset type lacks the requested resource"
+  ],
+  "fixes": [
+   "Use a different operation (export instead of edit)",
+   "Duplicate the item and retry"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/photos/phphotoserror-swift.struct/code",
+   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "phphotos-3312-limit-exceeded",
+  "category": "import",
+  "title": "Photos request exceeded a limit",
+  "signatures": [
+   "PHPhotosErrorDomain\\D{0,12}3312\\b",
+   "PHPhotosError\\w*\\W{1,3}limitExceeded\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "PHPhotosErrorDomain 3312"
+  ],
+  "severity": "warn",
+  "meaning": "The request exceeds a limit (e.g. too many items in one request).",
+  "likely_causes": [
+   "Very large batch operation"
+  ],
+  "fixes": [
+   "Split the operation into smaller batches"
+  ],
+  "risk": "safe",
+  "confidence": "low",
+  "sources": [
+   "https://developer.apple.com/documentation/photos/phphotoserror-swift.struct/code",
+   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "phphotos-error-minus1-invalid",
+  "category": "import",
+  "title": "PHPhotosErrorDomain error -1 (invalid operation)",
+  "signatures": [
+   "PHPhotosErrorDomain\\W{0,8}error\\W{0,3}-1\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "PHPhotosErrorDomain -1"
+  ],
+  "severity": "warn",
+  "meaning": "Generic invalid-operation error (PHPhotosErrorInvalid); often returned by import or save when the cause is not specified.",
+  "likely_causes": [
+   "Corrupt or unsupported file",
+   "Library damaged or on unsupported volume",
+   "Permission problem"
+  ],
+  "fixes": [
+   "Test with a single known-good JPEG",
+   "Check the library is on APFS/Mac OS Extended",
+   "Repair library after backup",
+   "Update macOS"
+  ],
+  "risk": "caution",
+  "confidence": "medium",
+  "sources": [
+   "https://discussions.apple.com/thread/255085962",
+   "https://developer.apple.com/forums/thread/663106"
+  ],
+  "verified": false
+ },
+ {
+  "id": "phphotos-internal-error",
+  "category": "import",
+  "title": "Photos internal error",
+  "signatures": [
+   "PHPhotosErrorDomain\\D{0,12}3000\\b",
+   "PHPhotosError\\w*\\W{1,3}internalError\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "PHPhotosErrorDomain 3000"
+  ],
+  "severity": "warn",
+  "meaning": "An internal error occurred in Photos. Raw value not verified.",
+  "likely_causes": [
+   "Library database inconsistency",
+   "Bug in the OS version"
+  ],
+  "fixes": [
+   "Restart, update macOS",
+   "Back up, then run Library Repair (Option+Command at launch)"
+  ],
+  "risk": "caution",
+  "confidence": "low",
+  "sources": [
+   "https://developer.apple.com/documentation/photos/phphotoserror-swift.struct/code",
+   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "import-bad-dates",
+  "category": "import",
+  "title": "Photos dated 1970, 2001 or future",
+  "signatures": [
+   "\\b(1970|2001)\\b.{0,20}date",
+   "date.{0,30}(1970|2001|future)"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [],
+  "severity": "info",
+  "meaning": "Missing or invalid metadata yields epoch dates (1970-01-01, 2001-01-01 Cocoa epoch) or future dates.",
+  "likely_causes": [
+   "No EXIF DateTimeOriginal",
+   "Camera clock wrong"
+  ],
+  "fixes": [
+   "Photos > Image > Adjust Date and Time",
+   "Fix EXIF with exiftool before importing (keep copy)"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://exiftool.org/",
+   "https://github.com/RhetTbull/osxphotos"
+  ],
+  "verified": false
+ },
+ {
+  "id": "import-duplicate",
+  "category": "import",
+  "title": "Item already in your library (duplicate)",
+  "signatures": [
+   "already in your (photos )?library",
+   "duplicate.{0,20}(skipped|detected)"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [],
+  "severity": "info",
+  "meaning": "Photos detected the same file already imported and skips it by default.",
+  "likely_causes": [
+   "Previous import of same file"
+  ],
+  "fixes": [
+   "Choose Import All New Items or leave skipped",
+   "Use Duplicates album (macOS Ventura+) to merge true duplicates"
+  ],
+  "risk": "safe",
+  "confidence": "high",
+  "sources": [
+   "https://support.apple.com/guide/photos/pht0a4c5a30c/mac"
+  ],
+  "verified": false
+ },
+ {
+  "id": "phphotos-3072-user-cancelled",
+  "category": "import",
+  "title": "Photos operation cancelled by user",
+  "signatures": [
+   "PHPhotosErrorDomain\\D{0,12}3072\\b",
+   "PHPhotosError\\w*\\W{1,3}userCancelled\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "PHPhotosErrorDomain 3072"
+  ],
+  "severity": "info",
+  "meaning": "The user cancelled retrieval or editing.",
+  "likely_causes": [
+   "User pressed Cancel"
+  ],
+  "fixes": [
+   "No action needed"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/photos/phphotoserror-swift.struct/code",
+   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "phphotos-3105-token-expired",
+  "category": "import",
+  "title": "Photos persistent change token expired",
+  "signatures": [
+   "PHPhotosErrorDomain\\D{0,12}3105\\b",
+   "PHPhotosError\\w*\\W{1,3}persistentChangeTokenExpired\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "PHPhotosErrorDomain 3105"
+  ],
+  "severity": "info",
+  "meaning": "The library state is older than the available change history.",
+  "likely_causes": [
+   "App has not synced for a long time"
+  ],
+  "fixes": [
+   "Do a full refetch instead of incremental changes"
+  ],
+  "risk": "safe",
+  "confidence": "low",
+  "sources": [
+   "https://developer.apple.com/documentation/photos/phphotoserror-swift.struct/code",
+   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "phphotos-3143-switching-system-library",
+  "category": "import",
+  "title": "System Photo Library being switched",
+  "signatures": [
+   "PHPhotosErrorDomain\\D{0,12}3143\\b",
+   "PHPhotosError\\w*\\W{1,3}switchingSystemPhotoLibrary\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "PHPhotosErrorDomain 3143"
+  ],
+  "severity": "info",
+  "meaning": "Library unavailable because the user is switching the System Photo Library.",
+  "likely_causes": [
+   "Changing System Photo Library in Photos settings"
+  ],
+  "fixes": [
+   "Wait for the switch to finish, then retry"
+  ],
+  "risk": "safe",
+  "confidence": "low",
+  "sources": [
+   "https://developer.apple.com/documentation/photos/phphotoserror-swift.struct/code",
+   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "avfoundation-11800",
+  "category": "media",
+  "title": "AVFoundation unknown error",
+  "signatures": [
+   "AVFoundationErrorDomain\\W{0,3}Code\\W{0,3}-11800",
+   "AVError\\w*\\W{1,3}-11800\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "AVFoundationErrorDomain -11800"
+  ],
+  "severity": "warn",
+  "meaning": "Unspecified failure, typically with an underlying OSStatus. Constant name: AVErrorUnknown.",
+  "likely_causes": [
+   "Corrupt or unsupported video",
+   "Hardware decoder issue",
+   "Interrupted copy"
+  ],
+  "fixes": [
+   "Open in QuickTime Player to test",
+   "Re-encode with HandBrake",
+   "Restart Mac / killall mediaserverd is not needed; reboot"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/avfoundation/averror/code"
+  ],
+  "verified": false
+ },
+ {
+  "id": "avfoundation-11819",
+  "category": "media",
+  "title": "Media services were reset",
+  "signatures": [
+   "AVFoundationErrorDomain\\W{0,3}Code\\W{0,3}-11819",
+   "AVError\\w*\\W{1,3}-11819\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "AVFoundationErrorDomain -11819"
+  ],
+  "severity": "warn",
+  "meaning": "mediaserverd/media services restarted mid-operation. Constant name: AVErrorMediaServicesWereReset.",
+  "likely_causes": [
+   "Corrupt or unsupported video",
+   "Hardware decoder issue",
+   "Interrupted copy"
+  ],
+  "fixes": [
+   "Open in QuickTime Player to test",
+   "Re-encode with HandBrake",
+   "Restart Mac / killall mediaserverd is not needed; reboot"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/avfoundation/averror/code"
+  ],
+  "verified": false
+ },
+ {
+  "id": "avfoundation-11821",
+  "category": "media",
+  "title": "Video decoding failed",
+  "signatures": [
+   "AVFoundationErrorDomain\\W{0,3}Code\\W{0,3}-11821",
+   "AVError\\w*\\W{1,3}-11821\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "AVFoundationErrorDomain -11821"
+  ],
+  "severity": "warn",
+  "meaning": "The decoder could not decode media data. Constant name: AVErrorDecodeFailed.",
+  "likely_causes": [
+   "Corrupt or unsupported video",
+   "Hardware decoder issue",
+   "Interrupted copy"
+  ],
+  "fixes": [
+   "Open in QuickTime Player to test",
+   "Re-encode with HandBrake",
+   "Restart Mac / killall mediaserverd is not needed; reboot"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/avfoundation/averror/code"
+  ],
+  "verified": false
+ },
+ {
+  "id": "avfoundation-11828",
+  "category": "media",
+  "title": "Cannot open: file format not recognised",
+  "signatures": [
+   "AVFoundationErrorDomain\\W{0,3}Code\\W{0,3}-11828",
+   "AVError\\w*\\W{1,3}-11828\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "AVFoundationErrorDomain -11828"
+  ],
+  "severity": "warn",
+  "meaning": "Media file cannot be opened; format unrecognised or corrupt. Constant name: AVErrorFileFormatNotRecognized.",
+  "likely_causes": [
+   "Corrupt or unsupported video",
+   "Hardware decoder issue",
+   "Interrupted copy"
+  ],
+  "fixes": [
+   "Open in QuickTime Player to test",
+   "Re-encode with HandBrake",
+   "Restart Mac / killall mediaserverd is not needed; reboot"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/avfoundation/averror/code"
+  ],
+  "verified": false
+ },
+ {
+  "id": "avfoundation-11829",
+  "category": "media",
+  "title": "AVFoundation cannot open (-11829)",
+  "signatures": [
+   "AVFoundationErrorDomain\\W{0,3}Code\\W{0,3}-11829",
+   "AVError\\w*\\W{1,3}-11829\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "AVFoundationErrorDomain -11829"
+  ],
+  "severity": "warn",
+  "meaning": "Media could not be opened; often follows -11828 variants. Constant name: AVErrorFailedToParse (unverified).",
+  "likely_causes": [
+   "Corrupt or unsupported video",
+   "Hardware decoder issue",
+   "Interrupted copy"
+  ],
+  "fixes": [
+   "Open in QuickTime Player to test",
+   "Re-encode with HandBrake",
+   "Restart Mac / killall mediaserverd is not needed; reboot"
+  ],
+  "risk": "safe",
+  "confidence": "low",
+  "sources": [
+   "https://developer.apple.com/documentation/avfoundation/averror/code"
+  ],
+  "verified": false
+ },
+ {
+  "id": "avfoundation-11847",
+  "category": "media",
+  "title": "AV operation interrupted",
+  "signatures": [
+   "AVFoundationErrorDomain\\W{0,3}Code\\W{0,3}-11847",
+   "AVError\\w*\\W{1,3}-11847\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "AVFoundationErrorDomain -11847"
+  ],
+  "severity": "warn",
+  "meaning": "The operation was interrupted, e.g. by sleep or app switch. Constant name: AVErrorOperationInterrupted.",
+  "likely_causes": [
+   "Corrupt or unsupported video",
+   "Hardware decoder issue",
+   "Interrupted copy"
+  ],
+  "fixes": [
+   "Open in QuickTime Player to test",
+   "Re-encode with HandBrake",
+   "Restart Mac / killall mediaserverd is not needed; reboot"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/avfoundation/averror/code"
+  ],
+  "verified": false
+ },
+ {
+  "id": "avfoundation-11863",
+  "category": "media",
+  "title": "AV operation not supported for asset (-11863)",
+  "signatures": [
+   "AVFoundationErrorDomain\\W{0,3}Code\\W{0,3}-11863",
+   "AVError\\w*\\W{1,3}-11863\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "AVFoundationErrorDomain -11863"
+  ],
+  "severity": "warn",
+  "meaning": "Operation unsupported for this asset. Constant name: unverified name.",
+  "likely_causes": [
+   "Corrupt or unsupported video",
+   "Hardware decoder issue",
+   "Interrupted copy"
+  ],
+  "fixes": [
+   "Open in QuickTime Player to test",
+   "Re-encode with HandBrake",
+   "Restart Mac / killall mediaserverd is not needed; reboot"
+  ],
+  "risk": "safe",
+  "confidence": "low",
+  "sources": [
+   "https://developer.apple.com/documentation/avfoundation/averror/code"
+  ],
+  "verified": false
+ },
+ {
+  "id": "imageio-decode-failure",
+  "category": "media",
+  "title": "ImageIO could not decode image",
+  "signatures": [
+   "ImageIO.{0,40}(JPEG|PNG|TIFF).{0,40}(error|corrupt|invalid)",
+   "CGImageSource.{0,30}(status|error)"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [],
+  "severity": "warn",
+  "meaning": "ImageIO logged a decoding problem (truncated JPEG, bad marker, invalid header).",
+  "likely_causes": [
+   "Partial download",
+   "Card errors"
+  ],
+  "fixes": [
+   "Re-copy source",
+   "Re-save in an editor"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/imageio/cgimagesourcestatus"
+  ],
+  "verified": false
+ },
+ {
+  "id": "import-hevc-prores",
+  "category": "media",
+  "title": "HEVC/ProRes video plays black or fails",
+  "signatures": [
+   "(hevc|prores).{0,30}(not supported|cannot|fail)"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "AVErrorDomain -11821"
+  ],
+  "severity": "warn",
+  "meaning": "Hardware or OS may lack the decoder for the codec profile.",
+  "likely_causes": [
+   "Older Mac",
+   "Unusual profile 10-bit 4:2:2 HEVC"
+  ],
+  "fixes": [
+   "Update macOS",
+   "Transcode to H.264"
+  ],
+  "risk": "safe",
+  "confidence": "low",
+  "sources": [
+   "https://developer.apple.com/documentation/avfoundation/averror"
+  ],
+  "verified": false
+ },
+ {
+  "id": "import-legacy-video-containers",
+  "category": "media",
+  "title": "AVI/MKV/WMV/MPG rejected",
+  "signatures": [
+   "\\.(avi|mkv|wmv|mpg|flv)\\b.{0,40}(not|unsupported)"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [],
+  "severity": "warn",
+  "meaning": "Photos only imports QuickTime-family containers; these must be converted.",
+  "likely_causes": [
+   "Container unsupported"
+  ],
+  "fixes": [
+   "ffmpeg -i in.mkv -c:v libx264 -c:a aac out.mp4 (copy original first)"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://support.apple.com/guide/photos/pht9a8b0a6f0/mac"
+  ],
+  "verified": false
+ },
+ {
+  "id": "posix-1-eperm",
+  "category": "permissions",
+  "title": "POSIX 1: Operation not permitted",
+  "signatures": [
+   "NSPOSIXErrorDomain\\W{0,3}(Code\\W{0,3})?1\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "NSPOSIXErrorDomain 1"
+  ],
+  "severity": "bad",
+  "meaning": "errno 1 (EPERM) as reported on macOS; message 'Operation not permitted'.",
+  "likely_causes": [
+   "See fixes"
+  ],
+  "fixes": [
+   "Grant Full Disk Access or Files and Folders to the app",
+   "Check SIP/quarantine; xattr -d com.apple.quarantine <file>"
+  ],
+  "risk": "safe",
+  "confidence": "high",
+  "sources": [
+   "man 2 intro (macOS)",
+   "/usr/include/sys/errno.h"
+  ],
+  "verified": false
+ },
+ {
+  "id": "applescript-10004",
+  "category": "permissions",
+  "title": "Privilege violation (-10004)",
+  "signatures": [
+   "\\(-10004\\)",
+   "error\\W{0,3}-10004\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "AppleScript -10004"
+  ],
+  "severity": "warn",
+  "meaning": "The call isn't allowed, often sandbox or permission related.",
+  "likely_causes": [
+   "See meaning"
+  ],
+  "fixes": [
+   "Grant Automation/Full Disk Access to the running app"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/library/archive/documentation/AppleScript/Conceptual/AppleScriptLangGuide/reference/ASLR_error_codes.html",
+   "https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.automation.apple-events"
+  ],
+  "verified": false
+ },
+ {
+  "id": "applescript-1743",
+  "category": "permissions",
+  "title": "Not authorised to send Apple events",
+  "signatures": [
+   "\\(-1743\\)",
+   "error\\W{0,3}-1743\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "AppleScript -1743"
+  ],
+  "severity": "warn",
+  "meaning": "Automation permission (TCC) denied for the controlling app.",
+  "likely_causes": [
+   "See meaning"
+  ],
+  "fixes": [
+   "System Settings > Privacy & Security > Automation: enable Photos for the app",
+   "tccutil reset AppleEvents then rerun script"
+  ],
+  "risk": "safe",
+  "confidence": "high",
+  "sources": [
+   "https://developer.apple.com/library/archive/documentation/AppleScript/Conceptual/AppleScriptLangGuide/reference/ASLR_error_codes.html",
+   "https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.automation.apple-events"
+  ],
+  "verified": false
+ },
+ {
+  "id": "cocoa-257",
+  "category": "permissions",
+  "title": "NSCocoaErrorDomain 257: No permission to read file (NSFileReadNoPermissionError)",
+  "signatures": [
+   "NSCocoaErrorDomain\\W{0,3}(Code\\W{0,3})?257\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "NSCocoaErrorDomain 257"
+  ],
+  "severity": "warn",
+  "meaning": "No permission to read file (NSFileReadNoPermissionError).",
+  "likely_causes": [
+   "Permissions, missing file or volume"
+  ],
+  "fixes": [
+   "Grant Full Disk Access / Files and Folders"
+  ],
+  "risk": "safe",
+  "confidence": "high",
+  "sources": [
+   "https://developer.apple.com/documentation/foundation/1448136-nserror_codes"
+  ],
+  "verified": false
+ },
+ {
+  "id": "cocoa-513",
+  "category": "permissions",
+  "title": "NSCocoaErrorDomain 513: No permission to write (NSFileWriteNoPermissionError)",
+  "signatures": [
+   "NSCocoaErrorDomain\\W{0,3}(Code\\W{0,3})?513\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "NSCocoaErrorDomain 513"
+  ],
+  "severity": "warn",
+  "meaning": "No permission to write (NSFileWriteNoPermissionError).",
+  "likely_causes": [
+   "Permissions, missing file or volume"
+  ],
+  "fixes": [
+   "Fix permissions, ignore-ownership, or grant access"
+  ],
+  "risk": "safe",
+  "confidence": "high",
+  "sources": [
+   "https://developer.apple.com/documentation/foundation/1448136-nserror_codes"
+  ],
+  "verified": false
+ },
+ {
+  "id": "gatekeeper-unidentified-developer",
+  "category": "permissions",
+  "title": "Gatekeeper blocks app (unidentified/not notarised)",
+  "signatures": [
+   "cannot be opened because the developer cannot be verified",
+   "not notarized|notarised|is damaged and can.?t be opened"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [],
+  "severity": "warn",
+  "meaning": "Gatekeeper blocked an unsigned or unnotarised import tool.",
+  "likely_causes": [
+   "Unsigned app",
+   "Quarantine flag"
+  ],
+  "fixes": [
+   "Right-click Open, or Privacy & Security > Open Anyway",
+   "Only for software you trust"
+  ],
+  "risk": "caution",
+  "confidence": "high",
+  "sources": [
+   "https://support.apple.com/en-us/102445"
+  ],
+  "verified": false
+ },
+ {
+  "id": "ignore-ownership",
+  "category": "permissions",
+  "title": "'Ignore ownership on this volume' enabled",
+  "signatures": [
+   "ignore ownership"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [],
+  "severity": "warn",
+  "meaning": "Volume ignoring ownership can break libraries' permissions and cause 513/EACCES.",
+  "likely_causes": [
+   "Option set in Get Info"
+  ],
+  "fixes": [
+   "Uncheck 'Ignore ownership on this volume' in Finder Get Info > Ownership & Permissions"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://support.apple.com/guide/mac-help/mchlp1020/mac"
+  ],
+  "verified": false
+ },
+ {
+  "id": "phphotos-3310-access-restricted",
+  "category": "permissions",
+  "title": "Photos access restricted by system configuration",
+  "signatures": [
+   "PHPhotosErrorDomain\\D{0,12}3310\\b",
+   "PHPhotosError\\w*\\W{1,3}accessRestricted\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "PHPhotosErrorDomain 3310"
+  ],
+  "severity": "warn",
+  "meaning": "System configuration (Screen Time, MDM or parental restriction) restricts access to photos.",
+  "likely_causes": [
+   "Screen Time content restrictions",
+   "MDM profile restricts Photos"
+  ],
+  "fixes": [
+   "Check System Settings > Screen Time and Privacy & Security > Photos",
+   "Ask the administrator if the Mac is managed"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/photos/phphotoserror-swift.struct/code",
+   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "phphotos-3311-access-user-denied",
+  "category": "permissions",
+  "title": "Photos access denied by user",
+  "signatures": [
+   "PHPhotosErrorDomain\\D{0,12}3311\\b",
+   "PHPhotosError\\w*\\W{1,3}accessUserDenied\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "PHPhotosErrorDomain 3311"
+  ],
+  "severity": "warn",
+  "meaning": "The user denied the app permission to Photos.",
+  "likely_causes": [
+   "Photos permission refused in the TCC prompt",
+   "Permission later revoked"
+  ],
+  "fixes": [
+   "Open System Settings > Privacy & Security > Photos and enable the app",
+   "If the app is absent, reset with: tccutil reset Photos <bundle id> then relaunch"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/photos/phphotoserror-swift.struct/code",
+   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "posix-13-eacces",
+  "category": "permissions",
+  "title": "POSIX 13: Permission denied",
+  "signatures": [
+   "NSPOSIXErrorDomain\\W{0,3}(Code\\W{0,3})?13\\b",
+   "errno\\W{0,3}13\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "NSPOSIXErrorDomain 13"
+  ],
+  "severity": "warn",
+  "meaning": "errno 13 (EACCES) as reported on macOS; message 'Permission denied'.",
+  "likely_causes": [
+   "See fixes"
+  ],
+  "fixes": [
+   "Check permissions with ls -l",
+   "Grant Files and Folders or Full Disk Access"
+  ],
+  "risk": "safe",
+  "confidence": "high",
+  "sources": [
+   "man 2 intro (macOS)",
+   "/usr/include/sys/errno.h"
+  ],
+  "verified": false
+ },
+ {
+  "id": "tcc-files-and-folders",
+  "category": "permissions",
+  "title": "Files and Folders access denied",
+  "signatures": [
+   "kTCCServiceSystemPolicy(Desktop|Documents|Downloads)Folder"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "NSCocoaErrorDomain 257"
+  ],
+  "severity": "warn",
+  "meaning": "App denied Desktop/Documents/Downloads access.",
+  "likely_causes": [
+   "Prompt denied"
+  ],
+  "fixes": [
+   "Enable in Files and Folders"
+  ],
+  "risk": "safe",
+  "confidence": "high",
+  "sources": [
+   "https://support.apple.com/guide/mac-help/mh26782/mac"
+  ],
+  "verified": false
+ },
+ {
+  "id": "tcc-full-disk-access",
+  "category": "permissions",
+  "title": "Full Disk Access needed",
+  "signatures": [
+   "kTCCServiceSystemPolicyAllFiles"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "NSPOSIXErrorDomain 1"
+  ],
+  "severity": "warn",
+  "meaning": "Protected folders require Full Disk Access.",
+  "likely_causes": [
+   "Not granted"
+  ],
+  "fixes": [
+   "Add app in Privacy & Security > Full Disk Access"
+  ],
+  "risk": "safe",
+  "confidence": "high",
+  "sources": [
+   "https://support.apple.com/guide/mac-help/mchl211c911f/mac"
+  ],
+  "verified": false
+ },
+ {
+  "id": "tcc-photos-permission",
+  "category": "permissions",
+  "title": "Photos privacy permission denied",
+  "signatures": [
+   "kTCCServicePhotos",
+   "TCC.{0,30}Photos.{0,20}den"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [],
+  "severity": "warn",
+  "meaning": "App lacks Photos library access in Privacy & Security.",
+  "likely_causes": [
+   "Prompt refused"
+  ],
+  "fixes": [
+   "Enable in System Settings > Privacy & Security > Photos"
+  ],
+  "risk": "safe",
+  "confidence": "high",
+  "sources": [
+   "https://support.apple.com/guide/mac-help/mh26782/mac"
+  ],
+  "verified": false
+ },
+ {
+  "id": "tcc-removable-volumes",
+  "category": "permissions",
+  "title": "Removable Volumes access prompt",
+  "signatures": [
+   "kTCCServiceSystemPolicyRemovableVolumes",
+   "access files on a removable volume"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "NSPOSIXErrorDomain 1"
+  ],
+  "severity": "warn",
+  "meaning": "App needs permission to read external drives.",
+  "likely_causes": [
+   "Prompt denied"
+  ],
+  "fixes": [
+   "Enable under Privacy & Security > Files and Folders/Removable Volumes"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://support.apple.com/guide/mac-help/mh26782/mac"
+  ],
+  "verified": false
+ },
+ {
+  "id": "external-drive-sleep-disconnect",
+  "category": "disk",
+  "title": "External drive sleeping or disconnecting",
+  "signatures": [
+   "(disk|volume).{0,30}(not ejected properly|disconnected)",
+   "disk not ejected properly"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "NSPOSIXErrorDomain 6",
+   "NSPOSIXErrorDomain 5"
+  ],
+  "severity": "bad",
+  "meaning": "Drive spun down or lost power, causing I/O errors during import.",
+  "likely_causes": [
+   "Bus-powered drive, bad hub/cable",
+   "Energy Saver settings"
+  ],
+  "fixes": [
+   "Use a direct powered connection",
+   "Disable 'Put hard disks to sleep'",
+   "Run First Aid after unsafe ejection"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://eclecticlight.co/"
+  ],
+  "verified": false
+ },
+ {
+  "id": "phphotos-3114-library-volume-offline",
+  "category": "disk",
+  "title": "Photos library volume is offline",
+  "signatures": [
+   "PHPhotosErrorDomain\\D{0,12}3114\\b",
+   "PHPhotosError\\w*\\W{1,3}libraryVolumeOffline\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "PHPhotosErrorDomain 3114"
+  ],
+  "severity": "bad",
+  "meaning": "The library is not available because the volume that stores it is not mounted.",
+  "likely_causes": [
+   "External drive disconnected, asleep or ejected",
+   "Network volume dropped"
+  ],
+  "fixes": [
+   "Reconnect and mount the drive",
+   "Reopen Photos, holding Option to choose the library",
+   "Check cable, hub and power"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/photos/phphotoserror-swift.struct/code",
+   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "phphotos-3142-relinquishing-library",
+  "category": "disk",
+  "title": "Photos library moved, renamed or deleted",
+  "signatures": [
+   "PHPhotosErrorDomain\\D{0,12}3142\\b",
+   "PHPhotosError\\w*\\W{1,3}relinquishingLibraryBundleToWriter\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "PHPhotosErrorDomain 3142"
+  ],
+  "severity": "bad",
+  "meaning": "The library is unavailable because it was moved, renamed or deleted while in use (name verified; value from header).",
+  "likely_causes": [
+   "Library renamed in Finder while Photos open",
+   "Another app opened the library"
+  ],
+  "fixes": [
+   "Quit Photos, restore the library to its original path, reopen"
+  ],
+  "risk": "safe",
+  "confidence": "low",
+  "sources": [
+   "https://developer.apple.com/documentation/photos/phphotoserror-swift.struct/code",
+   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "phphotos-3305-not-enough-space",
+  "category": "disk",
+  "title": "Not enough space for Photos change",
+  "signatures": [
+   "PHPhotosErrorDomain\\D{0,12}3305\\b",
+   "PHPhotosError\\w*\\W{1,3}notEnoughSpace\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "PHPhotosErrorDomain 3305"
+  ],
+  "severity": "bad",
+  "meaning": "There is not enough disk space to perform the change, such as importing or copying originals.",
+  "likely_causes": [
+   "Library volume nearly full",
+   "Importing large videos or ProRAW"
+  ],
+  "fixes": [
+   "Free space on the library drive and the startup disk (import needs temporary space)",
+   "Move the library to a larger drive after backing up",
+   "Empty Recently Deleted"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/photos/phphotoserror-swift.struct/code",
+   "Photos framework headers PHPhotosError.h (raw values from header memory; Apple docs page lists names only)"
+  ],
+  "verified": false
+ },
+ {
+  "id": "phphotos-library-in-file-provider",
+  "category": "disk",
+  "title": "Photos library inside iCloud Drive/file provider folder",
+  "signatures": [
+   "libraryInFileProviderSyncRoot",
+   "library.{0,30}file provider"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "PHPhotosError libraryInFileProviderSyncRoot"
+  ],
+  "severity": "bad",
+  "meaning": "Library bundle is within a file provider sync folder (iCloud Drive, Dropbox), which Photos does not support.",
+  "likely_causes": [
+   "Library moved to Documents/Desktop synced by iCloud"
+  ],
+  "fixes": [
+   "Quit Photos, move library to a non-synced folder such as Pictures, reopen"
+  ],
+  "risk": "caution",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/photos/phphotoserror-swift.struct/code"
+  ],
+  "verified": false
+ },
+ {
+  "id": "phphotos-library-on-bad-volume",
+  "category": "disk",
+  "title": "Photos library on unsupported volume (exFAT/NTFS/network)",
+  "signatures": [
+   "library.{0,40}(exFAT|NTFS|FAT32)",
+   "can.?t be opened.{0,30}(volume|format)"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "PHPhotosErrorDomain 3114"
+  ],
+  "severity": "bad",
+  "meaning": "Photos needs the library on a macOS-formatted (APFS or Mac OS Extended) local volume; exFAT/NTFS/FAT32 and many network shares are unsupported.",
+  "likely_causes": [
+   "Library stored on exFAT/NTFS drive",
+   "SMB/NAS location"
+  ],
+  "fixes": [
+   "Back up, then copy the library to an APFS or Mac OS Extended drive with Finder",
+   "Reformat the drive only after copying data off (destructive)"
+  ],
+  "risk": "destructive",
+  "confidence": "medium",
+  "sources": [
+   "https://support.apple.com/en-us/109364",
+   "Apple Support: Photos library storage requirements"
+  ],
+  "verified": false
+ },
+ {
+  "id": "posix-28-enospc",
+  "category": "disk",
+  "title": "POSIX 28: No space left on device",
+  "signatures": [
+   "NSPOSIXErrorDomain\\W{0,3}(Code\\W{0,3})?28\\b",
+   "errno\\W{0,3}28\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "NSPOSIXErrorDomain 28"
+  ],
+  "severity": "bad",
+  "meaning": "errno 28 (ENOSPC) as reported on macOS; message 'No space left on device'.",
+  "likely_causes": [
+   "See fixes"
+  ],
+  "fixes": [
+   "Free space; Photos import needs room on startup disk and library drive"
+  ],
+  "risk": "safe",
+  "confidence": "high",
+  "sources": [
+   "man 2 intro (macOS)",
+   "/usr/include/sys/errno.h"
+  ],
+  "verified": false
+ },
+ {
+  "id": "posix-30-erofs",
+  "category": "disk",
+  "title": "POSIX 30: Read-only file system",
+  "signatures": [
+   "NSPOSIXErrorDomain\\W{0,3}(Code\\W{0,3})?30\\b",
+   "errno\\W{0,3}30\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "NSPOSIXErrorDomain 30"
+  ],
+  "severity": "bad",
+  "meaning": "errno 30 (EROFS) as reported on macOS; message 'Read-only file system'.",
+  "likely_causes": [
+   "See fixes"
+  ],
+  "fixes": [
+   "NTFS drives mount read-only: use APFS/exFAT or a driver",
+   "Check volume mounted read-only in Disk Utility; First Aid"
+  ],
+  "risk": "safe",
+  "confidence": "high",
+  "sources": [
+   "man 2 intro (macOS)",
+   "/usr/include/sys/errno.h"
+  ],
+  "verified": false
+ },
+ {
+  "id": "posix-5-eio",
+  "category": "disk",
+  "title": "POSIX 5: Input/output error",
+  "signatures": [
+   "NSPOSIXErrorDomain\\W{0,3}(Code\\W{0,3})?5\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "NSPOSIXErrorDomain 5"
+  ],
+  "severity": "bad",
+  "meaning": "errno 5 (EIO) as reported on macOS; message 'Input/output error'.",
+  "likely_causes": [
+   "See fixes"
+  ],
+  "fixes": [
+   "Back up immediately",
+   "Try another cable/port",
+   "Run Disk Utility First Aid; replace failing drive"
+  ],
+  "risk": "safe",
+  "confidence": "high",
+  "sources": [
+   "man 2 intro (macOS)",
+   "/usr/include/sys/errno.h"
+  ],
+  "verified": false
+ },
+ {
+  "id": "posix-6-enxio",
+  "category": "disk",
+  "title": "POSIX 6: Device not configured",
+  "signatures": [
+   "NSPOSIXErrorDomain\\W{0,3}(Code\\W{0,3})?6\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "NSPOSIXErrorDomain 6"
+  ],
+  "severity": "bad",
+  "meaning": "errno 6 (ENXIO) as reported on macOS; message 'Device not configured'.",
+  "likely_causes": [
+   "See fixes"
+  ],
+  "fixes": [
+   "Reconnect drive; disable USB power saving; eject and replug",
+   "Verify with Disk Utility"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "man 2 intro (macOS)",
+   "/usr/include/sys/errno.h"
+  ],
+  "verified": false
+ },
+ {
+  "id": "cocoa-256",
+  "category": "disk",
+  "title": "NSCocoaErrorDomain 256: Generic file read error (NSFileReadUnknownError)",
+  "signatures": [
+   "NSCocoaErrorDomain\\W{0,3}(Code\\W{0,3})?256\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "NSCocoaErrorDomain 256"
+  ],
+  "severity": "warn",
+  "meaning": "Generic file read error (NSFileReadUnknownError).",
+  "likely_causes": [
+   "Permissions, missing file or volume"
+  ],
+  "fixes": [
+   "Check the file/volume health"
+  ],
+  "risk": "safe",
+  "confidence": "high",
+  "sources": [
+   "https://developer.apple.com/documentation/foundation/1448136-nserror_codes"
+  ],
+  "verified": false
+ },
+ {
+  "id": "cocoa-260",
+  "category": "disk",
+  "title": "NSCocoaErrorDomain 260: File doesn't exist (NSFileReadNoSuchFileError)",
+  "signatures": [
+   "NSCocoaErrorDomain\\W{0,3}(Code\\W{0,3})?260\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "NSCocoaErrorDomain 260"
+  ],
+  "severity": "warn",
+  "meaning": "File doesn't exist (NSFileReadNoSuchFileError).",
+  "likely_causes": [
+   "Permissions, missing file or volume"
+  ],
+  "fixes": [
+   "Locate file; remount volume"
+  ],
+  "risk": "safe",
+  "confidence": "high",
+  "sources": [
+   "https://developer.apple.com/documentation/foundation/1448136-nserror_codes"
+  ],
+  "verified": false
+ },
+ {
+  "id": "cocoa-4",
+  "category": "disk",
+  "title": "NSCocoaErrorDomain 4: File not found (NSFileNoSuchFileError)",
+  "signatures": [
+   "NSCocoaErrorDomain\\W{0,3}(Code\\W{0,3})?4\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "NSCocoaErrorDomain 4"
+  ],
+  "severity": "warn",
+  "meaning": "File not found (NSFileNoSuchFileError).",
+  "likely_causes": [
+   "Permissions, missing file or volume"
+  ],
+  "fixes": [
+   "Check the path/volume"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://developer.apple.com/documentation/foundation/1448136-nserror_codes"
+  ],
+  "verified": false
+ },
+ {
+  "id": "cocoa-512",
+  "category": "disk",
+  "title": "NSCocoaErrorDomain 512: Generic write error (NSFileWriteUnknownError)",
+  "signatures": [
+   "NSCocoaErrorDomain\\W{0,3}(Code\\W{0,3})?512\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "NSCocoaErrorDomain 512"
+  ],
+  "severity": "warn",
+  "meaning": "Generic write error (NSFileWriteUnknownError).",
+  "likely_causes": [
+   "Permissions, missing file or volume"
+  ],
+  "fixes": [
+   "Check permissions and space"
+  ],
+  "risk": "safe",
+  "confidence": "high",
+  "sources": [
+   "https://developer.apple.com/documentation/foundation/1448136-nserror_codes"
+  ],
+  "verified": false
+ },
+ {
+  "id": "cocoa-640",
+  "category": "disk",
+  "title": "NSCocoaErrorDomain 640: Out of memory/space for write (NSFileWriteOutOfSpaceError)",
+  "signatures": [
+   "NSCocoaErrorDomain\\W{0,3}(Code\\W{0,3})?640\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "NSCocoaErrorDomain 640"
+  ],
+  "severity": "warn",
+  "meaning": "Out of memory/space for write (NSFileWriteOutOfSpaceError). Note: 640 is NSFileWriteOutOfSpaceError (disk), not RAM.",
+  "likely_causes": [
+   "Permissions, missing file or volume"
+  ],
+  "fixes": [
+   "Free disk space"
+  ],
+  "risk": "safe",
+  "confidence": "high",
+  "sources": [
+   "https://developer.apple.com/documentation/foundation/1448136-nserror_codes"
+  ],
+  "verified": false
+ },
+ {
+  "id": "posix-2-enoent",
+  "category": "disk",
+  "title": "POSIX 2: No such file or directory",
+  "signatures": [
+   "NSPOSIXErrorDomain\\W{0,3}(Code\\W{0,3})?2\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "NSPOSIXErrorDomain 2"
+  ],
+  "severity": "warn",
+  "meaning": "errno 2 (ENOENT) as reported on macOS; message 'No such file or directory'.",
+  "likely_causes": [
+   "See fixes"
+  ],
+  "fixes": [
+   "Check the path and that the volume is mounted"
+  ],
+  "risk": "safe",
+  "confidence": "high",
+  "sources": [
+   "man 2 intro (macOS)",
+   "/usr/include/sys/errno.h"
+  ],
+  "verified": false
+ },
+ {
+  "id": "posix-60-etimedout",
+  "category": "disk",
+  "title": "POSIX 60: Operation timed out",
+  "signatures": [
+   "NSPOSIXErrorDomain\\W{0,3}(Code\\W{0,3})?60\\b",
+   "errno\\W{0,3}60\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "NSPOSIXErrorDomain 60"
+  ],
+  "severity": "warn",
+  "meaning": "errno 60 (ETIMEDOUT) as reported on macOS; message 'Operation timed out'.",
+  "likely_causes": [
+   "See fixes"
+  ],
+  "fixes": [
+   "Check network share or sleeping drive; retry"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "man 2 intro (macOS)",
+   "/usr/include/sys/errno.h"
+  ],
+  "verified": false
+ },
+ {
+  "id": "posix-62-eloop",
+  "category": "disk",
+  "title": "POSIX 62: Too many levels of symbolic links",
+  "signatures": [
+   "NSPOSIXErrorDomain\\W{0,3}(Code\\W{0,3})?62\\b",
+   "errno\\W{0,3}62\\b"
+  ],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [
+   "NSPOSIXErrorDomain 62"
+  ],
+  "severity": "warn",
+  "meaning": "errno 62 (ELOOP) as reported on macOS; message 'Too many levels of symbolic links'.",
+  "likely_causes": [
+   "See fixes"
+  ],
+  "fixes": [
+   "Check for symlink loops in the source tree"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "man 2 intro (macOS)",
+   "/usr/include/sys/errno.h"
+  ],
+  "verified": false
+ },
+ {
+  "id": "exfat-ntfs-quirks",
+  "category": "disk",
+  "title": "exFAT/NTFS quirks with Photos",
+  "signatures": [],
+  "processes": [
+   "Photos"
+  ],
+  "codes": [],
+  "severity": "info",
+  "meaning": "exFAT lacks permissions and journaling (risk after unclean eject); macOS mounts NTFS read-only.",
+  "likely_causes": [
+   "Cross-platform drives"
+  ],
+  "fixes": [
+   "Use exFAT only for source media, not library",
+   "Copy before importing"
+  ],
+  "risk": "safe",
+  "confidence": "medium",
+  "sources": [
+   "https://support.apple.com/en-us/102194"
+  ],
+  "verified": false
+ }
+]

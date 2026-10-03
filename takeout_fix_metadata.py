@@ -5226,25 +5226,183 @@ LOG_RULES = [
 ]
 
 
+# ---- The Photos problem catalog: known log signatures and error codes, with causes and fixes ----------------------------
+ISSUES_FILE = Path(__file__).resolve().parent / "photos_issues.json"
+_ISSUES = {"entries": None, "units": None, "bycode": None}
+_SAFE_TESTS = ("a" * 3000, "paused " * 400, "error " * 300, " " * 3000 + "x", "NSCocoaErrorDomain Code=" + "1" * 600)
+
+
+def _safe_regex(sig):
+    """Compile a signature for case-insensitive line matching, or None when it is unsafe (too long, nested quantifiers, or slow)."""
+    if not isinstance(sig, str) or not sig or len(sig) > 240:
+        return None
+    if re.search(r"\([^)]*[+*][^)]*\)[+*{]", sig):
+        return None
+    try:
+        rx = re.compile(sig, re.I)
+    except re.error:
+        return None
+    t0 = time.time()
+    for t in _SAFE_TESTS:
+        rx.search(t)
+    return rx if time.time() - t0 < 0.05 else None
+
+
+def _code_key(code):
+    """'NSCocoaErrorDomain 4097' -> ('nscocoaerrordomain', 4097); 'SQLITE_CORRUPT' -> ('sqlite_corrupt', None)."""
+    m = re.match(r"\s*([A-Za-z][A-Za-z0-9_.]*)\W*?(-?\d+)\b", str(code))
+    if m:
+        return (m.group(1).lower(), int(m.group(2)))
+    m = re.match(r"\s*([A-Za-z][A-Za-z0-9_]{5,})\s*$", str(code))
+    return (m.group(1).lower(), None) if m else None
+
+
+def _split_branches(pat):
+    """Split a regex on its top-level '|' (not inside groups, brackets or escapes)."""
+    out, depth, cur, i, in_cls = [], 0, [], 0, False
+    while i < len(pat):
+        ch = pat[i]
+        if ch == "\\" and i + 1 < len(pat):
+            cur.append(pat[i:i + 2])
+            i += 2
+            continue
+        if in_cls:
+            in_cls = ch != "]"
+        elif ch == "[":
+            in_cls = True
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif ch == "|" and depth == 0:
+            out.append("".join(cur))
+            cur = []
+            i += 1
+            continue
+        cur.append(ch)
+        i += 1
+    out.append("".join(cur))
+    return [x for x in out if x]
+
+
+def _required_literal(pat):
+    """The longest plain-text run that every match of this pattern must contain (lower case), or None. Used to skip a pattern quickly."""
+    t = re.sub(r"\\.", " ", pat)                                   # escapes (\( \d \b ...) are not literal text
+    t = re.sub(r"\[[^\]]*\]", " ", t)                              # character classes
+    for _ in range(3):
+        t = re.sub(r"\([^()]*\|[^()]*\)", " ", t)                  # groups with alternatives: nothing in them is required
+        t = re.sub(r"\([^()]*\)[?*]|\([^()]*\)\{0", " ", t)        # optional groups
+    t = re.sub(r"[A-Za-z0-9_][?*]|[A-Za-z0-9_]\{0,\d*\}", " ", t)    # optional single characters
+    t = re.sub(r"[A-Za-z0-9_]\{\d+,\d*\}|[A-Za-z0-9_]\+", lambda m: m.group(0)[0] + " ", t)
+    runs = re.findall(r"[A-Za-z0-9_]{4,}", t)
+    return max(runs, key=len).lower() if runs else None
+
+
+def load_issues(force=False):
+    """The catalog: photos_issues.json plus the built-in log rules. Every signature is checked for safety; bad ones are dropped."""
+    if _ISSUES["entries"] is not None and not force:
+        return _ISSUES["entries"]
+    entries, seen = [], set()
+    raw = []
+    try:
+        data = json.loads(ISSUES_FILE.read_text(encoding="utf-8"))
+        raw = data if isinstance(data, list) else data.get("issues", [])
+    except (OSError, ValueError):
+        raw = []
+    for e in raw:
+        if not isinstance(e, dict) or not e.get("id") or not e.get("title") or e["id"] in seen:
+            continue
+        def lst(k):
+            v = e.get(k)
+            return [str(x) for x in v if isinstance(x, (str, int))][:30] if isinstance(v, list) else []
+        ent = {"id": str(e["id"])[:60], "category": str(e.get("category") or "other")[:20], "title": str(e["title"])[:160],
+               "severity": e.get("severity") if e.get("severity") in ("info", "warn", "bad") else "warn", "meaning": str(e.get("meaning") or "")[:600],
+               "causes": lst("likely_causes"), "fixes": lst("fixes"), "codes": lst("codes"), "processes": lst("processes"), "sources": lst("sources"),
+               "risk": e.get("risk") if e.get("risk") in ("safe", "caution", "destructive") else "caution",
+               "confidence": e.get("confidence") if e.get("confidence") in ("high", "medium", "low") else "low", "verified": bool(e.get("verified", False))}
+        ent["_rx"] = [rx for rx in (_safe_regex(x) for x in lst("signatures")) if rx]
+        ent["signatures"] = len(ent["_rx"])
+        seen.add(ent["id"])
+        entries.append(ent)
+    for r in LOG_RULES:                                    # built-in rules (not duplicated by the catalog)
+        if r["id"] in seen:
+            continue
+        rx = _safe_regex(r["re"])
+        if rx:
+            entries.append({"id": r["id"], "category": "builtin", "title": r["title"], "severity": r["sev"], "meaning": r["meaning"], "causes": [], "fixes": list(r["fixes"]),
+                            "codes": [], "processes": [], "sources": [], "risk": "caution", "confidence": "medium", "verified": False, "_rx": [rx], "signatures": 1})
+    bycode = {}
+    for e in entries:
+        for c in e["codes"]:
+            k = _code_key(c)
+            if k:
+                bycode.setdefault(k, []).append(e)
+    units = []
+    for e in entries:
+        for rx in e["_rx"]:
+            for sub in _split_branches(rx.pattern):
+                try:
+                    urx = re.compile(sub, re.I)
+                except re.error:
+                    continue
+                units.append((e, urx, _required_literal(sub)))
+    _ISSUES.update(entries=entries, units=units, bycode=bycode)
+    return entries
+
+
+_CODE_PATTERNS = (re.compile(r"([A-Za-z][A-Za-z0-9_.]*Domain)\W{1,8}(?:Code\W{0,3})?(-?\d{1,6})"), re.compile(r"\b(NSXPC[A-Za-z]+|SQLITE_[A-Z_]+|PHPhotosError[A-Za-z]*)\b"),
+                  re.compile(r"\b(?:AppleScript|AppleEvent|osascript)\b[^\n]{0,60}?\(?(-\d{3,5})\)?", re.I), re.compile(r"\berrno\W{0,3}(\d{1,3})\b", re.I))
+
+
+def codes_in_line(line):
+    """Error codes in one log line as catalog keys: [(domain_lower, number)] or [(name_lower, None)]."""
+    out = []
+    if "Code" not in line and "rror" not in line and "SQLITE" not in line and "NSXPC" not in line and "errno" not in line.lower():
+        return out
+    for m in _CODE_PATTERNS[0].finditer(line):
+        out.append((m.group(1).lower(), int(m.group(2))))
+    for m in _CODE_PATTERNS[1].finditer(line):
+        out.append((m.group(1).lower(), None))
+    for m in _CODE_PATTERNS[2].finditer(line):
+        out.append(("applescript", int(m.group(1))))
+    for m in _CODE_PATTERNS[3].finditer(line):
+        out.append(("nsposixerrordomain", int(m.group(1))))
+    return out
+
+
 def interpret_log_lines(lines, max_examples=3):
-    """Group log lines by what they mean. Returns (issues, unmatched) where issues carry a plain-language meaning and fixes."""
-    comp = [(r, re.compile(r["re"], re.I)) for r in LOG_RULES]
-    found = {}
-    unmatched = {}
+    """Group log lines by what they mean, using the Photos problem catalog (signatures and error codes).
+    Returns (issues, unmatched): each issue has a plain-language meaning, likely causes and fixes."""
+    entries = load_issues()
+    units, bycode = _ISSUES["units"], _ISSUES["bycode"]
+    found, unmatched = {}, {}
+
+    def add(e, line, via):
+        d = found.setdefault(e["id"], {"id": e["id"], "sev": e["severity"], "title": e["title"], "meaning": e["meaning"], "fixes": e["fixes"], "causes": e["causes"],
+                                       "risk": e["risk"], "confidence": e["confidence"], "verified": e.get("verified", False), "category": e["category"], "sources": e["sources"], "count": 0, "examples": [],
+                                       "first": line[:19], "last": line[:19], "via": via})
+        d["count"] += 1
+        d["last"] = line[:19]
+        if len(d["examples"]) < max_examples and line[:200] not in d["examples"]:
+            d["examples"].append(line[:240])
     for raw in lines:
         line = raw.strip()[:1500]                 # a pasted mega-line must never stall the checker
         if not line:
             continue
         hit = False
-        for r, rx in comp:
-            if rx.search(line):
-                d = found.setdefault(r["id"], {"id": r["id"], "sev": r["sev"], "title": r["title"], "meaning": r["meaning"], "fixes": r["fixes"], "count": 0, "examples": [], "first": line[:19], "last": line[:19]})
-                d["count"] += 1
-                d["last"] = line[:19]
-                if len(d["examples"]) < max_examples and line[:200] not in d["examples"]:
-                    d["examples"].append(line[:240])
+        low = line.lower()
+        for e, urx, lit in units:
+            if (lit is None or lit in low) and urx.search(line):
+                add(e, line, "text")
                 hit = True
                 break
+        if not hit and bycode:
+            for k in codes_in_line(line):
+                es = bycode.get(k)
+                if es:
+                    add(es[0], line, "code")
+                    hit = True
+                    break
         if not hit and re.search(r"\b(error|fault|failed|failure|exception)\b", line, re.I):
             key = re.sub(r"[0-9a-f]{8,}|\b\d+\b", "#", line[20:120]) if len(line) > 24 else line
             u = unmatched.setdefault(key, {"text": line[:240], "count": 0})
@@ -5253,6 +5411,11 @@ def interpret_log_lines(lines, max_examples=3):
     issues = sorted(found.values(), key=lambda d: (order.get(d["sev"], 3), -d["count"]))
     other = sorted(unmatched.values(), key=lambda u: -u["count"])[:6]
     return issues, other
+
+
+def issue_catalog():
+    """The catalog for the browser: everything except the compiled patterns."""
+    return [{k: v for k, v in e.items() if k != "_rx"} for e in load_issues()]
 
 
 MAC_LOG_PROCS = ("photolibraryd", "Photos", "cloudphotod", "assetsd", "mediaanalysisd", "photoanalysisd", "cloudd", "bird", "PhotosReliveWidget", "photoanalysisd")

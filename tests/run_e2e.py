@@ -1087,12 +1087,67 @@ def t_offline_place_names():
     assert city(WORK / "pn_out2" / "a.jpg")[0] == ""
 
 
+def t_issue_catalog():
+    ents = fx.load_issues(force=True)
+    assert len(ents) >= 120, len(ents)
+    ids = [e["id"] for e in ents]
+    assert len(ids) == len(set(ids)), "duplicate ids"
+    cats = {e["category"] for e in ents}
+    assert {"library", "icloud", "import", "permissions"} <= cats, cats
+    for e in ents:
+        assert e["title"] and e["meaning"] and e["severity"] in ("info", "warn", "bad") and e["risk"] in ("safe", "caution", "destructive"), e["id"]
+        if e["category"] != "builtin":
+            assert e["fixes"], "no fixes: " + e["id"]
+            assert e["verified"] is False or e["sources"], e["id"]
+    expect = {
+        'photolibraryd: Error Domain=NSCocoaErrorDomain Code=4097 "connection to service named com.apple.photos.service was interrupted"': "xpc-interrupted",
+        'cloudphotod: Error Domain=CKErrorDomain Code=25 "Quota exceeded"': "ck-quota-exceeded",
+        "Photos: Error Domain=PHPhotosErrorDomain Code=3302": "phphotos-3302-invalid-resource",
+        "assetsd: sqlite3_step failed: SQLITE_CORRUPT database disk image is malformed": "sqlite-corrupt",
+        "osascript: Photos got an error: Not authorized to send Apple events to Photos. (-1743)": "tcc-automation-1743",
+        'Error Domain=NSURLErrorDomain Code=-1009 "The Internet connection appears to be offline."': "nsurl-offline"}
+    for line, want in expect.items():
+        got = [i["id"] for i in fx.interpret_log_lines([line])[0]]
+        assert want in got, (line[:60], got)
+    benign = ["photolibraryd: Library opened successfully", "cloudphotod: Sync session completed: 0 errors", "kernel: mounted exFAT volume", "launchd: Service exited normally",
+              "Photos: Loaded 1200 assets in 0.4s", "bird: iCloud Drive sync idle", "powerd: Wake reason: EC.LidOpen", "Spotlight: indexing 4 items"]
+    assert [i["id"] for i in fx.interpret_log_lines(benign)[0] if i["sev"] != "info"] == []
+    # the fast literal pre-check must never hide a match that a plain search finds
+    for e, rx, lit in fx._ISSUES["units"]:
+        assert lit is None or lit == lit.lower() and len(lit) >= 4
+    for line in list(expect) + benign:
+        brute = {e["id"] for e in ents for rx in e["_rx"] if rx.search(line)}
+        fast = {i["id"] for i in fx.interpret_log_lines([line])[0]}
+        assert fast <= brute | {i["id"] for i in fx.interpret_log_lines([line])[0] if i["via"] == "code"}, (line[:60], fast, brute)
+    assert fx.codes_in_line('Error Domain=CKErrorDomain Code=25 "x"') == [("ckerrordomain", 25)]
+    assert fx._code_key("CKErrorDomain 25 (quotaExceeded)") == ("ckerrordomain", 25)
+    # a code in an unknown wording still finds its entry
+    iss = fx.interpret_log_lines(["cloudphotod: failed Error Domain=CKErrorDomain Code=23 whatever"])[0]
+    assert [i["id"] for i in iss] == ["ck-zone-busy"] and iss[0]["via"] in ("code", "text"), iss
+    import random
+    lines = [random.choice(benign + list(expect)) + " #%d" % i for i in range(60000)]
+    t0 = time.time(); fx.interpret_log_lines(lines); assert time.time() - t0 < 15, time.time() - t0
+    cat = fx.issue_catalog()
+    assert cat and "_rx" not in cat[0]
+    # the browser endpoint
+    import urllib.request
+    srv = g.ThreadingHTTPServer(("127.0.0.1", 0), g.Handler); port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        tok = urllib.request.urlopen("http://127.0.0.1:%d/" % port).read().decode().split("X-Shoebox-Token':'")[1].split("'")[0]
+        rq = urllib.request.Request("http://127.0.0.1:%d/api/issues" % port, data=b"{}", headers={"X-Shoebox-Token": tok})
+        out = json.loads(urllib.request.urlopen(rq, timeout=20).read())
+        assert len(out["issues"]) == len(cat)
+    finally:
+        srv.shutdown()
+
+
 ORDER = ["t_fix_copy", "t_fix_namedate", "t_fix_inplace", "t_fix_move", "t_fix_dryrun_changes_nothing", "t_fix_zip", "t_zip_resume", "t_zip_needs_dest", "t_zip_corrupt",
          "t_edited_policies", "t_cancel_mid_run", "t_unreadable_and_zero", "t_dest_not_writable", "t_exiftool_missing", "t_low_disk_zip", "t_assess_and_recommend",
          "t_assess_multi_and_photoslib", "t_guided_end_to_end", "t_guided_no_dest", "t_merge_variants", "t_merge_refuses_unsafe", "t_merge_move_in_place", "t_cleanup_all",
          "t_cleanup_refuses_broad", "t_consolidate", "t_convert", "t_convert_stop", "t_similar_apply_undo", "t_health_and_formats", "t_undo_copy_run", "t_photos_plan_and_run",
          "t_photos_applescript_injection_safe", "t_photos_errors", "t_monitor_rules", "t_monitor_job_paste", "t_compare_and_near", "t_diagnostics", "t_history_report",
-         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs", "t_audit_regressions", "t_dates_and_places", "t_resilient_copy", "t_rerun_over_http", "t_keeper_rules_and_matching", "t_bursts_and_compare_rules", "t_qa_hunt_regressions", "t_timezone_correct_dates", "t_preflight_report", "t_albums_and_live_arrival", "t_receipt", "t_context_dates_and_locations", "t_blur_and_screenshots", "t_motion_photo_extract", "t_offline_place_names"]
+         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs", "t_audit_regressions", "t_dates_and_places", "t_resilient_copy", "t_rerun_over_http", "t_keeper_rules_and_matching", "t_bursts_and_compare_rules", "t_qa_hunt_regressions", "t_timezone_correct_dates", "t_preflight_report", "t_albums_and_live_arrival", "t_receipt", "t_context_dates_and_locations", "t_blur_and_screenshots", "t_motion_photo_extract", "t_offline_place_names", "t_issue_catalog"]
 if __name__ == "__main__":
     only = sys.argv[1:]
     for n in ORDER:

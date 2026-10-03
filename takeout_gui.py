@@ -30,7 +30,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.05-a"
+VERSION = "2026.10.05-b"
 class Cancelled(Exception):
     pass
 
@@ -1577,7 +1577,7 @@ def run_clean(folders, include_other):
 UPDATE_BASE = os.environ.get("METADATAFIXER_UPDATE_BASE", "https://raw.githubusercontent.com/daviddef/MetadataFixer/main/")
 UPDATE_FILES = ["takeout_gui.py", "takeout_fix_metadata.py"]
 PLACES_DATA = "places.csv.gz"
-DOC_FILES = ["USER_GUIDE.md", "THIRD_PARTY_NOTICES.md", "LICENSE"]   # documents travel with updates too (a missing one is ignored)
+DOC_FILES = ["photos_issues.json", "USER_GUIDE.md", "THIRD_PARTY_NOTICES.md", "LICENSE"]   # documents travel with updates too (a missing one is ignored)
 SUPPORT_EMAIL = "thestocksoup@gmail.com"
 HERE = Path(__file__).resolve().parent
 
@@ -3549,6 +3549,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps({"runs": list_history(), "dir": str(REPORTS_DIR)}))
         elif path == "/api/open_run":
             self._send(200, json.dumps(open_path(body.get("id", ""), body.get("what", "report"))))
+        elif path == "/api/issues":
+            self._send(200, json.dumps({"issues": fx.issue_catalog()}))
         elif path == "/api/receipt":
             dest_ = str(body.get("dest") or (body.get("root") or ""))
             try:
@@ -4325,6 +4327,10 @@ body[data-tab=history] .route,body[data-tab=help] .route{display:none}
 <div class="hbtns"><button class="p" id="mongo">Check the logs</button></div>
 <div class="opt"><div style="flex:1"><label for="mpaste" style="font-weight:600">Or paste log text</label><textarea id="mpaste" placeholder="Paste lines from Console or a crash report here" spellcheck="false" style="min-height:70px"></textarea></div></div>
 <div class="hbtns"><button id="mpastego">Interpret the pasted text</button></div></div>
+<div class="card" id="kbcard"><details id="kbdet"><summary style="cursor:pointer;font-weight:700">&#128214; Known Photos problems <span class="mutes" id="kbcount"></span></summary>
+<small style="margin-top:6px"><b>Draft knowledge base.</b> Built from general knowledge of Photos, iCloud and macOS, not yet checked line by line against Apple&#39;s pages, so treat fixes beyond the safe ones as leads and always back up first. A built-in list of Apple Photos, iCloud and macOS problems and the error codes and log messages they show in Console, with the likely causes and the fixes to try, safest first. Search by a word, an error code (like 4097) or a process name (like cloudphotod).</small>
+<div class="row" style="margin:8px 0"><input type="text" id="kbq" placeholder="Search: error code, message, symptom..." spellcheck="false"><select id="kbcat" class="sel" style="margin-left:0"><option value="">All</option></select></div>
+<div id="kblist"></div></details></div>
 </section>
 
 
@@ -4935,7 +4941,7 @@ $('cmpgo').onclick=async()=>{
 
 function issuesHTML(issues,other){
   let h=(issues||[]).map(i=>`<div class="card"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="font-size:16px">${esc(i.title)}</b><span class="badge ${i.sev==='bad'?'badb':i.sev==='warn'?'warnb':''}">${i.sev==='bad'?'Fix':i.sev==='warn'?'Worth fixing':'For your information'}</span>${i.new?'<span class="badge okb">New</span>':''}<span class="mutes">${i.count.toLocaleString()} time${i.count===1?'':'s'}${i.last&&i.last!==i.first?' &middot; last '+esc(i.last):''}</span></div>
-  <div class="why" style="margin:6px 0">${esc(i.meaning)}</div><b style="font-size:13px">What to do</b><ol style="margin:4px 0 8px;padding-left:20px">${i.fixes.map(f=>'<li>'+esc(f)+'</li>').join('')}</ol>
+  <div class="why" style="margin:6px 0">${esc(i.meaning)}</div>${(i.causes||[]).length?'<b style="font-size:13px">Likely causes</b><ul style="margin:4px 0 8px;padding-left:20px">'+i.causes.map(f=>'<li>'+esc(f)+'</li>').join('')+'</ul>':''}<b style="font-size:13px">What to do</b><ol style="margin:4px 0 8px;padding-left:20px">${i.fixes.map(f=>'<li>'+esc(f)+'</li>').join('')}</ol>${i.confidence?'<small>Confidence: <b>'+esc(i.confidence)+'</b> &middot; riskiest step: <b>'+esc(i.risk||'')+'</b></small>':''}
   <details><summary class="mutes">Show the log lines</summary><pre style="white-space:pre-wrap;font-size:11.5px;margin:6px 0">${i.examples.map(esc).join('\n')}</pre></details></div>`).join('');
   if((other||[]).length)h+='<h2>Errors Shoebox does not recognise</h2><small style="margin-top:0">These are errors without a known explanation. If something is not working, copy them into an email to support.</small><pre style="white-space:pre-wrap;font-size:11.5px">'+other.map(o=>esc(o.text)+'  (x'+o.count+')').join('\n')+'</pre>';
   return h}
@@ -5255,6 +5261,21 @@ renderProfile();if(PROF!=='balanced')applyProfile(PROF);
   el('dview').onclick=e=>{e.preventDefault();const g=el('goto');if(g)g.click()};
   render();
 })();
+
+// ---- Known Photos problems browser ----
+let KB=null;
+async function loadKB(){if(KB)return;try{KB=(await post('/api/issues',{})).issues||[]}catch(e){KB=[]}
+  const cats=[...new Set(KB.map(e=>e.category))].sort();$('kbcat').innerHTML='<option value="">All ('+KB.length+')</option>'+cats.map(c=>'<option value="'+esc(c)+'">'+esc(({library:'Library',icloud:'iCloud',import:'Import',media:'Media files',permissions:'Permissions',disk:'Drives and disk',builtin:'Shoebox checks',system:'System',other:'Other'})[c]||c)+'</option>').join('');
+  $('kbcount').textContent='('+KB.length+')';renderKB()}
+function renderKB(){const q=($('kbq').value||'').toLowerCase().trim(),c=$('kbcat').value;
+  const L=(KB||[]).filter(e=>(!c||e.category===c)&&(!q||(e.title+' '+e.meaning+' '+e.codes.join(' ')+' '+e.processes.join(' ')+' '+e.causes.join(' ')).toLowerCase().includes(q))).slice(0,150);
+  $('kblist').innerHTML=L.length?L.map(e=>`<details class="sec"><summary><span class="badge ${e.severity==='bad'?'badb':e.severity==='warn'?'warnb':''}">${e.severity==='bad'?'Serious':e.severity==='warn'?'Worth fixing':'Info'}</span> ${esc(e.title)}</summary><div class="secbody"><div class="why">${esc(e.meaning)}</div>
+   ${e.codes.length?'<small>Codes: '+e.codes.map(x=>'<code>'+esc(x)+'</code>').join(' ')+'</small>':''}${e.processes.length?'<small>Seen from: '+e.processes.map(esc).join(', ')+'</small>':''}
+   ${e.causes.length?'<b style="font-size:13px">Likely causes</b><ul style="margin:3px 0 6px;padding-left:20px">'+e.causes.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>':''}
+   ${e.fixes.length?'<b style="font-size:13px">What to try (in order)</b><ol style="margin:3px 0 6px;padding-left:20px">'+e.fixes.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ol>':''}
+   <small>Riskiest step: <b>${esc(e.risk)}</b> &middot; Confidence: <b>${esc(e.confidence)}</b>${e.verified?' &middot; checked against its sources':' &middot; <i>draft: not yet checked against its sources</i>'}${e.confidence==='low'?' (treat as a lead, not a fact)':''}</small>
+   ${e.sources.length?'<small>Sources: '+e.sources.map(esc).join('; ')+'</small>':''}</div></details>`).join(''):'<small>Nothing matches. Try fewer words, or just the error number.</small>'}
+$('kbdet').addEventListener('toggle',()=>{if($('kbdet').open)loadKB()});$('kbq').oninput=()=>{if(KB)renderKB()};$('kbcat').onchange=()=>{if(KB)renderKB()};
 </script></main></body></html>"""
 
 
