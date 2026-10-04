@@ -274,6 +274,8 @@ Shoebox can turn a location into a place name **without going online**. It ships
 - It is on in every style except *Fastest*.
 - The data file is `places.csv.gz`, kept next to the app. If it is missing, the option quietly does nothing.
 
+**The photos and save-folder bar.** At the top of every working screen are two big boxes. **1: Add your photos** takes your Google Photos zips or folders (tap **Folder** or **Zip**, or drag them in on a computer) and then shows a short summary such as "1 folder + 2 zips" with a green tick. **2: Pick a save folder** is where the fixed photos go; your originals are never changed. The pencil buttons let you see, type or paste the list. Under them one line says "Ready" and how much room there is, or what to fix. If you press a button before choosing, the app shakes the box you need and says so, instead of showing a pop-up.
+
 ## The new Home screen (Simple view)
 
 Shoebox now opens on **Home**: eight big coloured cards for what you might want to do (fix my Google Photos download, something's not right, move to Apple Photos, is everything in iCloud, combine folders, find look-alikes, videos won't play, tidy up). Tap one and Shoebox takes you to the right place. A **suggestion card** at the top always offers the one next step, such as choosing your photos, choosing a folder, taking a look first, or running it for real once you have seen the preview.

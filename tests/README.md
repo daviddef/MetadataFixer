@@ -13,5 +13,6 @@ Start a private copy of the app for the UI scripts with `METADATAFIXER_HOME=/tmp
 - `home_ui.js PORT`: Home screen, goal cards, Simple view, problem picker and guide opening; saves screenshots in /tmp/shots4.
 - `ui_lint.js PORT`: plain-language lint over every visible title (jargon, long words, reading grade).
 - Older `ui_*.js` and the `*_ui.js` scripts switch to the full tab view first (they set `localStorage mode=full`).
+- `bar_ui.js PORT`: the compact photos / save-folder bar (empty, filled, nudge, typing a path); screenshots in /tmp/shots5.
 - `pb_ui.js PORT [shot.png]`: opens the Fix guides box on the Monitor tab, ticks a step and runs the library audit.
 - `ui_kb.js PORT`: opens the Known Photos problems box on the Monitor tab and checks the list, search and filter.

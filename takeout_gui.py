@@ -4241,6 +4241,36 @@ body[data-mode=simple] #pane-monitor:not(.adv) .advc{display:none}
 .prob.big{background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;border:0}.prob.big small{color:rgba(255,255,255,.9)}
 @media (prefers-reduced-motion:reduce){.goal i,.sg .p{animation:none}.goal,.sheetbox{transition:none;animation:none}}
 </style>
+<style id="pop2">
+.hero .route{gap:8px!important;margin-top:8px!important;padding-top:0!important;border:0!important;grid-template-columns:1fr 1fr!important;align-items:stretch}
+@media(max-width:620px){.hero .route{grid-template-columns:1fr!important}}
+.hero .rt-arrow{display:none!important}
+.hero .rt{padding:8px 10px!important;border-radius:18px!important;border:2.5px dashed rgba(91,61,245,.35)!important;min-height:0;cursor:pointer;position:relative}
+.hero .rt.has{border-style:solid!important;border-color:var(--ok)!important}
+.hero .rt .rt-head{display:flex;align-items:center;gap:8px;flex-wrap:nowrap}
+.hero .rt .rt-k{font-size:0!important;background:none!important;padding:0!important;min-width:0}
+.hero .rt-from .rt-k::before{content:"\1F4C2";font-size:22px}.hero .rt-to .rt-k::before{content:"\1F4CD";font-size:22px}
+.hero .rt.has .rt-k::before{content:"\2705"}
+#fsum,#fdname{flex:1;min-width:0;font-size:15.5px!important;font-weight:800!important;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fchips{display:none!important}
+.rt-empty{display:none!important}
+@media(min-width:700px){.rt-from:not(.has) .rt-empty{display:block!important;font-size:12px;color:var(--mute)}}
+.rt-acts .ic.lbl{width:auto!important;height:auto!important;padding:5px 10px!important;gap:4px;font-size:15px;white-space:nowrap}
+.rt-acts .ic.lbl span{font-size:13px;font-weight:800}
+.rt-acts .ic.lbl sup{display:none}
+#fdest{display:none!important;margin-top:6px}.rt-to.editing #fdest{display:block!important}
+#frd:not(.has) #fded,#frd:not(.has) #fdclr{display:none}
+#frs.has #fzip span,#frs.has #fadd span,#frd.has #fdbtn span{display:none}
+#frs.has .ic.lbl{padding:4px 8px!important}
+.hero .rt-stat{margin-top:0!important;font-size:12.5px!important;background:rgba(255,255,255,.18)!important;color:#fff!important;border-radius:12px;padding:5px 10px!important;grid-column:1/-1}
+.hero .rt-stat:empty{display:none!important}
+.hero .rt-stat.warn,.hero .rt-stat.bad{background:#fff!important}
+.hero .rt-stat.warn{color:#b45309!important}.hero .rt-stat.bad{color:#b91c1c!important}
+.shake{animation:shk .5s}@keyframes shk{20%{transform:translateX(-8px)}40%{transform:translateX(8px)}60%{transform:translateX(-5px)}80%{transform:translateX(5px)}}
+.hero .rt.shake{box-shadow:0 0 0 5px #ffb300!important}
+#nudge{white-space:nowrap;max-width:94vw;position:fixed;left:50%;top:14px;transform:translate(-50%,-80px);z-index:120;background:#1d1d1b;color:#fff;font-weight:800;padding:11px 18px;border-radius:999px;box-shadow:0 8px 24px rgba(0,0,0,.35);transition:transform .25s}
+#nudge.on{transform:translate(-50%,0)}
+</style>
 </head><body><div id="ack" style="display:none"><div class="ackbox" role="dialog" aria-modal="true" aria-labelledby="acktitle">
 <h2 id="acktitle">Before you start</h2>
 <p>Shoebox changes, copies, moves and (if you choose) deletes files. Please read this once:</p>
@@ -4283,14 +4313,14 @@ body[data-mode=simple] #pane-monitor:not(.adv) .advc{display:none}
   </div>
   <div class="fbar route" id="fbar">
     <div class="rt rt-from" id="frs">
-      <div class="rt-head"><span class="rt-k">FROM</span><b id="fsum"></b><span class="rt-acts"><button id="fadd" class="sm ic" title="Add folders (hold Cmd to pick several)" aria-label="Add folders">&#128193;<sup>+</sup></button><button id="fzip" class="sm ic" title="Add Google Takeout zip files (read one at a time, never changed)" aria-label="Add zip files">&#128230;<sup>+</sup></button><button id="fedit" class="sm ic" title="Edit the list: type or paste paths, reorder, clear" aria-label="Edit the list">&#9999;&#65039;</button></span></div>
+      <div class="rt-head"><span class="rt-k" aria-hidden="true"></span><b id="fsum"></b><span class="rt-acts"><button id="fadd" class="sm ic lbl" title="Add folders (hold Cmd to pick several)" aria-label="Add folders">&#128193; <span>Folder</span></button><button id="fzip" class="sm ic lbl" title="Add Google Takeout zip files (read one at a time, never changed)" aria-label="Add zip files">&#128230; <span>Zip</span></button><button id="fedit" class="sm ic" title="See or change the list" aria-label="See or change the list">&#9999;&#65039;</button></span></div>
       <div class="fchips" id="fchips"></div>
-      <div class="rt-empty" id="fempty">&#128194; Drop your Takeout zips or folders here, or tap &#128230;+ or &#128193;+</div>
+      <div class="rt-empty" id="fempty">Drop your photos here, or tap Folder or Zip</div>
     </div>
     <div class="rt-arrow" aria-hidden="true">&#10140;</div>
     <div class="rt rt-to" id="frd">
-      <div class="rt-head"><span class="rt-k">TO</span><b id="fdname"></b><span class="rt-acts"><button id="fdbtn" class="sm ic" title="Choose the destination folder" aria-label="Choose the destination folder">&#128194;</button><button id="fdclr" class="sm ic" title="Clear the destination" aria-label="Clear the destination">&times;</button></span></div>
-      <input type="text" id="fdest" list="recentdest" placeholder="Where the finished copies go" spellcheck="false"><datalist id="recentdest"></datalist>
+      <div class="rt-head"><span class="rt-k" aria-hidden="true"></span><b id="fdname"></b><span class="rt-acts"><button id="fdbtn" class="sm ic lbl" title="Choose the folder for the finished photos" aria-label="Choose the folder for the finished photos">&#128194; <span>Choose</span></button><button id="fded" class="sm ic" title="Type or paste a folder path" aria-label="Type a folder path">&#9999;&#65039;</button><button id="fdclr" class="sm ic" title="Clear" aria-label="Clear the destination">&times;</button></span></div>
+      <input type="text" id="fdest" list="recentdest" placeholder="Paste a folder path" spellcheck="false"><datalist id="recentdest"></datalist>
     </div>
     <div id="fpanel" style="display:none"><textarea id="fall" placeholder="One folder or zip path per line (you can drag them in too)" spellcheck="false"></textarea><div class="row" style="margin-top:6px"><button id="fdone" class="p sm">Done</button><button id="fclear" class="sm">Clear all</button></div></div>
     <div class="rt-stat" id="rtstat"></div>
@@ -4637,18 +4667,18 @@ function renderFolders(){
     const x=document.createElement('button');x.textContent='\u00d7';x.className='fx';x.setAttribute('aria-label','Remove '+nm);x.onclick=()=>{FOLDERS.splice(i,1);saveFolders()};c.appendChild(x);box.appendChild(c)});
   if(FOLDERS.length>MAXC){const m=document.createElement('button');m.className='fchip more';m.textContent='+'+(FOLDERS.length-MAXC)+' more';m.onclick=()=>{$('fpanel').style.display='block'};box.appendChild(m)}
   $('frs').classList.toggle('has',FOLDERS.length>0);
-  $('fsum').textContent=FOLDERS.length?FOLDERS.length+(FOLDERS.length===1?' source':' sources'):'';
+  {const z=FOLDERS.filter(p=>/\.zip$/i.test(p)).length,f=FOLDERS.length-z;$('fsum').textContent=FOLDERS.length?(f?f+(f===1?' folder':' folders'):'')+(f&&z?' + ':'')+(z?z+(z===1?' zip':' zips'):''):'Add your photos'}
   const note=FOLDERS.length?'using the '+(FOLDERS.length===1?'folder':FOLDERS.length+' folders')+' chosen at the top':'none chosen yet. Add folders in the bar at the top';
   document.querySelectorAll('.fnote').forEach(e=>{e.textContent=note});
   $('fall').value=FOLDERS.join('\n');if(typeof renderDest==='function')renderDest();if(typeof scheduleDoctor==='function')scheduleDoctor();updRoute()}
 function updRoute(){
   const st=$('rtstat');if(!st)return;const d=(typeof DOC!=='undefined'&&DOC)||{},tab=document.body.dataset.tab||'guided';
   const needsDest=['guided','fix','merge'].includes(tab);let cls='',t='';
-  if(!FOLDERS.length){t='Add your Takeout zips or folders (drag them in, or use the buttons).'}
-  else if(needsDest&&!dest()){cls=tab==='guided'?'':'warn';t=tab==='guided'?'Choose where the finished library goes (TO).':'No destination: files are changed in place. Choose a TO folder to keep your originals untouched.'}
-  else if(needsDest&&d.dest_ok===false){cls='bad';t='Cannot write to that destination. Choose another folder.'}
-  else if(needsDest&&d.need&&d.free!=null&&d.free<d.need*1.1){cls='bad';t='Not enough space: needs about '+fmtB(d.need)+', '+fmtB(d.free)+' free there.'}
-  else{cls='ok';t='\u2713 '+FOLDERS.length+(FOLDERS.length===1?' source':' sources')+(d.need?' ('+fmtB(d.need)+')':'')+(needsDest&&dest()&&d.free!=null?' \u2192 '+fmtB(d.free)+' free at the destination':'')}
+  if(!FOLDERS.length){t=''}
+  else if(needsDest&&!dest()){cls=tab==='guided'?'':'warn';t=tab==='guided'?'Now choose where to save the fixed photos.':'No save folder: files are changed where they are. Choose one to keep your originals untouched.'}
+  else if(needsDest&&d.dest_ok===false){cls='bad';t='Cannot save there. Choose another folder.'}
+  else if(needsDest&&d.need&&d.free!=null&&d.free<d.need*1.1){cls='bad';t='Not enough room: needs about '+fmtB(d.need)+', only '+fmtB(d.free)+' free.'}
+  else{cls='ok';t='\u2713 Ready'+(d.need?' \u00b7 '+fmtB(d.need)+' of photos':'')+(needsDest&&dest()&&d.free!=null?' \u00b7 '+fmtB(d.free)+' free':'')}
   st.className='rt-stat '+cls;st.textContent=t}
 function saveFolders(){try{localStorage.setItem('folders',JSON.stringify(FOLDERS))}catch(e){};renderFolders()}
 function addFolders(list){list.forEach(p=>{p=(p||'').trim().replace(/\/+$/,'');if(p&&!FOLDERS.includes(p))FOLDERS.push(p)});saveFolders()}
@@ -4668,7 +4698,7 @@ let DEST='';try{DEST=localStorage.getItem('dest')||''}catch(e){}
 const dest=()=>$('fdest').value.trim().replace(/\/+$/,'');
 function renderDest(){
   if(typeof scheduleDoctor==='function')scheduleDoctor();
-  const dn=$('fdname');if(dn)dn.textContent=dest()?(dest().split('/').filter(Boolean).pop()||dest()):'not chosen';updRoute();
+  const dn=$('fdname');if(dn)dn.textContent=dest()?(dest().split('/').filter(Boolean).pop()||dest()):'Pick a save folder';const fr=$('frd');if(fr)fr.classList.toggle('has',!!dest());updRoute();
   document.querySelectorAll('.dnote').forEach(e=>{e.textContent=dest()||e.dataset.empty||'none chosen'});
   const nm=p=>p.split('/').filter(Boolean).pop()||p;
 }
@@ -4683,7 +4713,7 @@ renderDest();
 renderFolders();
 
 $('go').onclick=async()=>{
-  if(!roots().length){alert('Add your folders in the bar at the top first');return}
+  if(!roots().length){nudge('src');return}
   if(!$('dry').checked&&!dest()&&!confirm('No output folder: files will be edited IN PLACE. Continue?'))return;
   if($('move').checked&&!$('dry').checked&&!confirm('MOVE will take files out of your Takeout folders. Make sure you have another backup. Continue?'))return;
   $('sum').style.display='none';
@@ -4794,7 +4824,7 @@ showTab(startTab);
 
 // ---- Part 4: convert
 $('vgo').onclick=async()=>{
-  if(!vroots().length){alert('Add your folders in the bar at the top first');return}
+  if(!vroots().length){nudge('src');return}
   const exts=[...document.querySelectorAll('#vtypes input:checked')].map(i=>i.dataset.ext);
   if(!exts.length){alert('Tick at least one video type');return}
   const act=$('vact').value;
@@ -4808,7 +4838,7 @@ let vsaved=null;try{vsaved=JSON.parse(localStorage.getItem('vtypes')||'null')}ca
 $('vtypes').innerHTML=VT.map(([e,d])=>`<label class="vt"><input type="checkbox" data-ext="${e}" ${(vsaved?vsaved.includes(e):d)?'checked':''}> ${e} <span class="vc" data-ext="${e}"></span></label>`).join('');
 $('vtypes').onchange=()=>{try{localStorage.setItem('vtypes',JSON.stringify([...document.querySelectorAll('#vtypes input:checked')].map(i=>i.dataset.ext)))}catch(e){}};
 $('vscan').onclick=async()=>{
-  if(!vroots().length){alert('Add your folders in the bar at the top first');return}
+  if(!vroots().length){nudge('src');return}
   const b=$('vscan');b.disabled=true;b.textContent='Scanning...';
   const r=await post('/api/convert_scan',{roots:vroots()});b.disabled=false;b.textContent='Scan folders for counts';
   if(r.error){alert(r.error);return}
@@ -4821,7 +4851,7 @@ $('vscan').onclick=async()=>{
 
 // ---- Merge folders
 $('mgo').onclick=async()=>{
-  if(!roots().length){alert('Add the folders to merge in the bar at the top first');return}
+  if(!roots().length){nudge('src');return}
   const mv=$('mgmove').checked;
   if(!mv&&!dest()){alert('Choose a Destination at the top, or tick "Move" to merge everything into the first source folder');return}
   if(mv&&!$('mgdry').checked&&!confirm(dest()?'MOVE will take the files out of your source folders and merge them into '+dest()+'. Make sure you have a backup. Continue?':'MOVE will merge everything into '+roots()[0]+' and take files out of the other folders. Make sure you have a backup. Continue?'))return;
@@ -4850,8 +4880,8 @@ async function refreshDoctor(){try{DOC=await post('/api/doctor',{roots:roots(),d
 function scheduleDoctor(){renderCheck();clearTimeout(docTimer);docTimer=setTimeout(refreshDoctor,400)}
 $('gst').onclick=async()=>{
   if(DOC&&!DOC.exiftool){alert('ExifTool is missing. In Terminal run: brew install exiftool');return}
-  if(!roots().length){alert('Add your Takeout zip files or folders in the bar at the top first');return}
-  if(!dest()){alert('Choose a Destination in the bar at the top. That is where your finished library will be created.');return}
+  if(!roots().length){nudge('src');return}
+  if(!dest()){nudge('dst');return}
   const real=!$('gdry').checked;
   if(real&&$('gcv').checked&&!confirm('After the library is built, old videos in the Destination will be converted to MP4 and the originals moved into an _original_videos folder. Continue?'))return;
   $('sum').style.display='none';curGuided=true;
@@ -4949,7 +4979,7 @@ function showAssess(s){
   document.querySelectorAll('#sumbody button[data-tab]').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
   const rp=$('rprev'),ra=$('rapply');if(rp){rp.onclick=()=>{applyRecs(s);$('gdry').checked=true;$('gst').click()};ra.onclick=()=>{applyRecs(s);ra.textContent='Applied to the settings above';$('gdry').checked=true;window.scrollTo({top:0,behavior:'smooth'})}}}
 $('gchk').onclick=async()=>{
-  if(!roots().length){alert('Add your Takeout zip files or folders in the bar at the top first');return}
+  if(!roots().length){nudge('src');return}
   $('sum').style.display='none';curGuided=false;
   const r=await post('/api/assess_start',{roots:roots(),out:dest()});
   if(r.error)alert(r.error);else{placeResults('assess');$('prog').style.display='block';poll()}};
@@ -4975,7 +5005,7 @@ async function simRun(){
   const r=await post('/api/consolidate_start',{roots:croots(),groups,dry_run:$('simdry').checked,dupes:$('simdup').value});
   if(r.error)alert(r.error);else{placeResults('clean');$('prog').style.display='block';poll()}}
 $('simfind').onclick=async()=>{
-  if(!croots().length){alert('Add your folders in the bar at the top first');return}
+  if(!croots().length){nudge('src');return}
   $('simfind').disabled=true;$('simfind').textContent='Looking...';
   const r=await post('/api/similar_folders',{roots:croots(),maybe:$('simmaybe').checked});
   $('simfind').disabled=false;$('simfind').textContent='Find similar folders';
@@ -5020,7 +5050,7 @@ function showSimilarApply(s){
   if((s.folders||[]).length)h+='<small>Set-aside folder: '+s.folders.map(esc).join(', ')+'</small>';
   $('sumbody').innerHTML=h;$('sum').style.display='block'}
 $('simscan').onclick=async()=>{
-  if(!roots().length){alert('Add your folders in the bar at the top first');return}
+  if(!roots().length){nudge('src');return}
   $('sum').style.display='none';curGuided=false;
   const r=await post('/api/similar_scan',{roots:roots(),threshold:+$('simsens').value,dupe:getDupe()});
   if(r.error)alert(r.error);else{placeResults('similar');$('prog').style.display='block';poll()}};
@@ -5035,7 +5065,7 @@ async function renderPCheck(){
   it.push(p.free!=null?[p.free<20e9?'bad':'ok','Free space on this Mac',fmtB(p.free)]:['','Free space unknown','']);
   $('pcheck').innerHTML=it.map(i=>`<div class="gc ${i[0]}"><i>${i[0]==='ok'?'&#10003;':i[0]==='bad'?'!':'&middot;'}</i><span>${esc(i[1])}</span><small>${esc(i[2])}</small></div>`).join('')}
 async function photosGo(limit){
-  if(!roots().length){alert('Add your finished library folder in the bar at the top first');return}
+  if(!roots().length){nudge('src');return}
   const real=!$('pdry').checked;
   if(real&&!confirm('This sends photos to the Photos app'+(limit?' (a test of '+limit+' photos)':' in batches')+'.\nPhotos has no undo for imports. Photos you already have are skipped.\n\nContinue?'))return;
   $('sum').style.display='none';curGuided=false;
@@ -5091,7 +5121,7 @@ function showHealth(s){
       const r=await post('/api/formats_apply',{items});if(r.error)alert(r.error);else{placeResults('formats_apply');$('prog').style.display='block';poll()}}}
 }
 async function startHealth(quiet){
-  if(!roots().length){if(!quiet)alert('Add your library folders in the bar at the top first');return}
+  if(!roots().length){if(!quiet)nudge('src');return}
   if(!quiet){$('sum').style.display='none'}curGuided=false;
   const r=await post('/api/health_start',{roots:roots(),deep:$('hdeep').checked});
   try{localStorage.setItem('health_last',String(Date.now()))}catch(e){}
@@ -5132,7 +5162,7 @@ async function checkUpload(){
   $('upres').innerHTML=uploadHTML(r);const w=$('whystuck');if(w)w.onclick=e=>{e.preventDefault();startMonitor(false)}}
 $('upgo').onclick=checkUpload;
 ['ggpxb','fgpxb'].forEach(id=>{const b=$(id);if(b)b.onclick=async()=>{const r=await post('/api/choose',{kind:'gpx',prompt:'Choose a GPX track file'});if(r.paths&&r.paths[0]){$('ggpx').value=r.paths[0];$('fgpx').value=r.paths[0]}}});
-$('rcgo').onclick=async()=>{const d=dest();if(!d){alert('Choose your Destination (the finished library) in the bar at the top first');return}$('rcgo').disabled=true;$('rcgo').textContent='Making the receipt...';const r=await post('/api/receipt',{dest:d,library:($('uplib')||{}).value||''});$('rcgo').disabled=false;$('rcgo').textContent='Make a migration receipt';if(r.error)alert(r.error);else alert('Receipt saved to:\n'+r.path+'\n\nIt is also opening in your browser.')};
+$('rcgo').onclick=async()=>{const d=dest();if(!d){nudge('dst');return}$('rcgo').disabled=true;$('rcgo').textContent='Making the receipt...';const r=await post('/api/receipt',{dest:d,library:($('uplib')||{}).value||''});$('rcgo').disabled=false;$('rcgo').textContent='Make a migration receipt';if(r.error)alert(r.error);else alert('Receipt saved to:\n'+r.path+'\n\nIt is also opening in your browser.')};
 async function startMonitor(quiet,pasted){
   if(!quiet){$('sum').style.display='none'}curGuided=false;
   const r=await post('/api/monitor_start',{hours:+$('mhours').value,pasted:pasted||''});
@@ -5305,7 +5335,7 @@ function liveTiles(s,c,done,nj){
 
 // ---- Clean up (one job: .json, junk, names, empty folders)
 $('cgo').onclick=async()=>{
-  if(!croots().length){alert('Add your folders in the bar at the top first');return}
+  if(!croots().length){nudge('src');return}
   const kinds=[['system','cjs'],['ithmb','cji'],['picasa','cjp'],['thm','cjt'],['safesave','cjb'],['empty','cje']].filter(([k,id])=>$(id).checked).map(([k])=>k);
   const o={ext:$('cx').checked?{json:$('cxj').checked,aside:$('cxu').checked}:null,json:$('cj').checked,json_other:$('cother').checked,junk:$('cjunk').checked?kinds:[],
     names:$('cn').checked?{paren:$('cnp').checked,copy:$('cnc').checked,spaces:$('cns').checked,files:$('cnf').checked,dupes:$('cnd').value}:null,
@@ -5724,6 +5754,14 @@ if(document.body.dataset.tab==='home')suggestNow();
 (function(){const pane=$('pane-monitor');['synccard','lkcard','livecard','kbcard'].forEach(i=>{const e=$(i);if(e)e.classList.add('advc')});const m=$('mongo');if(m&&m.closest('.card'))m.closest('.card').classList.add('advc');
  const b=document.createElement('button');b.type='button';b.id='monadv';b.className='sm';b.textContent='Show the expert tools';b.onclick=()=>{pane.classList.toggle('adv');b.textContent=pane.classList.contains('adv')?'Hide the expert tools':'Show the expert tools'};
  const h=pane.querySelector('.subline')||pane.querySelector('h2.ph');if(h)h.after(b)})();
+
+// ---- friendly nudges instead of alerts, and the compact FROM/TO bar ----
+function nudge(kind){window.scrollTo({top:0,behavior:'smooth'});const t=kind==='dst'?$('frd'):$('frs');t.classList.remove('shake');void t.offsetWidth;t.classList.add('shake');
+  let n=$('nudge');if(!n){n=document.createElement('div');n.id='nudge';document.body.appendChild(n)}n.textContent=kind==='dst'?'Choose where to save the fixed photos first':'Choose your photos first';n.classList.add('on');clearTimeout(n._t);n._t=setTimeout(()=>n.classList.remove('on'),2600)}
+$('fded').onclick=()=>{const r=$('frd');r.classList.toggle('editing');if(r.classList.contains('editing'))$('fdest').focus()};
+$('frs').addEventListener('click',e=>{if(e.target.closest('button'))return;if(!FOLDERS.length)$('fzip').click()});
+$('frd').addEventListener('click',e=>{if(e.target.closest('button,input'))return;if(!dest())$('fdbtn').click()});
+renderFolders();renderDest();
 </script></main></body></html>"""
 
 
