@@ -274,6 +274,15 @@ Shoebox can turn a location into a place name **without going online**. It ships
 - It is on in every style except *Fastest*.
 - The data file is `places.csv.gz`, kept next to the app. If it is missing, the option quietly does nothing.
 
+## The new Home screen (Simple view)
+
+Shoebox now opens on **Home**: eight big coloured cards for what you might want to do (fix my Google Photos download, something's not right, move to Apple Photos, is everything in iCloud, combine folders, find look-alikes, videos won't play, tidy up). Tap one and Shoebox takes you to the right place. A **suggestion card** at the top always offers the one next step, such as choosing your photos, choosing a folder, taking a look first, or running it for real once you have seen the preview.
+
+- **Something's not right** shows a list of everyday symptoms ("iCloud is stuck", "Some photos won't upload", "Photos won't open my library"). Pick one and you get a step-by-step checklist. **Check everything for me** runs every check at once and tells you what to do first.
+- **Simple view** hides the row of tabs and the expert tools. Tap **All tools** at the top to see every tab, and **Simple view** to go back. A **Home** button takes you back from any screen.
+- **Start buttons** say what they will do: "Show me what would change" while Preview is ticked, and "Fix my photos for real" once you untick it.
+- Option names are now shorter and in everyday words. The **i** button next to each one still has the full explanation.
+
 ## Known Photos problems (Monitor tab)
 
 Shoebox carries a built-in **catalog of about 140 Apple Photos, iCloud and macOS problems**, with the error codes and log messages each one shows in Console, the likely causes, and fixes to try in order, safest first. It covers four areas:

@@ -1,8 +1,9 @@
 const {chromium}=require('/opt/node22/lib/node_modules/playwright');
-(async()=>{const b=await chromium.launch({args:['--no-sandbox']});const pg=await (await b.newContext({viewport:{width:900,height:1000}})).newPage();const errs=[];
+(async()=>{const b=await chromium.launch({args:['--no-sandbox']});const pg=await (await b.newContext({viewport:{width:900,height:1000}})).newPage();await pg.addInitScript(()=>{try{localStorage.setItem("mode","full")}catch(e){}});const errs=[];
 pg.on('pageerror',e=>errs.push(e.message));pg.on('dialog',d=>d.dismiss());
 await pg.goto('http://127.0.0.1:'+process.argv[2]+'/',{waitUntil:'domcontentloaded'});await pg.waitForTimeout(600);
 if(await pg.$('#ackbox')){await pg.check('#ackbox');await pg.click('#ackgo')}
+await pg.click('.tab[data-tab="guided"]');await pg.waitForTimeout(300);
 const val=id=>pg.evaluate(i=>{const e=document.getElementById(i);return e.type==='checkbox'?e.checked:e.value},id);
 const bad=[];const chk=async(n,id,exp)=>{const v=await val(id);if(v!==exp)bad.push(n+': '+id+'='+v+' expected '+exp)};
 await pg.click('[data-prof=risky]');

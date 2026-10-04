@@ -30,7 +30,7 @@ from pathlib import Path
 
 import takeout_fix_metadata as fx
 
-VERSION = "2026.10.06"
+VERSION = "2026.10.07"
 class Cancelled(Exception):
     pass
 
@@ -4166,7 +4166,82 @@ body[data-tab=history] .route,body[data-tab=help] .route{display:none}
 .updbar button.p{padding:5px 12px;font-size:13px}
 .updbar .mutes{display:none}.updbar>span:first-child{white-space:nowrap;flex:1}.hmeta #vermsg{display:none}
 .updbar{flex-wrap:nowrap!important}.updbar .rt-acts{margin-left:0}
-</style></head><body><div id="ack" style="display:none"><div class="ackbox" role="dialog" aria-modal="true" aria-labelledby="acktitle">
+</style><style id="pop">
+:root{--acc:#5b3df5;--acc2:#ff3d8b;--ok:#0f9d58;--r:20px}
+body{font-family:ui-rounded,"SF Pro Rounded","Nunito","Avenir Next",-apple-system,BlinkMacSystemFont,system-ui,sans-serif;font-size:16.5px;background:radial-gradient(900px 500px at 10% -10%,#ffd9ec 0,transparent 60%),radial-gradient(800px 500px at 100% 0,#d6ccff 0,transparent 55%),radial-gradient(700px 500px at 50% 100%,#c8f3ff 0,transparent 60%),var(--bg);background-attachment:fixed}
+@media (prefers-color-scheme:dark){body{background:radial-gradient(900px 500px at 10% -10%,#3a1030 0,transparent 60%),radial-gradient(800px 500px at 100% 0,#1c1650 0,transparent 55%),var(--bg)}}
+h2.ph{font-size:26px!important;font-weight:900!important;letter-spacing:-.02em}
+.card{border-radius:var(--r)!important;border:2px solid color-mix(in srgb,var(--acc) 14%,var(--line))!important;box-shadow:0 6px 0 color-mix(in srgb,var(--acc) 10%,transparent),var(--shadow)!important}
+button.p,.chkbox button{background:linear-gradient(135deg,var(--acc),var(--acc2))!important;color:#fff!important;border:0!important;border-radius:16px!important;font-weight:800!important;font-size:17px!important;padding:13px 22px!important;box-shadow:0 5px 0 color-mix(in srgb,var(--acc) 55%,#000),0 12px 22px -8px color-mix(in srgb,var(--acc2) 70%,transparent)!important;transition:transform .08s,box-shadow .08s;text-shadow:0 1px 0 rgba(0,0,0,.18)}
+button.p:hover{transform:translateY(-2px)}button.p:active{transform:translateY(4px);box-shadow:0 1px 0 color-mix(in srgb,var(--acc) 55%,#000)!important}
+button.p:disabled{filter:grayscale(.7) opacity(.6);box-shadow:none!important}
+button.sm{border-radius:12px;font-weight:700}
+.tabs{border-radius:22px!important;padding:5px!important}
+.tab{border-radius:16px!important;font-weight:800!important}
+.tab.on{background:linear-gradient(135deg,var(--acc),var(--acc2))!important;color:#fff!important;box-shadow:0 4px 0 color-mix(in srgb,var(--acc) 55%,#000)!important}
+.hero{background:linear-gradient(135deg,#5b3df5,#a63df0 55%,#ff3d8b)!important;color:#fff!important;border:0!important;box-shadow:0 8px 0 rgba(60,20,150,.35),0 18px 30px -12px rgba(91,61,245,.6)!important}
+.hero h1,.hero .hmeta,.hero .hmeta a{color:#fff!important}
+.hero .route .rt{background:rgba(255,255,255,.96)!important;color:#1d1d1b}
+.hero .route .rt *{color:inherit}
+.hero .rt-k{background:#5b3df5!important;color:#fff!important}
+.opt{border-radius:16px;padding:10px 12px;background:color-mix(in srgb,var(--acc) 4%,var(--card));border:1.5px solid color-mix(in srgb,var(--acc) 12%,var(--line));margin:7px 0}
+.opt input[type=checkbox]{width:24px;height:24px;accent-color:var(--acc);flex:none}
+.opt .ttl,.opt label{font-weight:700}
+.badge{border-radius:999px;font-weight:800}
+/* Home */
+.homehero{text-align:center;margin:6px 0 14px}
+.hh1{font-size:30px;font-weight:900;line-height:1.1;letter-spacing:-.03em;background:linear-gradient(135deg,var(--acc),var(--acc2));-webkit-background-clip:text;background-clip:text;color:transparent}
+.hh2{font-size:16px;color:var(--mute);margin-top:6px}
+.goals{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:14px 0}
+@media(min-width:700px){.goals{grid-template-columns:repeat(4,1fr)}}
+.goal{all:unset;box-sizing:border-box;cursor:pointer;display:flex;flex-direction:column;gap:4px;min-height:148px;padding:14px;border-radius:24px;color:#fff;position:relative;overflow:hidden;box-shadow:0 7px 0 rgba(0,0,0,.22),0 16px 26px -12px rgba(0,0,0,.35);transition:transform .12s,box-shadow .12s;-webkit-tap-highlight-color:transparent}
+.goal:hover{transform:translateY(-3px) rotate(-.6deg)}.goal:active{transform:translateY(5px);box-shadow:0 2px 0 rgba(0,0,0,.22)}
+.goal:focus-visible{outline:4px solid #fff;outline-offset:-6px}
+.goal i{font-style:normal;font-size:44px;line-height:1;filter:drop-shadow(0 4px 0 rgba(0,0,0,.18));animation:bob 3.2s ease-in-out infinite}
+.goal:nth-child(2n) i{animation-delay:-1.1s}.goal:nth-child(3n) i{animation-delay:-2s}
+@keyframes bob{50%{transform:translateY(-5px) rotate(5deg)}}
+.goal b{font-size:18px;line-height:1.15;font-weight:900;margin-top:auto;text-shadow:0 1px 0 rgba(0,0,0,.2)}
+.goal span{font-size:13px;opacity:.95;line-height:1.25}
+.goal::after{content:"";position:absolute;right:-30px;top:-30px;width:110px;height:110px;border-radius:50%;background:rgba(255,255,255,.16)}
+.goal.gl1{background:linear-gradient(135deg,#7c3aed,#ec4899)}.goal.gl2{background:linear-gradient(135deg,#0891b2,#3b82f6)}.goal.gl3{background:linear-gradient(135deg,#ea580c,#ef4444)}.goal.gl4{background:linear-gradient(135deg,#e11d48,#fb7185 120%)}
+.goal.gl5{background:linear-gradient(135deg,#0284c7,#6366f1)}.goal.gl6{background:linear-gradient(135deg,#b45309,#f59e0b)}.goal.gl7{background:linear-gradient(135deg,#059669,#10b981)}.goal.gl8{background:linear-gradient(135deg,#7e22ce,#d946ef)}
+.notsure{all:unset;box-sizing:border-box;cursor:pointer;display:block;width:100%;text-align:center;padding:16px;border-radius:20px;font-weight:800;font-size:17px;color:var(--acc);border:3px dashed var(--acc);background:color-mix(in srgb,var(--acc) 7%,var(--card))}
+.notsure:hover{background:color-mix(in srgb,var(--acc) 14%,var(--card))}
+.homefoot{text-align:center;margin:14px 0;color:var(--mute);font-size:14px}
+.suggest{margin:8px 0}
+.sg{display:flex;gap:12px;align-items:center;padding:16px;border-radius:24px;background:var(--card);border:3px solid transparent;background-clip:padding-box;position:relative;box-shadow:0 7px 0 rgba(91,61,245,.18),var(--shadow)}
+.sg::before{content:"";position:absolute;inset:-3px;border-radius:27px;background:linear-gradient(135deg,var(--acc),var(--acc2),#ffb300);z-index:-1}
+.sg i{font-style:normal;font-size:40px;flex:none}
+.sg .sgt{font-size:11px;font-weight:900;letter-spacing:.12em;color:var(--acc2)}
+.sg b{display:block;font-size:19px;line-height:1.2;margin:2px 0}
+.sg p{margin:0 0 8px;color:var(--mute);font-size:14.5px;line-height:1.35}
+.sg .p{animation:glow 2s ease-in-out infinite}
+@keyframes glow{50%{box-shadow:0 5px 0 color-mix(in srgb,var(--acc) 55%,#000),0 0 0 8px color-mix(in srgb,var(--acc2) 22%,transparent)}}
+.sgmore{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.sgmore button{all:unset;cursor:pointer;padding:7px 12px;border-radius:999px;background:var(--card);border:2px solid color-mix(in srgb,var(--acc) 25%,var(--line));font-size:13.5px;font-weight:700}
+.updbar button.p{font-size:13px!important;padding:6px 12px!important;border-radius:12px!important;box-shadow:0 3px 0 color-mix(in srgb,var(--acc) 55%,#000)!important}
+/* simple mode */
+.homepill{all:unset;display:none;cursor:pointer;margin:0 0 8px;padding:8px 14px;border-radius:999px;font-weight:800;background:var(--card);border:2px solid var(--acc);color:var(--acc);box-shadow:0 3px 0 color-mix(in srgb,var(--acc) 30%,transparent)}
+body[data-mode=simple]:not([data-tab=home]) .homepill{display:inline-block}
+body[data-mode=simple] nav.tabs{display:none}
+body[data-tab=home] .route,body[data-tab=home] .status,body[data-tab=home] #retrybar{display:none!important}
+body[data-tab=home] .hero .route{display:none!important}
+body[data-mode=simple][data-tab=home] .hero{padding-bottom:10px!important}
+body[data-mode=simple] #pane-monitor:not(.adv) .advc{display:none}
+#monadv{margin:6px 0 10px}body[data-mode=full] #monadv{display:none}
+/* problem sheet */
+.sheet{position:fixed;inset:0;z-index:90;background:rgba(20,10,50,.55);display:flex;align-items:flex-end;justify-content:center}
+.sheet[hidden]{display:none}
+.sheetbox{width:100%;max-width:560px;max-height:88vh;overflow:auto;background:var(--bg);border-radius:28px 28px 0 0;padding:16px;animation:rise .25s ease-out}
+@keyframes rise{from{transform:translateY(40px);opacity:0}}
+.sheethead{display:flex;justify-content:space-between;align-items:center;font-size:22px;font-weight:900;margin-bottom:10px}
+.prob{all:unset;box-sizing:border-box;cursor:pointer;display:flex;gap:12px;align-items:center;width:100%;padding:13px 14px;margin:7px 0;border-radius:18px;background:var(--card);border:2px solid color-mix(in srgb,var(--acc) 18%,var(--line));font-weight:700;font-size:16px}
+.prob:hover,.prob:focus-visible{border-color:var(--acc);transform:translateX(3px)}
+.prob i{font-style:normal;font-size:26px;flex:none}.prob small{display:block;font-weight:500;color:var(--mute);font-size:13px}
+.prob.big{background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;border:0}.prob.big small{color:rgba(255,255,255,.9)}
+@media (prefers-reduced-motion:reduce){.goal i,.sg .p{animation:none}.goal,.sheetbox{transition:none;animation:none}}
+</style>
+</head><body><div id="ack" style="display:none"><div class="ackbox" role="dialog" aria-modal="true" aria-labelledby="acktitle">
 <h2 id="acktitle">Before you start</h2>
 <p>Shoebox changes, copies, moves and (if you choose) deletes files. Please read this once:</p>
 <ul>
@@ -4223,54 +4298,85 @@ body[data-tab=history] .route,body[data-tab=help] .route{display:none}
   </header>
 
 <div id="frame">
+  <button type="button" id="backhome" class="homepill">&#127968; Home</button>
   <nav class="tabs" role="tablist">
-    <button class="tab" data-tab="guided" role="tab"><b>&#10024;</b> Guided</button>
-    <button class="tab" data-tab="fix" role="tab"><b>&#128736;&#65039;</b> Fix</button>
-    <button class="tab" data-tab="merge" role="tab"><b>&#128450;&#65039;</b> Merge</button>
-    <button class="tab" data-tab="clean" role="tab"><b>&#129529;</b> Clean up</button>
-    <button class="tab" data-tab="convert" role="tab"><b>&#127902;&#65039;</b> Convert</button>
-    <button class="tab" data-tab="monitor" role="tab"><b>&#128225;</b> Monitor</button>
+    <button class="tab" data-tab="home" role="tab"><b>&#127968;</b> Home</button>
+    <button class="tab" data-tab="guided" role="tab"><b>&#10024;</b> Easy fix</button>
+    <button class="tab" data-tab="fix" role="tab"><b>&#128736;&#65039;</b> Fix details</button>
+    <button class="tab" data-tab="merge" role="tab"><b>&#128450;&#65039;</b> Combine</button>
+    <button class="tab" data-tab="clean" role="tab"><b>&#129529;</b> Tidy up</button>
+    <button class="tab" data-tab="convert" role="tab"><b>&#127902;&#65039;</b> Videos</button>
+    <button class="tab" data-tab="monitor" role="tab"><b>&#128225;</b> Check Photos</button>
     <button class="tab" data-tab="health" role="tab"><b>&#129658;</b> Health</button>
-    <button class="tab" data-tab="photos" role="tab"><b>&#127822;</b> Photos</button>
-    <button class="tab" data-tab="similar" role="tab"><b>&#128269;</b> Similar</button>
-    <button class="tab" data-tab="history" role="tab"><b>&#128196;</b> History</button>
+    <button class="tab" data-tab="photos" role="tab"><b>&#127822;</b> To Apple Photos</button>
+    <button class="tab" data-tab="similar" role="tab"><b>&#128269;</b> Look-alikes</button>
+    <button class="tab" data-tab="history" role="tab"><b>&#128196;</b> Past runs</button>
     <button class="tab" data-tab="help" role="tab"><b>&#10067;</b> Help</button>
   </nav>
-  <div class="status"><div class="srow"><span id="msg">Ready when you are! Pick a tab, set it up and press Start.</span><a href="#" id="goto" style="display:none">View results &rarr;</a><button id="actbtn" class="sm" title="Show or hide the floating activity log">Show activity</button><button id="contbtn" class="sm p" style="display:none;margin-left:10px">Continue</button><button id="stopall" class="sm" style="display:none;margin-left:10px">Stop</button></div>
+  <div class="status"><div class="srow"><span id="msg">Ready when you are.</span><a href="#" id="goto" style="display:none">View results &rarr;</a><button id="actbtn" class="sm" title="Show or hide the floating activity log">Show activity</button><button id="contbtn" class="sm p" style="display:none;margin-left:10px">Continue</button><button id="stopall" class="sm" style="display:none;margin-left:10px">Stop</button></div>
   <div id="retrybar" class="retrybar" style="display:none"></div>
   <div class="bar" id="bar"><i id="fill"></i><span id="pct">0%</span></div></div>
 </div>
+<section class="pane" id="pane-home">
+<div class="homehero"><div class="hh1">What would you like to do?</div><div class="hh2">Pick one. Shoebox does the hard thinking.</div></div>
+<div id="suggest" class="suggest"></div>
+<div class="goals">
+ <button type="button" class="goal gl1" data-goal="takeout"><i>&#129668;</i><b>Fix my Google Photos download</b><span>Put the dates and places back</span></button>
+ <button type="button" class="goal gl4" data-goal="problem"><i>&#129657;</i><b>Something&#39;s not right</b><span>Find out why, and fix it</span></button>
+ <button type="button" class="goal gl3" data-goal="apple"><i>&#127822;</i><b>Move to Apple Photos</b><span>Safely, a little at a time</span></button>
+ <button type="button" class="goal gl5" data-goal="icloud"><i>&#9729;&#65039;</i><b>Is everything in iCloud?</b><span>Check what has uploaded</span></button>
+ <button type="button" class="goal gl2" data-goal="combine"><i>&#129513;</i><b>Combine my photo folders</b><span>Merge them, drop the copies</span></button>
+ <button type="button" class="goal gl8" data-goal="lookalike"><i>&#128111;</i><b>Find look-alike photos</b><span>Free up space</span></button>
+ <button type="button" class="goal gl6" data-goal="videos"><i>&#127916;</i><b>Videos won&#39;t play</b><span>Make them play everywhere</span></button>
+ <button type="button" class="goal gl7" data-goal="tidy"><i>&#129529;</i><b>Tidy up leftovers</b><span>Clear out the clutter</span></button>
+</div>
+<button type="button" class="notsure" id="hsure">&#129300; Not sure? Look at my files and tell me what to do</button>
+<div class="homefoot"><a href="#" id="hall">Show all the tools</a> &middot; <a href="#" data-help="guide">Help</a></div>
+</section>
+<div id="probsheet" class="sheet" hidden><div class="sheetbox"><div class="sheethead"><b>What&#39;s going on?</b><button type="button" class="sm" id="probclose">Close</button></div>
+<button type="button" class="prob big" data-prob="diag"><i>&#129668;</i><span><b>Check everything for me</b><small>Looks at your library, iCloud and the Mac. Reads only.</small></span></button>
+<button type="button" class="prob" data-prob="sync-stuck"><i>&#9729;&#65039;</i><span>iCloud is stuck or very slow</span></button>
+<button type="button" class="prob" data-prob="unable-to-upload"><i>&#9888;&#65039;</i><span>Some photos won&#39;t upload</span></button>
+<button type="button" class="prob" data-prob="ghost-files"><i>&#128123;</i><span>Storage is full but I see few photos</span></button>
+<button type="button" class="prob" data-prob="format-problems"><i>&#127902;&#65039;</i><span>A photo or video won&#39;t open</span></button>
+<button type="button" class="prob" data-prob="import-fails"><i>&#128229;</i><span>Adding photos to Photos fails</span></button>
+<button type="button" class="prob" data-prob="library-wont-open"><i>&#128274;</i><span>Photos won&#39;t open my library</span></button>
+<button type="button" class="prob" data-prob="slow-hot"><i>&#128293;</i><span>My Mac is hot and Photos is slow</span></button>
+<button type="button" class="prob" data-prob="is-everything-in-icloud"><i>&#129518;</i><span>Photo counts don&#39;t match</span></button>
+<button type="button" class="prob" data-prob="sync-engine-livelock"><i>&#128257;</i><span>Photos never finishes thinking</span></button>
+<button type="button" class="prob" data-prob="shared-album-zone-errors"><i>&#129309;</i><span>Shared album errors keep repeating</span></button>
+</div></div>
 <section class="pane" id="pane-guided">
-<h2 class="ph">Fix my Takeout</h2>
+<h2 class="ph">Fix my Google Photos download</h2>
 <div class="card profcard"><div style="display:flex;align-items:center;gap:8px"><b>How do you like to play it?</b><button type="button" class="ib" id="profib" aria-label="What are styles?" style="margin-left:0;display:grid;width:20px;height:20px;padding:0;border-radius:50%;font:700 11px/1 system-ui;color:var(--mute);border:1px solid var(--line);background:transparent;place-items:center">i</button></div><div class="mutes" id="profexp" style="margin-top:4px;display:none">One tap sets every option in the app (Guided, Fix, Similar, Photos) to match how much time, risk and reward you want. You can still change any single option. <b>Preview stays on</b> in every style, so you always see what would happen first.</div>
 <div class="profpills" id="profpills"></div><div class="profinfo" id="profinfo"></div><button type="button" class="sm" id="profcmpgo" style="margin-top:8px">&#128202; Compare all five side by side</button></div>
 <div class="card"><small style="margin-top:0">The easy way. Add your Google Takeout <b>zip files</b> (or the folders you unzipped) in the bar at the top, choose where the finished library should go, and press the button. Your originals are <b>never changed</b>: a clean, merged copy is made in the Destination, with the real dates, locations and captions put back, duplicates removed and your folder structure kept.</small>
 <div class="gcheck" id="gcheck"></div>
-<div class="chkbox"><div><b>Not sure what to tick?</b><br><span class="mutes">Let the app look at your real files and recommend a plan, with the reasons. It changes nothing.</span></div><button id="gchk" class="p">Check my files</button></div>
+<div class="chkbox"><div><b>Not sure what to tick?</b><br><span class="mutes">Let the app look at your real files and recommend a plan, with the reasons. It changes nothing.</span></div><button id="gchk" class="p">Look at my files</button></div>
 <div class="opt"><input type="checkbox" id="gdry" checked><div>Preview only<small>On by default. Shows what would happen and changes nothing. Untick to do it for real.</small></div></div>
-<div class="opt"><input type="checkbox" id="gdedupe" checked><div>Merge same-named folders and remove exact duplicates<small>Every <i>Photos from 2012</i> across all your zips becomes one folder, and the same photo repeated in several albums is kept once.</small></div></div>
-<div class="opt"><input type="checkbox" id="glive" checked><div>Re-pair Live Photos<small>Reconnects each Live Photo&#39;s still and video so Apple Photos shows them together.</small></div></div>
-<div class="opt"><input type="checkbox" id="gnd" checked><div>Use the date in the file name when there is no .json<small>Fills in a missing date from names like <i>IMG_20190704_123456</i>. Never changes a date that is already there.</small></div></div>
-<div class="opt"><input type="checkbox" id="gtz" checked><div>Correct the time zone of dates<small>Google stores times in UTC, but Apple Photos reads a time with no zone as local time, so photos can show the wrong hour or even day. This writes the local time (using the place where the photo was taken, or your Mac&#39;s time zone if it has no location) together with its UTC offset. Videos keep UTC.</small></div></div>
-<div class="opt"><div style="flex:1"><label for="gsd" style="font-weight:600">Reconstruct missing dates from every clue</label><select id="gsd" class="sel"><option value="">Off</option><option value="high">Only when sure (high confidence)</option><option value="medium">When fairly sure (medium or better)</option><option value="low">Best guess (any confidence)</option></select><small>For a photo with no date inside, combines its file name, the photos numbered either side of it, its folder name and the file&#39;s modified time. Each result says why and how confident it is.</small></div></div>
-<div class="opt"><input type="checkbox" id="gnb"><div>&#9888;&#65039; Fill missing locations from photos taken minutes apart<small>A photo with no location takes the location of photos taken within minutes before or after it (when they are close together). Labelled with a keyword. Never replaces an existing location.</small></div></div>
-<div class="opt"><div style="flex:1"><label for="ggpx" style="font-weight:600">Fill missing locations from a GPX track (optional)</label><div class="row" style="margin-top:4px"><input type="text" id="ggpx" placeholder="Path to a .gpx file from a watch or app"><button id="ggpxb" class="sm" type="button">Choose...</button></div><small>Matches each photo&#39;s time to where the track says you were. Works best together with Correct the time zone.</small></div></div>
-<div class="opt"><input type="checkbox" id="gmo"><div>Save the video inside Google Motion Photos as its own file<small>Pixel &quot;Motion Photos&quot; (<i>.MP.jpg</i>, <i>MVIMG_</i>) have a short video attached to the end of the picture. This saves it next to the photo as a <i>.MP4</i> so it is not lost. The picture is not changed. Apple Photos cannot turn these into Live Photos (that needs an Apple ID inside the picture), so you get the still plus a video.</small></div></div>
-<div class="opt"><input type="checkbox" id="gpn" checked><div>Write place names (city, region, country) from the location<small>For every photo that has a location, writes the nearest town or city, its region and its country into the photo, using a built-in offline list of about 144,000 places (nothing is looked up online). Photos and other apps show their own names; Lightroom, digiKam, Synology and similar read these. Never replaces a city that is already there.</small></div></div>
-<div class="opt"><input type="checkbox" id="gfd" checked><div>Fill missing dates from the folder name<small>A photo with no date inside, in a folder called <i>2017</i>, <i>2026-06</i> or <i>June 2015</i>, gets that date. A date that already exists is never changed by this.</small></div></div>
-<div class="opt"><input type="checkbox" id="gfx"><div>&#9888;&#65039; Correct dates that disagree with the folder name, and dates in the future<small>A photo in the <i>2017</i> folder that says 2025, or says 2028, almost certainly lost its metadata. This sets it from the folder name. Only tick it if you trust your folder names.</small></div></div>
-<div class="opt"><input type="checkbox" id="ggps"><div>&#9888;&#65039; Guess a location from the folder name (Johannesburg, Japan...)<small>Where a photo has <b>no</b> location and its folder names a city or country, an approximate location is added and labelled as a guess. A location that already exists is never touched.</small></div></div>
-<div class="opt"><input type="checkbox" id="gnear"><div>&#9888;&#65039; Also skip near-identical pictures<small>When your libraries overlap, leave out the smaller version of the same picture and keep the larger one. Off by default: use Compare libraries on the Merge tab to see what it would skip. Folders only.</small></div></div>
+<div class="opt"><input type="checkbox" id="gdedupe" checked><div>Remove exact copies<small>Every <i>Photos from 2012</i> across all your zips becomes one folder, and the same photo repeated in several albums is kept once.</small></div></div>
+<div class="opt"><input type="checkbox" id="glive" checked><div>Keep Live Photos working<small>Reconnects each Live Photo&#39;s still and video so Apple Photos shows them together.</small></div></div>
+<div class="opt"><input type="checkbox" id="gnd" checked><div>Get missing dates from file names<small>Fills in a missing date from names like <i>IMG_20190704_123456</i>. Never changes a date that is already there.</small></div></div>
+<div class="opt"><input type="checkbox" id="gtz" checked><div>Fix time zones<small>Google stores times in UTC, but Apple Photos reads a time with no zone as local time, so photos can show the wrong hour or even day. This writes the local time (using the place where the photo was taken, or your Mac&#39;s time zone if it has no location) together with its UTC offset. Videos keep UTC.</small></div></div>
+<div class="opt"><div style="flex:1"><label for="gsd" style="font-weight:600">Work out other missing dates</label><select id="gsd" class="sel"><option value="">Off</option><option value="high">Only when sure (high confidence)</option><option value="medium">When fairly sure (medium or better)</option><option value="low">Best guess (any confidence)</option></select><small>For a photo with no date inside, combines its file name, the photos numbered either side of it, its folder name and the file&#39;s modified time. Each result says why and how confident it is.</small></div></div>
+<div class="opt"><input type="checkbox" id="gnb"><div>&#9888;&#65039; Fill missing places from nearby photos<small>A photo with no location takes the location of photos taken within minutes before or after it (when they are close together). Labelled with a keyword. Never replaces an existing location.</small></div></div>
+<div class="opt"><div style="flex:1"><label for="ggpx" style="font-weight:600">Add places from a GPS track file (optional)</label><div class="row" style="margin-top:4px"><input type="text" id="ggpx" placeholder="Path to a .gpx file from a watch or app"><button id="ggpxb" class="sm" type="button">Choose...</button></div><small>Matches each photo&#39;s time to where the track says you were. Works best together with Correct the time zone.</small></div></div>
+<div class="opt"><input type="checkbox" id="gmo"><div>Save motion-photo videos<small>Pixel &quot;Motion Photos&quot; (<i>.MP.jpg</i>, <i>MVIMG_</i>) have a short video attached to the end of the picture. This saves it next to the photo as a <i>.MP4</i> so it is not lost. The picture is not changed. Apple Photos cannot turn these into Live Photos (that needs an Apple ID inside the picture), so you get the still plus a video.</small></div></div>
+<div class="opt"><input type="checkbox" id="gpn" checked><div>Add place names (city, country)<small>For every photo that has a location, writes the nearest town or city, its region and its country into the photo, using a built-in offline list of about 144,000 places (nothing is looked up online). Photos and other apps show their own names; Lightroom, digiKam, Synology and similar read these. Never replaces a city that is already there.</small></div></div>
+<div class="opt"><input type="checkbox" id="gfd" checked><div>Get missing dates from folder names<small>A photo with no date inside, in a folder called <i>2017</i>, <i>2026-06</i> or <i>June 2015</i>, gets that date. A date that already exists is never changed by this.</small></div></div>
+<div class="opt"><input type="checkbox" id="gfx"><div>&#9888;&#65039; Fix dates that look wrong<small>A photo in the <i>2017</i> folder that says 2025, or says 2028, almost certainly lost its metadata. This sets it from the folder name. Only tick it if you trust your folder names.</small></div></div>
+<div class="opt"><input type="checkbox" id="ggps"><div>&#9888;&#65039; Guess places from folder names<small>Where a photo has <b>no</b> location and its folder names a city or country, an approximate location is added and labelled as a guess. A location that already exists is never touched.</small></div></div>
+<div class="opt"><input type="checkbox" id="gnear"><div>&#9888;&#65039; Skip look-alike pictures too<small>When your libraries overlap, leave out the smaller version of the same picture and keep the larger one. Off by default: use Compare libraries on the Merge tab to see what it would skip. Folders only.</small></div></div>
 <div class="dpbox"></div>
-<div class="opt"><input type="checkbox" id="galb" checked><div>Keep album names as keywords<small>When a photo that lived in an album is skipped as a duplicate, the album name is saved as a keyword on the kept copy so you do not lose your albums. A list of albums is saved with the reports.</small></div></div>
-<div class="opt"><div style="flex:1"><label for="gedit" style="font-weight:600">Google-edited copies (IMG_1-edited.jpg)</label><select id="gedit" class="sel"><option value="both" selected>Keep both</option><option value="edited">Keep only the edited version</option><option value="original">Keep only the original</option></select></div></div>
-<div class="opt"><input type="checkbox" id="gow" checked><div>&#9888;&#65039; Replace location and caption already stored in the photo<small>Google&#39;s values win for location and caption. Dates keep the earlier of the two. Change this in the Fix tab if you want other rules.</small></div></div>
-<div class="opt"><input type="checkbox" id="gext" checked><div>&#9888;&#65039; Repair files with a missing file type<small>Some Takeout photos have no .jpg or .heic ending. Inside zip files they are repaired in the copy automatically. For folders you already unzipped, this renames those files in the source folders.</small></div></div>
-<div class="opt"><input type="checkbox" id="gcv"><div>&#9888;&#65039; Also convert old videos (.avi, .mpg, .wmv...) to MP4 afterwards<small>Runs after the library is built, on the Destination. The old videos are moved into an <i>_original_videos</i> folder, not deleted. Not part of a preview.</small></div></div>
+<div class="opt"><input type="checkbox" id="galb" checked><div>Remember album names<small>When a photo that lived in an album is skipped as a duplicate, the album name is saved as a keyword on the kept copy so you do not lose your albums. A list of albums is saved with the reports.</small></div></div>
+<div class="opt"><div style="flex:1"><label for="gedit" style="font-weight:600">Edited copies from Google</label><select id="gedit" class="sel"><option value="both" selected>Keep both</option><option value="edited">Keep only the edited version</option><option value="original">Keep only the original</option></select></div></div>
+<div class="opt"><input type="checkbox" id="gow" checked><div>&#9888;&#65039; Overwrite places and captions already there<small>Google&#39;s values win for location and caption. Dates keep the earlier of the two. Change this in the Fix tab if you want other rules.</small></div></div>
+<div class="opt"><input type="checkbox" id="gext" checked><div>&#9888;&#65039; Fix files with no ending (.jpg)<small>Some Takeout photos have no .jpg or .heic ending. Inside zip files they are repaired in the copy automatically. For folders you already unzipped, this renames those files in the source folders.</small></div></div>
+<div class="opt"><input type="checkbox" id="gcv"><div>&#9888;&#65039; Convert old videos so they play everywhere<small>Runs after the library is built, on the Destination. The old videos are moved into an <i>_original_videos</i> folder, not deleted. Not part of a preview.</small></div></div>
 <button class="p" id="gst" style="margin-top:10px">Fix my Takeout</button></div>
 </section>
 <section class="pane" id="pane-fix">
-<h2 class="ph" data-tip="Reads the .json file Google added to each photo and writes the real date taken, location, caption and tagged people back into the photo. The picture itself is never changed.">Fix dates, locations and captions</h2>
+<h2 class="ph" data-tip="Reads the .json file Google added to each photo and writes the real date taken, location, caption and tagged people back into the photo. The picture itself is never changed.">Fix dates and places</h2>
 <div class="profline"></div>
 <div class="card usefcard"><b>1. Takeout folders</b><div class="usef" style="margin:8px 0 0"><span class="fnote"></span>. Add every Takeout batch: a photo in one batch finds its JSON in another.</div></div>
 
@@ -4278,27 +4384,27 @@ body[data-tab=history] .route,body[data-tab=help] .route{display:none}
 
 <div class="card"><label class="t">3. Options</label>
 <div class="opt"><input type="checkbox" id="dry" checked><div>Preview only<small>On by default. Works out what it would do and reports the numbers, but changes nothing. Untick to do it for real.</small></div></div>
-<div class="opt"><input type="checkbox" id="dedupe" checked><div>Remove exact duplicates<small>Skips byte-identical copies (the same photo repeated across Takeouts or albums). Keeps the copy in 'Photos from YYYY'. Needs an extra read pass over files that share a size.</small></div></div>
-<div class="opt"><input type="checkbox" id="move"><div>&#9888;&#65039; Move files instead of copying <span class="warn">(empties the source folders)</span><small>Saves disk space but empties your Takeout folders as it goes. Off = safe copy (needs roughly as much free space again).</small></div></div>
-<div class="opt"><input type="checkbox" id="live" checked><div>Re-pair Live Photos<small>Copies each still's Apple ID onto its video and saves the video as .MOV so Photos can treat them as one Live Photo. Works in place too: the video is renamed to .MOV beside its photo.</small></div></div>
-<div class="opt"><div style="flex:1"><label for="datepol" style="font-weight:600">When a photo already has a date and Google&#39;s is different</label>
+<div class="opt"><input type="checkbox" id="dedupe" checked><div>Remove exact copies<small>Skips byte-identical copies (the same photo repeated across Takeouts or albums). Keeps the copy in 'Photos from YYYY'. Needs an extra read pass over files that share a size.</small></div></div>
+<div class="opt"><input type="checkbox" id="move"><div>&#9888;&#65039; Move instead of copy <span class="warn">(empties the source folders)</span><small>Saves disk space but empties your Takeout folders as it goes. Off = safe copy (needs roughly as much free space again).</small></div></div>
+<div class="opt"><input type="checkbox" id="live" checked><div>Keep Live Photos working<small>Copies each still's Apple ID onto its video and saves the video as .MOV so Photos can treat them as one Live Photo. Works in place too: the video is renamed to .MOV beside its photo.</small></div></div>
+<div class="opt"><div style="flex:1"><label for="datepol" style="font-weight:600">If the dates disagree</label>
 <select id="datepol" class="sel"><option value="earlier" selected>Keep the earlier date (recommended)</option><option value="photo">Keep the photo&#39;s own date</option><option value="google">Use Google&#39;s date</option></select>
 <small>Google sometimes records the day a photo was uploaded or re-saved instead of the day it was taken, and that day is always later. Keeping the earlier of the two is usually right. A photo with no date at all always gets Google&#39;s.</small></div></div>
-<div class="opt"><input type="checkbox" id="ow" checked><div>&#9888;&#65039; Replace location and caption already stored in the photo<small>Every photo has hidden facts saved inside the file itself (called EXIF). <b>Off</b>: only fill in a location or caption that is missing. <b>On</b>: replace a different one with Google&#39;s version. Your pictures themselves are never altered.</small></div></div></div>
-<div class="opt"><input type="checkbox" id="ndates" checked><div>Use the date in the file name when there is no .json<small>For photos with no Google info file and no date of their own, reads a date from names like <i>IMG_20190704_123456</i>, <i>PXL_20210512_...</i> or <i>Screenshot 2019-07-04 at 12.34.56</i>. It only fills in a missing date and never changes one that is already there.</small></div></div>
-<div class="opt"><input type="checkbox" id="ftz" checked><div>Correct the time zone of dates<small>Writes local time plus its UTC offset instead of raw UTC, using the photo&#39;s location (or this Mac&#39;s time zone when it has none), so Apple Photos shows the right hour. Videos keep UTC.</small></div></div>
-<div class="opt"><div style="flex:1"><label for="fsd" style="font-weight:600">Reconstruct missing dates from every clue</label><select id="fsd" class="sel"><option value="">Off</option><option value="high">Only when sure (high confidence)</option><option value="medium">When fairly sure (medium or better)</option><option value="low">Best guess (any confidence)</option></select><small>For a photo with no date inside, combines its file name, the photos numbered either side of it, its folder name and the file&#39;s modified time. Each result says why and how confident it is.</small></div></div>
-<div class="opt"><input type="checkbox" id="fnb"><div>&#9888;&#65039; Fill missing locations from photos taken minutes apart<small>A photo with no location takes the location of photos taken within minutes before or after it (when they are close together). Labelled with a keyword. Never replaces an existing location.</small></div></div>
-<div class="opt"><div style="flex:1"><label for="fgpx" style="font-weight:600">Fill missing locations from a GPX track (optional)</label><div class="row" style="margin-top:4px"><input type="text" id="fgpx" placeholder="Path to a .gpx file from a watch or app"><button id="fgpxb" class="sm" type="button">Choose...</button></div><small>Matches each photo&#39;s time to where the track says you were. Works best together with Correct the time zone.</small></div></div>
-<div class="opt"><input type="checkbox" id="fmo"><div>Save the video inside Google Motion Photos as its own file<small>Pixel &quot;Motion Photos&quot; (<i>.MP.jpg</i>, <i>MVIMG_</i>) have a short video attached to the end of the picture. This saves it next to the photo as a <i>.MP4</i> so it is not lost. The picture is not changed. Apple Photos cannot turn these into Live Photos (that needs an Apple ID inside the picture), so you get the still plus a video.</small></div></div>
-<div class="opt"><input type="checkbox" id="fpn" checked><div>Write place names (city, region, country) from the location<small>For every photo that has a location, writes the nearest town or city, its region and its country into the photo, using a built-in offline list of about 144,000 places (nothing is looked up online). Photos and other apps show their own names; Lightroom, digiKam, Synology and similar read these. Never replaces a city that is already there.</small></div></div>
-<div class="opt"><input type="checkbox" id="fdates" checked><div>Fill missing dates from the folder name<small>No date inside the photo, and the folder is called <i>2017</i>, <i>2026-06</i>, <i>June 2015</i> or <i>Photos from 2019</i>: use that. Existing dates are not changed by this.</small></div></div>
-<div class="opt"><input type="checkbox" id="fdfix"><div>&#9888;&#65039; Correct dates that disagree with the folder name, and dates in the future<small>Sets the date from the folder name when the photo says a different year (a sign it lost its metadata) or a date that has not happened yet. Preview first.</small></div></div>
-<div class="opt"><input type="checkbox" id="fgps"><div>&#9888;&#65039; Guess a location from the folder name<small>Only for photos with no location, in a folder that names a city or country. The location is the middle of that place, and each photo is labelled with a keyword so you can find them. Preview first.</small></div></div>
-<div class="opt"><input type="checkbox" id="near"><div>&#9888;&#65039; Also skip near-identical pictures<small>The same picture saved at a smaller size or re-saved is not an exact copy, so it is normally kept. Tick this to leave out the smaller version when libraries overlap (folders only, not zip files). Check the Compare results first.</small></div></div>
+<div class="opt"><input type="checkbox" id="ow" checked><div>&#9888;&#65039; Overwrite places and captions already there<small>Every photo has hidden facts saved inside the file itself (called EXIF). <b>Off</b>: only fill in a location or caption that is missing. <b>On</b>: replace a different one with Google&#39;s version. Your pictures themselves are never altered.</small></div></div></div>
+<div class="opt"><input type="checkbox" id="ndates" checked><div>Get missing dates from file names<small>For photos with no Google info file and no date of their own, reads a date from names like <i>IMG_20190704_123456</i>, <i>PXL_20210512_...</i> or <i>Screenshot 2019-07-04 at 12.34.56</i>. It only fills in a missing date and never changes one that is already there.</small></div></div>
+<div class="opt"><input type="checkbox" id="ftz" checked><div>Fix time zones<small>Writes local time plus its UTC offset instead of raw UTC, using the photo&#39;s location (or this Mac&#39;s time zone when it has none), so Apple Photos shows the right hour. Videos keep UTC.</small></div></div>
+<div class="opt"><div style="flex:1"><label for="fsd" style="font-weight:600">Work out other missing dates</label><select id="fsd" class="sel"><option value="">Off</option><option value="high">Only when sure (high confidence)</option><option value="medium">When fairly sure (medium or better)</option><option value="low">Best guess (any confidence)</option></select><small>For a photo with no date inside, combines its file name, the photos numbered either side of it, its folder name and the file&#39;s modified time. Each result says why and how confident it is.</small></div></div>
+<div class="opt"><input type="checkbox" id="fnb"><div>&#9888;&#65039; Fill missing places from nearby photos<small>A photo with no location takes the location of photos taken within minutes before or after it (when they are close together). Labelled with a keyword. Never replaces an existing location.</small></div></div>
+<div class="opt"><div style="flex:1"><label for="fgpx" style="font-weight:600">Add places from a GPS track file (optional)</label><div class="row" style="margin-top:4px"><input type="text" id="fgpx" placeholder="Path to a .gpx file from a watch or app"><button id="fgpxb" class="sm" type="button">Choose...</button></div><small>Matches each photo&#39;s time to where the track says you were. Works best together with Correct the time zone.</small></div></div>
+<div class="opt"><input type="checkbox" id="fmo"><div>Save motion-photo videos<small>Pixel &quot;Motion Photos&quot; (<i>.MP.jpg</i>, <i>MVIMG_</i>) have a short video attached to the end of the picture. This saves it next to the photo as a <i>.MP4</i> so it is not lost. The picture is not changed. Apple Photos cannot turn these into Live Photos (that needs an Apple ID inside the picture), so you get the still plus a video.</small></div></div>
+<div class="opt"><input type="checkbox" id="fpn" checked><div>Add place names (city, country)<small>For every photo that has a location, writes the nearest town or city, its region and its country into the photo, using a built-in offline list of about 144,000 places (nothing is looked up online). Photos and other apps show their own names; Lightroom, digiKam, Synology and similar read these. Never replaces a city that is already there.</small></div></div>
+<div class="opt"><input type="checkbox" id="fdates" checked><div>Get missing dates from folder names<small>No date inside the photo, and the folder is called <i>2017</i>, <i>2026-06</i>, <i>June 2015</i> or <i>Photos from 2019</i>: use that. Existing dates are not changed by this.</small></div></div>
+<div class="opt"><input type="checkbox" id="fdfix"><div>&#9888;&#65039; Fix dates that look wrong<small>Sets the date from the folder name when the photo says a different year (a sign it lost its metadata) or a date that has not happened yet. Preview first.</small></div></div>
+<div class="opt"><input type="checkbox" id="fgps"><div>&#9888;&#65039; Guess places from folder names<small>Only for photos with no location, in a folder that names a city or country. The location is the middle of that place, and each photo is labelled with a keyword so you can find them. Preview first.</small></div></div>
+<div class="opt"><input type="checkbox" id="near"><div>&#9888;&#65039; Skip look-alike pictures too<small>The same picture saved at a smaller size or re-saved is not an exact copy, so it is normally kept. Tick this to leave out the smaller version when libraries overlap (folders only, not zip files). Check the Compare results first.</small></div></div>
 <div class="dpbox"></div>
-<div class="opt"><input type="checkbox" id="albums" checked><div>Keep album names when duplicates are removed<small>Google saves a photo once in its year folder and again in every album. When the album copies are skipped as duplicates, the album names are saved as keywords on the kept photo (Apple Photos and Lightroom show keywords), and a list of albums is saved with the reports.</small></div></div>
-<div class="opt"><div style="flex:1"><label for="edited" style="font-weight:600">When Google saved an edited copy (IMG_1-edited.jpg) next to the original</label><select id="edited" class="sel"><option value="both" selected>Keep both</option><option value="edited">Keep only the edited version</option><option value="original">Keep only the original</option></select><small>The ones left out stay in your Takeout; they are just not copied into the new library.</small></div></div>
+<div class="opt"><input type="checkbox" id="albums" checked><div>Remember album names<small>Google saves a photo once in its year folder and again in every album. When the album copies are skipped as duplicates, the album names are saved as keywords on the kept photo (Apple Photos and Lightroom show keywords), and a list of albums is saved with the reports.</small></div></div>
+<div class="opt"><div style="flex:1"><label for="edited" style="font-weight:600">Edited copies from Google</label><select id="edited" class="sel"><option value="both" selected>Keep both</option><option value="edited">Keep only the edited version</option><option value="original">Keep only the original</option></select><small>The ones left out stay in your Takeout; they are just not copied into the new library.</small></div></div>
 
 <button class="p" id="go">Start</button>
 
@@ -4315,22 +4421,22 @@ body[data-tab=history] .route,body[data-tab=help] .route{display:none}
 </div>
 </section>
 <section class="pane" id="pane-merge">
-<h2 class="ph">Merge folders</h2>
+<h2 class="ph">Combine folders</h2>
 <div class="card"><small style="margin-top:0">Brings two or more folders together into one. Folders with the same name at any depth are merged, their files are combined, identical files are kept once, and different files with the same name are handled the way you choose below. Works on any folders, including Google Takeout exports, and gives you control over name clashes.</small>
 <div class="usef" style="margin-top:10px"><b>Folders to merge (the Source list):</b> <span class="fnote"></span></div>
 <div class="usef"><b>Merge into (the Destination):</b> <span class="dnote" data-empty="none chosen: with Move ticked, everything is merged into the first source folder"></span></div>
 <div class="opt"><input type="checkbox" id="mgdry" checked><div>Preview only<small>On by default. Shows which folders would merge, how many files, identical copies and name clashes, and changes nothing.</small></div></div>
 <div class="opt"><input type="checkbox" id="mgmove"><div>&#9888;&#65039; Move instead of copy <span class="warn">(empties the source folders)</span><small>Takes the files out of the source folders and empties them (needs no extra space). With no destination chosen, everything is merged into the <b>first</b> source folder. Off = copy into the Destination, leaving your sources untouched (needs about as much free space again).</small></div></div>
-<div class="opt"><div style="flex:1"><label for="mgconf" style="font-weight:600">When two different files have the same name in the same folder</label>
+<div class="opt"><div style="flex:1"><label for="mgconf" style="font-weight:600">Two different files, same name</label>
 <select id="mgconf" class="sel"><option value="both" selected>Keep both (the second is named name_1)</option><option value="newer">The newer file keeps the name</option><option value="larger">The larger file keeps the name</option><option value="first">The file from the first source folder keeps the name</option></select>
 <small>With the last three, the other file is not deleted: it is set aside in a <i>_merge_conflicts</i> folder inside the destination so you can review it.</small></div></div>
-<div class="opt"><div style="flex:1"><label for="mgdup" style="font-weight:600">&#9888;&#65039; Identical files (same content)</label>
+<div class="opt"><div style="flex:1"><label for="mgdup" style="font-weight:600">&#9888;&#65039; Exact copies</label>
 <select id="mgdup" class="sel"><option value="delete" selected>Keep one copy; when moving, delete the extra copy (permanent)</option><option value="aside">Keep one copy; when moving, move the extra to a _duplicates folder</option></select>
 <small>Files are compared by their content, not just their names. When copying, identical files are simply not copied twice.</small></div></div>
 <div class="opt"><input type="checkbox" id="mgtidy" checked><div>Treat <i>Folder (1)</i>, <i>Folder copy</i> and extra spaces as the same folder as <i>Folder</i><small>Real names such as <i>Summer (2019)</i> are not changed. Applies to folder names only.</small></div></div>
-<div class="opt"><input type="checkbox" id="mgcase" checked><div>Ignore upper and lower case in folder names<small>So <i>photos</i> and <i>Photos</i> become one folder (the first spelling found is used).</small></div></div>
-<div class="opt"><input type="checkbox" id="mgtk"><div>These are Google Takeout folders<small>Ignores the <i>Takeout N / Google Photos</i> wrappers so every <i>Photos from 2012</i> becomes one folder, and brings each photo&#39;s .json info file along with it (named after the placed photo), so Part 1 still works afterwards.</small></div></div>
-<div class="opt"><input type="checkbox" id="mgdd"><div>Find identical photos anywhere, not just in the same folder<small>Compares file contents across all folders, so the same photo repeated in several albums or Takeouts is kept once. Slower on big libraries.</small></div></div>
+<div class="opt"><input type="checkbox" id="mgcase" checked><div>Treat Trip and trip as the same folder<small>So <i>photos</i> and <i>Photos</i> become one folder (the first spelling found is used).</small></div></div>
+<div class="opt"><input type="checkbox" id="mgtk"><div>These came from a Google download<small>Ignores the <i>Takeout N / Google Photos</i> wrappers so every <i>Photos from 2012</i> becomes one folder, and brings each photo&#39;s .json info file along with it (named after the placed photo), so Part 1 still works afterwards.</small></div></div>
+<div class="opt"><input type="checkbox" id="mgdd"><div>Find exact copies anywhere<small>Compares file contents across all folders, so the same photo repeated in several albums or Takeouts is kept once. Slower on big libraries.</small></div></div>
 <small>Not touched: shortcuts. App and library bundles (such as <i>.photoslibrary</i>) are moved as a single item. Invisible system files (.DS_Store and the like) are left out.</small>
 <button class="p" id="mgo" style="margin-top:10px">Start</button></div>
 
@@ -4342,19 +4448,19 @@ body[data-tab=history] .route,body[data-tab=help] .route{display:none}
 </div>
 </section>
 <section class="pane" id="pane-clean">
-<h2 class="ph">Clean up</h2>
+<h2 class="ph">Tidy up</h2>
 <div class="card"><small style="margin-top:0">Tick what you want tidied. The steps run in the order shown, so removing files first lets the last step catch the folders they leave empty. <b>Preview first</b>: it lists what would happen and changes nothing.</small>
 <div class="usef" style="margin-top:10px"><b>Folders to clean:</b> <span class="fnote"></span></div>
 <div class="opt"><input type="checkbox" id="cdry" checked><div>Preview only<small>On by default. Lists what would be deleted, renamed, merged or removed, and changes nothing.</small></div></div>
 
-<div class="opt"><input type="checkbox" id="cx" checked><div><b>1. Fix files with no extension</b><small>Some photos and videos come out of Google Takeout with a name like <i>IMG_2438</i> and no <i>.jpg</i> or <i>.heic</i>, so Finder calls them "Document" and the Fix tab skips them. This reads the real type from inside each file and adds the right extension. Files that cannot be recognised (empty or damaged) are listed but not changed. Do this <b>before</b> Fix metadata.</small>
+<div class="opt"><input type="checkbox" id="cx" checked><div><b>1. Fix files with no ending</b><small>Some photos and videos come out of Google Takeout with a name like <i>IMG_2438</i> and no <i>.jpg</i> or <i>.heic</i>, so Finder calls them "Document" and the Fix tab skips them. This reads the real type from inside each file and adds the right extension. Files that cannot be recognised (empty or damaged) are listed but not changed. Do this <b>before</b> Fix metadata.</small>
 <label class="sub" data-tip="So the Fix tab can still match each photo to its Google info file."><input type="checkbox" id="cxj" checked> Also rename each file's Google .json to match</label>
 <label class="sub" data-tip="Files that are empty or damaged are moved into an <i>_unrecognised</i> folder inside each folder you chose, so you can review or delete them. Otherwise they are only listed."><input type="checkbox" id="cxu"> Move unrecognised files into an <i>_unrecognised</i> folder</label></div></div>
 
-<div class="opt"><input type="checkbox" id="cj"><div>&#9888;&#65039; <b>2. Remove Google .json files</b><small>The small info files Google adds to each photo. They hold the only copy of the original date and location, so do this <b>after</b> you have fixed your photos. Off by default.</small>
+<div class="opt"><input type="checkbox" id="cj"><div>&#9888;&#65039; <b>2. Delete Google's extra info files</b><small>The small info files Google adds to each photo. They hold the only copy of the original date and location, so do this <b>after</b> you have fixed your photos. Off by default.</small>
 <label class="sub" data-tip="Off: only Google's photo info files and album/memory data files are removed. On: every .json file in the folders."><input type="checkbox" id="cother"> &#9888;&#65039; Also remove other .json files</label></div></div>
 
-<div class="opt"><input type="checkbox" id="cjunk" checked><div>&#9888;&#65039; <b>3. Remove junk and cache files</b><small>Files nothing needs. Choose which kinds:</small>
+<div class="opt"><input type="checkbox" id="cjunk" checked><div>&#9888;&#65039; <b>3. Delete junk files</b><small>Files nothing needs. Choose which kinds:</small>
 <label class="sub" data-tip="Invisible files Finder and Windows leave behind: .DS_Store, Thumbs.db, desktop.ini and ._ files."><input type="checkbox" id="cjs" checked> System leftovers</label>
 <label class="sub" data-tip="Thumbnail caches from iPod/iTunes photo syncing, such as T103.ithmb inside an <i>iPod Photo Cache</i> folder."><input type="checkbox" id="cji" checked> iPod/iTunes thumbnail caches (.ithmb)</label>
 <label class="sub"><input type="checkbox" id="cjp" checked> Picasa.ini files</label>
@@ -4369,7 +4475,7 @@ body[data-tab=history] .route,body[data-tab=help] .route{display:none}
 <label class="sub" data-tip="A file is only renamed when the clean name is free, and its .json is renamed with it. Best done after you have fixed your photos, because Fix matches photos to JSON by name."><input type="checkbox" id="cnf"> &#9888;&#65039; Also tidy file names</label>
 <label class="sub" data-tip="Used when a renamed folder is merged into one that already exists and both hold the same file.">Identical copies found while merging: <select id="cnd" class="sel"><option value="delete" selected>delete the extra copy</option><option value="aside">move it to a _duplicates folder</option></select></label></div></div>
 
-<div class="opt"><input type="checkbox" id="ce" checked><div>&#9888;&#65039; <b>5. Remove empty folders</b><small>Removes every folder with no files in it at any depth, only after the steps above. Only folders are removed. Shortcuts, app/library bundles (such as .photoslibrary) and unreadable folders are never entered.</small>
+<div class="opt"><input type="checkbox" id="ce" checked><div>&#9888;&#65039; <b>5. Delete empty folders</b><small>Removes every folder with no files in it at any depth, only after the steps above. Only folders are removed. Shortcuts, app/library bundles (such as .photoslibrary) and unreadable folders are never entered.</small>
 <label class="sub" data-tip="So a folder containing only .DS_Store or Thumbs.db files is still removed."><input type="checkbox" id="cejunk" checked> Folders holding only system leftovers count as empty</label>
 <label class="sub" data-tip="Off by default: the folders you add at the top are always kept, even if everything inside them is removed."><input type="checkbox" id="cetop"> &#9888;&#65039; Also remove my chosen folders if they end up empty</label></div></div>
 
@@ -4377,32 +4483,32 @@ body[data-tab=history] .route,body[data-tab=help] .route{display:none}
 <div class="card" id="simcard">
 <b>Smart folder consolidation</b>
 <small style="margin-top:4px">Finds folders that look like the same thing under different names, such as <i>Japan 2025</i>, <i>delete-Japan 2025</i> and <i>Japan 2025-old</i>, and merges them into one. You review every group before anything happens.</small>
-<div class="opt"><input type="checkbox" id="simmaybe" checked><div>Also look for likely spelling differences<small>For example <i>Italy 2024</i> and <i>Itly 2024</i>. These are shown as &ldquo;Check this&rdquo; and are not ticked for you.</small></div></div>
+<div class="opt"><input type="checkbox" id="simmaybe" checked><div>Also catch near-matching names<small>For example <i>Italy 2024</i> and <i>Itly 2024</i>. These are shown as &ldquo;Check this&rdquo; and are not ticked for you.</small></div></div>
 <button id="simfind">Find similar folders</button>
 <div id="simout"></div>
 </div>
 
 </section>
 <section class="pane" id="pane-convert">
-<h2 class="ph">Convert old videos to MP4</h2>
+<h2 class="ph">Make old videos play everywhere</h2>
 <div class="card"><small style="margin-top:0">Turns older video formats (<b>.avi</b>, <b>.mov</b>, <b>.mpg</b>, <b>.wmv</b>, <b>.3gp</b> and more) into <b>.mp4</b>, which plays on every phone, TV and app. Videos that are already H.264 or HEVC are simply re-wrapped (fast, no quality loss); others are re-encoded. Dates and locations are carried across. Needs <b>ffmpeg</b> (in Terminal: <code>brew install ffmpeg</code>).</small>
 <div class="usef" style="margin-top:12px"><b>Folders to scan:</b> <span class="fnote"></span></div>
 <div class="opt"><input type="checkbox" id="vdry" checked><div>Preview only<small>On by default. Counts what would be converted (and how), changes nothing.</small></div></div>
-<div class="opt"><input type="checkbox" id="vest" checked><div>Estimate the new sizes in the preview<small>Test-encodes a few short samples (about 8 seconds each, up to 3 per video type) with your quality setting, and uses the result to predict the size after conversion. Adds a minute or two to a preview of videos that need re-encoding.</small></div></div>
+<div class="opt"><input type="checkbox" id="vest" checked><div>Guess the new file sizes<small>Test-encodes a few short samples (about 8 seconds each, up to 3 per video type) with your quality setting, and uses the result to predict the size after conversion. Adds a minute or two to a preview of videos that need re-encoding.</small></div></div>
 <div class="opt"><div style="flex:1"><b>Video types to convert</b> <button id="vscan" class="sm" style="margin-left:8px">Scan folders for counts</button>
 <div id="vtypes" class="vtypes"></div>
 <div id="vscansum" class="tip" style="display:none;margin-top:8px"></div>
 <small>Tick the formats you want, each one separately. Scan to see how many videos of each type there are and how many .mov files are Live Photo videos. Types you leave unticked are not touched.</small></div></div>
 <div class="opt"><input type="checkbox" id="vlive"><div>Also convert Live Photo videos<small>Off by default. An iPhone Live Photo is a still picture plus a short .MOV video that Apple Photos links together. If a .MOV sits next to a photo with the same name, it is treated as a Live Photo video and left alone, because converting it to .mp4 would break the link. Your ordinary .mov and .avi videos are converted as normal.</small></div></div>
-<div class="opt"><div style="flex:1"><label for="vq" style="font-weight:600">Quality when re-encoding</label>
+<div class="opt"><div style="flex:1"><label for="vq" style="font-weight:600">Video quality</label>
 <select id="vq" class="sel"><option value="veryhigh">Very high (largest files)</option><option value="high" selected>High (recommended)</option><option value="small">Smaller files</option></select></div></div>
-<div class="opt"><div style="flex:1"><label for="vact" style="font-weight:600">&#9888;&#65039; What happens to the original video</label>
+<div class="opt"><div style="flex:1"><label for="vact" style="font-weight:600">&#9888;&#65039; What to do with the old video</label>
 <select id="vact" class="sel"><option value="move" selected>Move to an _original_videos folder (safe)</option><option value="keep">Keep it where it is, next to the new .mp4</option><option value="delete">&#9888;&#65039; Delete it once the new .mp4 is verified (permanent)</option></select>
 <small>Originals are only moved or deleted after the new file has been checked (it must play and match the original&#39;s length).</small></div></div>
 <button class="p" id="vgo" style="margin-top:6px">Start converting</button></div>
 </section>
 <section class="pane" id="pane-history">
-<h2 class="ph">History and reports</h2>
+<h2 class="ph">Past runs</h2>
 <div class="card"><small style="margin-top:0">Every run is saved here with a full report and a plain-text log, so you can see exactly what happened, even weeks later.</small>
 <div class="usef" style="margin:10px 0 0">Reports are kept in: <b id="repdir">Documents/Shoebox Reports</b></div>
 <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><button id="hfolder">Open reports folder</button><button id="hdiag" data-tip="Copies your version, system, tool versions and the end of the latest log, so you can paste it when asking for help. Check it for private paths first.">Copy diagnostic info</button></div></div>
@@ -4414,7 +4520,7 @@ body[data-tab=history] .route,body[data-tab=help] .route{display:none}
 <div class="card" id="hview"></div>
 </section>
 <section class="pane" id="pane-similar">
-<h2 class="ph">Similar photos</h2>
+<h2 class="ph">Find look-alike photos</h2>
 <div class="card"><small style="margin-top:0">Finds pictures that look the same but are not identical files: the same photo saved at a smaller size, re-saved, or lightly edited. You review each group and choose what to set aside. Nothing is deleted: the photos you pick are moved into a <i>_similar_set_aside</i> folder, and you can undo it from History.</small>
 <div class="usef" style="margin-top:10px"><b>Folders to check:</b> <span class="fnote"></span></div>
 <div class="opt"><div style="flex:1"><label for="simsens" style="font-weight:600">How alike must they be?</label>
@@ -4423,47 +4529,47 @@ body[data-tab=history] .route,body[data-tab=help] .route{display:none}
 <button class="p" id="simscan" style="margin-top:6px">Find similar photos</button></div>
 </section>
 <section class="pane" id="pane-photos">
-<h2 class="ph">Send to Apple Photos</h2>
+<h2 class="ph">Move to Apple Photos</h2>
 <div class="card"><small style="margin-top:0">Sends your finished library to the Photos app in batches, oldest first, so a Mac that is short of space can take a big library over time: Photos uploads each batch to iCloud, macOS frees the space, and Shoebox waits before sending the next one. Live Photos stay together, and album folders become Photos albums.</small>
 <div class="gcheck" id="pcheck"></div>
 <div class="usef" style="margin-top:6px"><b>Library to send:</b> <span id="proot">the first folder in the Source list</span></div>
-<div class="opt"><div style="flex:1"><label for="pbatch" style="font-weight:600">Batch size</label><select id="pbatch" class="sel"><option value="2">About 2 GB</option><option value="5">About 5 GB</option><option value="10" selected>About 10 GB</option><option value="25">About 25 GB</option><option value="50">About 50 GB</option></select></div></div>
-<div class="opt"><div style="flex:1"><label for="ppace" style="font-weight:600">Between batches</label><select id="ppace" class="sel"><option value="verify" selected>Wait until Photos shows each batch as uploaded to iCloud (recommended)</option><option value="space">Wait until my Mac has enough free space</option><option value="ask">Pause and let me press Continue</option><option value="none">Do not wait</option></select>
+<div class="opt"><div style="flex:1"><label for="pbatch" style="font-weight:600">How many at a time</label><select id="pbatch" class="sel"><option value="2">About 2 GB</option><option value="5">About 5 GB</option><option value="10" selected>About 10 GB</option><option value="25">About 25 GB</option><option value="50">About 50 GB</option></select></div></div>
+<div class="opt"><div style="flex:1"><label for="ppace" style="font-weight:600">Wait between rounds</label><select id="ppace" class="sel"><option value="verify" selected>Wait until Photos shows each batch as uploaded to iCloud (recommended)</option><option value="space">Wait until my Mac has enough free space</option><option value="ask">Pause and let me press Continue</option><option value="none">Do not wait</option></select>
 <div style="margin-top:6px">Keep at least <input type="number" id="pfree" value="20" min="0" max="2000" style="width:80px;flex:none"> GB free</div></div></div>
-<div class="opt"><input type="checkbox" id="padapt" checked><div>Adapt the batch size<small>Sends bigger batches when iCloud keeps up easily and smaller ones when a batch takes hours to upload. Only with upload verification.</small></div></div>
-<div class="opt"><input type="checkbox" id="palb" checked><div>Create albums from album folders<small>Folders such as <i>Japan 2025</i> (not <i>Photos from 2012</i>) become albums in Photos.</small></div></div>
+<div class="opt"><input type="checkbox" id="padapt" checked><div>Adjust the speed by itself<small>Sends bigger batches when iCloud keeps up easily and smaller ones when a batch takes hours to upload. Only with upload verification.</small></div></div>
+<div class="opt"><input type="checkbox" id="palb" checked><div>Make albums from folders<small>Folders such as <i>Japan 2025</i> (not <i>Photos from 2012</i>) become albums in Photos.</small></div></div>
 <div class="opt"><input type="checkbox" id="pdry" checked><div>Preview only<small>Shows the batches and changes nothing. Untick to send to Photos.</small></div></div>
 <div class="tip">&#9888;&#65039; Photos has no undo for imports. Always preview, then send a small test first. Photos skips photos it already has, so running again does not duplicate them.</div>
 <div class="hbtns"><button class="p" id="pgo">Preview the batches</button><button id="ptest">Send a small test (20 photos)</button></div></div>
 </section>
 <section class="pane" id="pane-health">
-<h2 class="ph">Library health</h2>
+<h2 class="ph">Is my library healthy?</h2>
 <div class="card"><small style="margin-top:0">A health check for a finished library: wasted space, the same file saved in several formats, folder problems, empty and ghost files, files that are only in iCloud, and useful statistics. It only reads, and it keeps a history so you can see whether your library is getting healthier or messier.</small>
 <div class="usef" style="margin-top:10px"><b>Library to check:</b> <span class="fnote"></span></div>
-<div class="opt"><input type="checkbox" id="hdeep"><div>Deep check<small>Reads the metadata of up to 40,000 files (instead of a sample of about 400) to find wrong extensions, missing dates and photos in the wrong year folder. Slower.</small></div></div>
-<div class="opt"><div style="flex:1"><label for="hauto" style="font-weight:600">Check again automatically</label><select id="hauto" class="sel"><option value="0">Off</option><option value="1">Every hour</option><option value="6">Every 6 hours</option><option value="24">Every day</option></select><small>Only while Shoebox is open. A new check is skipped while another job is running.</small></div></div>
+<div class="opt"><input type="checkbox" id="hdeep"><div>Look harder (slower)<small>Reads the metadata of up to 40,000 files (instead of a sample of about 400) to find wrong extensions, missing dates and photos in the wrong year folder. Slower.</small></div></div>
+<div class="opt"><div style="flex:1"><label for="hauto" style="font-weight:600">Check again later by itself</label><select id="hauto" class="sel"><option value="0">Off</option><option value="1">Every hour</option><option value="6">Every 6 hours</option><option value="24">Every day</option></select><small>Only while Shoebox is open. A new check is skipped while another job is running.</small></div></div>
 <button class="p" id="hgo" style="margin-top:6px">Check library health</button></div>
 </section>
 <section class="pane" id="pane-monitor">
-<h2 class="ph">Photos and iCloud monitor</h2>
-<div class="card"><b>Full diagnostics</b>
-<small style="margin-top:4px">One report that answers: is my library healthy, is Photos making progress, what are the logs saying, and is the Mac itself in good shape? It combines the library health check, the iCloud upload status (speed and time left), the Photos and iCloud log check, and a look at Photos' processes, power, disk and network. It ends with a verdict and the few things to do first. It only reads.</small>
-<div class="hbtns"><button class="p" id="diaggo">Run full diagnostics</button></div></div>
+<h2 class="ph">Is Photos okay?</h2>
+<div class="card"><b>Check everything</b>
+<small style="margin-top:4px">One tap checks your library, iCloud, the Photos messages and your Mac, then tells you what to do first. It only looks. Nothing is changed.</small>
+<div class="hbtns"><button class="p" id="diaggo">Check everything for me</button></div></div>
 <div class="card"><b>Is everything in iCloud yet?</b>
 <small style="margin-top:4px">Reads a copy of your Photos library's database to count what has uploaded, how fast it is going, and whether it looks stuck. It also checks the files Shoebox sent from your first Source folder. Apple does not document this database, so treat the numbers as a strong hint and confirm in Photos and on iCloud.com.</small>
 <div class="opt"><div style="flex:1"><label for="uplib" style="font-weight:600">Photos library</label><select id="uplib" class="sel"><option value="">Find it automatically</option></select></div></div>
 <div class="opt"><input type="checkbox" id="upsent" checked><div>Also check the files Shoebox sent<small>Compares each file sent from the first Source folder with Photos, by name and size.</small></div></div>
-<div class="hbtns"><button class="p" id="upgo">Check upload status</button><button id="rcgo" title="A shareable page proving what arrived">Make a migration receipt</button></div><div id="upres"></div></div>
+<div class="hbtns"><button class="p" id="upgo">Is it all uploaded?</button><button id="rcgo" title="A shareable page proving what arrived">Make a migration receipt</button></div><div id="upres"></div></div>
 <div class="card"><b>Log issues</b>
 <small style="margin-top:4px">Reads recent Photos, iCloud and Shoebox errors that you never see in Console and explains them in plain language, with fixes. It only reads. Nothing is uploaded.</small>
 <div class="opt"><div style="flex:1"><label for="mhours" style="font-weight:600">Look back</label><select id="mhours" class="sel"><option value="1">1 hour</option><option value="6" selected>6 hours</option><option value="24">24 hours</option><option value="168">7 days</option></select></div></div>
-<div class="opt"><div style="flex:1"><label for="mauto" style="font-weight:600">Check automatically</label><select id="mauto" class="sel"><option value="0">Off</option><option value="15">Every 15 minutes</option><option value="60">Every hour</option></select><small>Only while Shoebox is open (macOS asks permission before showing notifications).</small></div></div>
-<div class="hbtns"><button class="p" id="mongo">Check the logs</button></div>
+<div class="opt"><div style="flex:1"><label for="mauto" style="font-weight:600">Check again by itself</label><select id="mauto" class="sel"><option value="0">Off</option><option value="15">Every 15 minutes</option><option value="60">Every hour</option></select><small>Only while Shoebox is open (macOS asks permission before showing notifications).</small></div></div>
+<div class="hbtns"><button class="p" id="mongo">Read the messages</button></div>
 <div class="opt"><div style="flex:1"><label for="mpaste" style="font-weight:600">Or paste log text</label><textarea id="mpaste" placeholder="Paste lines from Console or a crash report here" spellcheck="false" style="min-height:70px"></textarea></div></div>
 <div class="hbtns"><button id="mpastego">Interpret the pasted text</button></div></div>
 <div class="card" id="synccard"><b>&#128260; Sync meter</b> <span class="mutes" id="syncstat"></span>
 <small style="margin:4px 0">How fast Photos is talking to iCloud right now, and how the upload queue is moving. Reads network use of the Photos and iCloud background processes (Mac only) and the library's own upload count.</small>
-<div class="hbtns"><button class="sm p" id="syncgo">&#9654; Start the meter</button><button class="sm" id="cplgo">&#128270; Check the sync engine backlog</button></div><div id="cplres"></div><div id="syncbody"></div></div>
+<div class="hbtns"><button class="sm p" id="syncgo">&#9654; Start the meter</button><button class="sm" id="cplgo">&#128270; Is iCloud's queue moving?</button></div><div id="cplres"></div><div id="syncbody"></div></div>
 <div class="card" id="lkcard"><b>&#128269; Look up a photo</b>
 <small style="margin:4px 0">Paste a long Photos id from a log (or part of one), or part of a file name. Shoebox shows the real photo: file name, date and albums.</small>
 <div style="display:flex;gap:6px"><input id="lkq" placeholder="e.g. 3F2A9C1E-… or IMG_1234" style="flex:1;min-width:0"><button class="sm p" id="lkgo">Look up</button></div><div id="lkres"></div></div>
@@ -4472,7 +4578,7 @@ body[data-tab=history] .route,body[data-tab=help] .route{display:none}
 <div class="hbtns"><button class="sm p" id="livego">&#9654; Start watching</button></div><div id="livelist"></div></div>
 <div class="card" id="pbcard"><details id="pbdet"><summary style="cursor:pointer;font-weight:700">&#129521; Fix guides and checklists <span class="mutes" id="pbcount"></span></summary>
 <div class="secbody"><small style="margin-top:0">Pick what you are seeing. Each guide is an ordered checklist: some steps are buttons in Shoebox, some you do in Photos or Finder, some are a Terminal command you can copy. Ticks are remembered on this Mac.</small>
-<div class="hbtns"><button class="sm" id="pbaudit">&#128269; Library audit: orphan and missing files</button><button class="sm" id="pbpend">&#9729;&#65039; Which files have not uploaded?</button><button class="sm" id="pbcount">&#129518; Count for comparison</button></div>
+<div class="hbtns"><button class="sm" id="pbaudit">&#128269; Look for stray and missing files</button><button class="sm" id="pbpend">&#9729;&#65039; Which photos haven't uploaded?</button><button class="sm" id="pbcounts">&#129518; Count my photos</button></div>
 <div id="pbres"></div><div id="pblist"></div></div></details></div>
 <div class="card" id="kbcard"><details id="kbdet"><summary style="cursor:pointer;font-weight:700">&#128214; Known Photos problems <span class="mutes" id="kbcount"></span></summary>
 <small style="margin-top:6px"><b>Draft knowledge base.</b> Built from general knowledge of Photos, iCloud and macOS, not yet checked line by line against Apple&#39;s pages, so treat fixes beyond the safe ones as leads and always back up first. A built-in list of Apple Photos, iCloud and macOS problems and the error codes and log messages they show in Console, with the likely causes and the fixes to try, safest first. Search by a word, an error code (like 4097) or a process name (like cloudphotod).</small>
@@ -4504,7 +4610,7 @@ function makeIcon(html){const b=document.createElement('button');b.type='button'
   b.onfocus=()=>{if(b.matches(':focus-visible'))showTip(b)};b.onblur=hideTip;
   b.onclick=e=>{e.preventDefault();e.stopPropagation();if(b._pt==='mouse'){showTip(b);return}tipEl._owner===b?hideTip():showTip(b)};return b}
 document.addEventListener('click',hideTip);window.addEventListener('scroll',hideTip,{passive:true});
-const PANE_SUB={monitor:'Is it in iCloud yet, and what are the logs saying? Plain-language answers.',health:'Space waste, folder problems, ghosts and statistics for your library, tracked over time.',photos:'Send your finished library to Apple Photos in batches, with room for iCloud to catch up.',similar:'Find the same picture saved twice, and choose what to set aside.',help:'The user guide, safety notice and how to get support.',history:'Every run, with its full report and log.',guided:'The easy way: zips or folders in, a clean library out. Originals never change.',fix:'Put the real date, location and caption back into your photos.',merge:'Bring two or more folders together into one.',clean:'Tidy up leftovers once you are done.',convert:'Turn older video formats into MP4.'};
+const PANE_SUB={monitor:'Is it in iCloud yet? What is going wrong? Plain answers.',health:'Wasted space, messy folders and more, checked for you.',photos:'Move your photos into Apple Photos a little at a time, safely.',similar:'Find the same picture saved twice and choose what to keep.',help:'The guide, safety notice and how to get help.',history:'Everything Shoebox has done, with reports.',guided:'Your photos in, tidy photos out. Your originals never change.',fix:'Put the real date, place and caption back into your photos.',merge:'Bring folders together into one.',clean:'Tidy up leftovers when you are done.',convert:'Turn old video types into ones that play everywhere.'};
 function decorate(){
   document.querySelectorAll('.opt').forEach(o=>{
     const box=o.querySelector(':scope > div');if(!box)return;
@@ -4660,7 +4766,7 @@ function setBar(barId,fillId,pctId,pct,indet){
     for(let i=0;i<30;i++){await new Promise(x=>setTimeout(x,1000));const s=await st();if(s&&s.boot!==boot){location.reload();return}}
     $('updmsg').textContent='Updated. If the page does not reload, restart the app in Terminal.'}
 })();
-const TABS=['guided','fix','merge','clean','convert','health','monitor','photos','similar','history','help'];const tabOf=k=>({diagnostics:'monitor',compare:'merge',formats_apply:'health',similar_apply:'similar',undo:'history',consolidate:'clean',cleanup:'clean',sort:'merge',assess:'guided'}[k]||k);let curGuided=false;const paneKind=()=>curGuided?'guided':tabOf(jobKind);let jobKind='fix';
+const TABS=['home','guided','fix','merge','clean','convert','health','monitor','photos','similar','history','help'];const tabOf=k=>({diagnostics:'monitor',compare:'merge',formats_apply:'health',similar_apply:'similar',undo:'history',consolidate:'clean',cleanup:'clean',sort:'merge',assess:'guided'}[k]||k);let curGuided=false;const paneKind=()=>curGuided?'guided':tabOf(jobKind);let jobKind='fix';
 function showTab(t){if(!TABS.includes(t))t='fix';document.body.dataset.tab=t;try{updRoute()}catch(e){}
   TABS.forEach(x=>{$('pane-'+x).style.display=x===t?'block':'none';document.querySelector('.tab[data-tab="'+x+'"]').classList.toggle('on',x===t)});
   try{localStorage.setItem('tab',t)}catch(e){}
@@ -4682,7 +4788,7 @@ $('stopall').onclick=async()=>{const b=$('stopall');b.disabled=true;b.textConten
 document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
 function placeResults(kind){const pane=$('pane-'+(curGuided?'guided':(kind==='clean'?'fix':tabOf(kind))));if(pane&&$('results').parentNode!==pane)pane.appendChild($('results'))}
 refreshDoctor();
-let startTab='guided';try{startTab=location.hash.slice(1)||localStorage.getItem('tab')||'guided'}catch(e){}
+let startTab='home';try{startTab=location.hash.slice(1)||(localStorage.getItem('mode')==='full'?localStorage.getItem('tab'):'')||'home'}catch(e){}
 if(startTab==='sort')startTab='merge';
 showTab(startTab);
 
@@ -5006,7 +5112,7 @@ function uploadHTML(r){
   if(r.uploaded!=null)h+=`<div class="tiles">${tile(r.total,'items in Photos')}${tile(r.uploaded,'in iCloud','ok')}${tile(r.pending,'waiting to upload',r.pending?'bad':'ok')}</div><div class="bar" style="margin:8px 0"><i style="width:${pct}%"></i></div>`;
   else h+='<div class="tip">This version of Photos does not expose upload state, so only the item count is available: '+r.total.toLocaleString()+' items.</div>';
   const eta=r.eta||{};
-  if(eta.stalled)h+='<div class="tip" style="border-color:var(--bad)"><b>Uploads look stuck:</b> the number waiting has not fallen for about 45 minutes. <a href="#" id="whystuck">Check the logs for the cause</a> (Low Power Mode, a paused sync, no iCloud space and a lost network are the usual ones).</div>';
+  if(eta.stalled)h+='<div class="tip" style="border-color:var(--bad)"><b>Uploads look stuck:</b> the number waiting has not fallen for about 45 minutes. <a href="#" id="whystuck">Read the messages for the cause</a> (Low Power Mode, a paused sync, no iCloud space and a lost network are the usual ones).</div>';
   else if(eta.rate_per_hour>0&&eta.eta_hours)h+=`<div class="tip" style="border-color:var(--acc)">Uploading about <b>${eta.rate_per_hour.toLocaleString()}</b> items an hour. About <b>${fmtEta(eta.eta_hours)}</b> left at that speed.</div>`;
   else if(r.pending>0&&(eta.points||0)<2)h+='<div class="tip">Press the button again in a few minutes and Shoebox will work out the upload speed and time left.</div>';
   const al=r.albums_live;if(al&&al.ok){const bad=al.albums_missing||al.albums_short||(al.live_found!=null&&al.live_found<al.live_expected);
@@ -5071,7 +5177,7 @@ function showCompare(s){
   const pic=(x)=>x.path?`<img src="/thumb?p=${encodeURIComponent(x.path)}" loading="lazy" alt="">`:'<div class="stnoimg">&#128247;</div>';
   const side=(x,lab)=>`<div class="cmpside">${pic(x)}<div class="simcap"><b>${esc(lab)}</b><span>${esc(x.name)}</span><span>${esc(x.where)}</span><span>${x.w&&x.h?x.w+' &times; '+x.h+' &middot; ':''}${esc(fmtB(x.size))}${x.date?' &middot; '+esc(x.date.slice(0,10)):''}${x.gps?' &middot; has location':''}</span></div></div>`;
   if((s.conflicts||[]).length)h+=`<h2>Same name, but not the same file (${s.conflict_n.toLocaleString()})</h2><small style="margin-top:0">${s.same_picture_conflicts?s.same_picture_conflicts.toLocaleString()+' of these look like the same picture saved differently. ':''}A merge keeps both.</small>`+s.conflicts.map(c=>`<div class="card cmppair"><div class="cmpsides">${side(c.a,la)}${side(c.b,lb)}</div><div class="why">${c.same_picture?'<span class="badge okb">Same picture</span> ':'<span class="badge badb">Different pictures</span> '}${c.differences.length?esc(c.differences.join('; ')):'No difference in size, date, location or caption that Shoebox can see.'}</div></div>`).join('');
-  if((s.similar||[]).length)h+=`<h2>Same picture, different size (${s.similar_n.toLocaleString()})</h2><small style="margin-top:0">Not identical files, but they look the same. Tick <i>Also skip near-identical pictures</i> in Guided to keep only the best copy (by your keeper rules) when you merge.</small>`+s.similar.map(c=>`<div class="card cmppair"><div class="cmpsides">${side(c.a,la)}${side(c.b,lb)}</div><div class="why">${c.keep?'<b>Merge would keep '+(c.keep==='a'?esc(la):c.keep==='b'?esc(lb):'either one')+'</b> ('+esc(c.why)+'). ':''}${c.bigger==='same'?'Same size. ':esc((c.bigger==='a'?la:lb))+' has the larger picture. '}${esc(c.differences.join('; '))}</div></div>`).join('');
+  if((s.similar||[]).length)h+=`<h2>Same picture, different size (${s.similar_n.toLocaleString()})</h2><small style="margin-top:0">Not identical files, but they look the same. Tick <i>Skip look-alike pictures too</i> in Guided to keep only the best copy (by your keeper rules) when you merge.</small>`+s.similar.map(c=>`<div class="card cmppair"><div class="cmpsides">${side(c.a,la)}${side(c.b,lb)}</div><div class="why">${c.keep?'<b>Merge would keep '+(c.keep==='a'?esc(la):c.keep==='b'?esc(lb):'either one')+'</b> ('+esc(c.why)+'). ':''}${c.bigger==='same'?'Same size. ':esc((c.bigger==='a'?la:lb))+' has the larger picture. '}${esc(c.differences.join('; '))}</div></div>`).join('');
   if((s.refiled_examples||[]).length)h+='<h2>Same file, filed in a different folder ('+s.refiled.toLocaleString()+')</h2>'+tbl(['File',esc(la),esc(lb)],s.refiled_examples.map(r=>[esc(r.name),esc(r.a),esc(r.b)+(r.b_name!==r.name?' ('+esc(r.b_name)+')':'')]));
   const fl=(L,t)=>L.length?'<h2>'+t+'</h2>'+tbl(['Folder','Files'],L.map(r=>[esc(r.folder),r.files.toLocaleString()])):'';
   h+=fl(s.folders_only_a||[],'Folders only in '+esc(la))+fl(s.folders_only_b||[],'Folders only in '+esc(lb));
@@ -5171,7 +5277,7 @@ function showConvert(s){
     h+=`<h2>Size now and estimated size after</h2><div class="tiles">${tile(fmtBytes(now),'size now')}`
       +(have?tile((e.complete?'':'about ')+fmtBytes(after),'estimated size after','ok')+tile(fmtBytes(Math.max(0,now-after))+' ('+pc(now,after)+'%)','estimated space saved','ok'):tile('not estimated','estimated size after'))+`</div>`;
     h+=have?`<small>The estimate comes from test-encoding ${e.samples} short sample${e.samples===1?'':'s'} with your settings${e.failed?` (${e.failed} could not be sampled)`:''}. Re-wrapped videos are counted at about their current size. Real results vary with each video, typically within a few tens of percent.</small>`
-      :`<small>${e.asked?'No samples could be encoded, so no estimate is available.':'Tick "Estimate the new sizes in the preview" and run the preview again to see an estimated size after conversion.'}</small>`;
+      :`<small>${e.asked?'No samples could be encoded, so no estimate is available.':'Tick "Guess the new file sizes" and run the preview again to see an estimated size after conversion.'}</small>`;
     const M={remux:'Re-wrapped: stays about the same size, no quality loss',audio:'Video kept, only the audio is converted: about the same size',encode:'Re-encoded: usually much smaller (see the estimate above)'};
     const rows=Object.entries(s.by_mode||{}).map(([k,v])=>[M[k]||k,v.n.toLocaleString(),fmtBytes(v.before)]);
     h+=tbl(['','Videos','Size now'],rows);
@@ -5259,7 +5365,7 @@ let timer;function poll(){clearInterval(timer);timer=setInterval(async()=>{
   else if(s.phase&&s.phase.total){pct=100*s.phase.done/s.phase.total}
   else if(s.state==='scanning'||s.state==='running'){indet=true}
   setBar('bar','fill','pct',pct,indet);try{dockUpdate(s)}catch(e){}$('bar').classList.toggle('finished',s.state==='done');$('bar').classList.toggle('running',run);
-  const LBL=(gd&&!gd.final&&gd.steps.length)?('Guided &middot; step '+gd.i+' of '+gd.steps.length+': '+esc(gd.steps[gd.i-1]||'')):gd&&jobKind==='guided'?'Guided':{diagnostics:'Full diagnostics',compare:'Compare libraries',monitor:'Log check',health:'Library health',formats_apply:'Set aside',photos:'Apple Photos',similar:'Find similar photos',similar_apply:'Set aside',undo:'Undo',consolidate:'Merge similar folders',assess:'Check my files',fix:'Part 1 Fix',convert:'Part 4 Convert',cleanup:'Part 3 Clean up',merge:'Part 2 Merge'}[jobKind]||'';
+  const LBL=(gd&&!gd.final&&gd.steps.length)?('Guided &middot; step '+gd.i+' of '+gd.steps.length+': '+esc(gd.steps[gd.i-1]||'')):gd&&jobKind==='guided'?'Guided':{diagnostics:'Full diagnostics',compare:'Compare libraries',monitor:'Log check',health:'Library health',formats_apply:'Set aside',photos:'Apple Photos',similar:'Find similar photos',similar_apply:'Set aside',undo:'Undo',consolidate:'Merge similar folders',assess:'Look at my files',fix:'Part 1 Fix',convert:'Part 4 Convert',cleanup:'Part 3 Clean up',merge:'Part 2 Merge'}[jobKind]||'';
   $('msg').innerHTML=(LBL?'<b>'+LBL+'</b> &middot; ':'')+(s.state==='error'?'<span class="err">'+esc(s.message)+'</span>':s.state==='done'?'<span class="ok">Finished.</span>':esc(s.message)+(s.done?` (${s.done.toLocaleString()} / ${s.total.toLocaleString()})`:''));
   const c=s.counts||{},done=s.done||0,nj=c['no-json']||0;
   $('tiles').innerHTML=liveTiles(s,c,done,nj);
@@ -5394,7 +5500,7 @@ renderProfile();if(PROF!=='balanced')applyProfile(PROF);
     if(s.state==='done'&&LOGF.length&&LOGF[LOGF.length-1].x!=='Finished.'){push('Finished.','g')}
     window.__dockRecent=running||(s.state==='done'||s.state==='error');
     const pct=s.state==='done'?100:(s.done>0&&s.total?Math.min(100,100*s.done/s.total):(s.phase&&s.phase.total?100*s.phase.done/s.phase.total:0));
-    const lbl=el('dtitle');if(lbl)lbl.textContent=(({fix:'Fix',guided:'Guided',merge:'Merge',cleanup:'Clean up',convert:'Convert',health:'Health',photos:'Apple Photos',similar:'Similar',assess:'Check my files',compare:'Compare',monitor:'Monitor',diagnostics:'Diagnostics',consolidate:'Merge folders',undo:'Undo'})[s.kind]||'Activity')+(running?' running':s.state==='done'?' finished':s.state==='error'?' stopped':'');
+    const lbl=el('dtitle');if(lbl)lbl.textContent=(({fix:'Fix',guided:'Guided',merge:'Merge',cleanup:'Clean up',convert:'Convert',health:'Health',photos:'Apple Photos',similar:'Similar',assess:'Look at my files',compare:'Compare',monitor:'Monitor',diagnostics:'Diagnostics',consolidate:'Merge folders',undo:'Undo'})[s.kind]||'Activity')+(running?' running':s.state==='done'?' finished':s.state==='error'?' stopped':'');
     el('dpct').textContent=running||s.state==='done'?Math.floor(pct)+'%':'';
     const bar=el('dbar');bar.classList.toggle('indet',running&&!(pct>0));el('dfill').style.width=pct+'%';
     el('dmsg').textContent=s.state==='error'?s.message:(s.message||'');
@@ -5516,7 +5622,7 @@ const ISSUE_FIX={'import-wrong-extension':'wrongext','phphotos-3302-invalid-reso
 const FIXES={
  wrongext:{label:'Set up: repair wrong file types',tab:'guided',set:{gext:1,gdry:1},names:{gext:'Repair files with a missing or wrong file type: on',gdry:'Preview only: on'},why:'Repairs files whose ending does not match what they really are, as a preview first.',needsSource:true},
  health:{label:'Check these files for damage',tab:'health',set:{},why:'Reads your source folders and lists empty, broken and mis-named files. Changes nothing.',needsSource:true,run:()=>{if(FOLDERS.length&&$('hgo'))$('hgo').click()}},
- slowsend:{label:'Set up: send in small safe batches',tab:'photos',set:{pbatch:2,ppace:'verify',padapt:1,pfree:30,pdry:1},names:{pbatch:'Batch size: about 2 GB',ppace:'Between batches: wait until Photos shows each as uploaded',padapt:'Adapt the batch size: on',pfree:'Keep at least 30 GB free',pdry:'Preview only: on'},why:'Small batches, waiting for iCloud to confirm each one, with the preview ticked so nothing is sent yet.',needsSource:true},
+ slowsend:{label:'Set up: send in small safe batches',tab:'photos',set:{pbatch:2,ppace:'verify',padapt:1,pfree:30,pdry:1},names:{pbatch:'How many at a time: about 2 GB',ppace:'Wait between rounds: wait until Photos shows each as uploaded',padapt:'Adjust the speed by itself: on',pfree:'Keep at least 30 GB free',pdry:'Preview only: on'},why:'Small batches, waiting for iCloud to confirm each one, with the preview ticked so nothing is sent yet.',needsSource:true},
  convert:{label:'Set up: convert videos Photos cannot read',tab:'convert',set:{vdry:1,vact:'move'},names:{vdry:'Preview only: on',vact:'Original videos: move to _original_videos (safe)'},why:'Preview only; originals are moved aside, not deleted.',needsSource:true},
  audit:{label:'Run the library audit',run:()=>runAudit()},
  pending:{label:'List the files that have not uploaded',run:()=>runPending()}};
@@ -5532,14 +5638,14 @@ function applyFix(k){const f=FIXES[k];if(!f)return;const prev={},notes=[];
   b.innerHTML='<b>&#9889; Set up for you</b><div class="why">'+esc(f.why||'')+'</div><ul style="margin:4px 0;padding-left:20px">'+notes.map(n=>'<li>'+esc(n)+'</li>').join('')+'</ul><small>Nothing has been changed on your files. Check the options, then press the button yourself.</small><div class="hbtns"><button class="sm" id="fixundo">Undo these settings</button><button class="sm" id="fixclose">Close</button></div>';
   $('fixclose').onclick=()=>b.remove();$('fixundo').onclick=()=>{Object.entries(FIXUNDO||{}).forEach(([id,v])=>setOpt(id,v));b.remove()}}
 document.addEventListener('click',e=>{const a=e.target.closest('[data-fix],[data-fixguide]');if(!a)return;e.preventDefault();
-  if(a.dataset.fix)applyFix(a.dataset.fix);else{showTab('monitor');$('pbdet').open=true;loadPB().then(()=>{const d=document.querySelector('[data-pb="'+a.dataset.fixguide+'"]');if(d){d.open=true;d.scrollIntoView({behavior:'smooth'})}})}});
+  if(a.dataset.fix)applyFix(a.dataset.fix);else{showTab('monitor');loadPB().then(()=>{$('pbdet').open=true;const d=document.querySelector('[data-pb="'+a.dataset.fixguide+'"]');if(d){d.open=true;d.scrollIntoView({behavior:'smooth'})}})}});
 
 // ---- Counts and sync engine backlog ----
 async function runCounts(){showTab('monitor');$('pbdet').open=true;await loadPB();$('pbres').innerHTML='<small>Counting&hellip;</small>';
   const r=await post('/api/library_counts',{library:$('uplib').value});if(!r.ok){$('pbres').innerHTML='<div class="tip">'+esc(r.why||'Could not read the library')+'</div>';return}
   const n=x=>(x==null?'not available':x.toLocaleString());
   $('pbres').innerHTML='<div class="card"><b>Counts for comparison</b><table><tr><td>Visible photos</td><td class="n"><b>'+n(r.visible_photos)+'</b></td></tr><tr><td>Visible videos</td><td class="n"><b>'+n(r.visible_videos)+'</b></td></tr>'+(r.visible_other?'<tr><td>Other visible items</td><td class="n">'+n(r.visible_other)+'</td></tr>':'')+'<tr><td>Hidden</td><td class="n">'+n(r.hidden)+'</td></tr><tr><td>&nbsp;&nbsp;of which burst frames</td><td class="n">'+n(r.burst_frames)+'</td></tr><tr><td>Shared Library items</td><td class="n">'+n(r.shared_library)+'</td></tr><tr><td>In Recently Deleted</td><td class="n">'+n(r.trashed)+'</td></tr><tr><td>All items in the database</td><td class="n">'+n(r.total)+'</td></tr></table>'+r.notes.map(x=>'<small>'+esc(x)+'</small>').join('')+'</div>'}
-$('pbcount').onclick=runCounts;
+$('pbcounts').onclick=runCounts;
 $('cplgo').onclick=async()=>{$('cplres').innerHTML='<small>Reading the sync engine&hellip;</small>';const r=await post('/api/cpl_backlog',{library:$('uplib').value});
   if(!r.ok){$('cplres').innerHTML='<div class="tip">'+esc(r.why||'Could not read it')+'</div>';return}
   const v=r.verdict||{};const col={looping:'var(--bad)',progressing:'var(--ok)',growing:'var(--warn)'}[v.state]||'var(--mute)';
@@ -5563,7 +5669,7 @@ function buildCompare(onlyDiff){const keys=Object.keys(PROFILES);const rows=[];l
   sec('Choosing which duplicate to keep');rows.push({dp:1,label:'Burst shots',vals:keys.map(k=>PROFILES[k].dp.bursts==='best'?'Pick the best':'Keep all'),raw:keys.map(k=>PROFILES[k].dp.bursts),desc:'A burst is a quick run of photos of the same moment.'});
   rows.push({dp:1,desc:'By default pictures are matched by how they look. Ticking any of these makes the match stricter: the pictures must also agree on that.',label:'Must also match to count as a duplicate',vals:keys.map(k=>PROFILES[k].dp.must.length?PROFILES[k].dp.must.map(m=>DP_MUST[m].replace('The ','').replace(' must match','')).join(', '):'—'),raw:keys.map(k=>PROFILES[k].dp.must.join())});
   const rules=DP_DEFAULT.concat([...new Set(keys.flatMap(k=>PROFILES[k].dp.extra||[]))]);rules.forEach(r=>rows.push({dp:1,desc:'When copies of one picture are found, rules like this decide which copy is kept. This one says: '+DP_RULES[r]+'. Turning it on means it is used, in the order shown in the duplicate rules box.',label:DP_RULES[r],vals:keys.map(k=>(DP_DEFAULT.includes(r)||(PROFILES[k].dp.extra||[]).includes(r))?'✓':'—'),raw:keys.map(k=>(DP_DEFAULT.includes(r)||(PROFILES[k].dp.extra||[]).includes(r))?'1':'0')}));
-  sec('Sending to Apple Photos');[['pbatch','Batch size',v=>'About '+v+' GB'],['ppace','Between batches',null],['padapt',null,null],['palb',null,null]].forEach(([id,lab,fn])=>{const i=optInfo(id);rows.push({id,label:lab||i.label,desc:fullDesc(i),vals:keys.map(k=>fn?fn(PROFILES[k].o[id]):cellVal(id,PROFILES[k].o[id],i.el)),raw:keys.map(k=>String(PROFILES[k].o[id]))})});
+  sec('Sending to Apple Photos');[['pbatch','How many at a time',v=>'About '+v+' GB'],['ppace','Wait between rounds',null],['padapt',null,null],['palb',null,null]].forEach(([id,lab,fn])=>{const i=optInfo(id);rows.push({id,label:lab||i.label,desc:fullDesc(i),vals:keys.map(k=>fn?fn(PROFILES[k].o[id]):cellVal(id,PROFILES[k].o[id],i.el)),raw:keys.map(k=>String(PROFILES[k].o[id]))})});
   let h='<table class="cmp"><colgroup><col style="width:104px">'+keys.map(()=>'<col>').join('')+'</colgroup><thead><tr><th>Setting</th>'+keys.map(k=>'<th><button type="button" class="sm" data-useprof="'+k+'">'+PROFILES[k].icon+'<br>'+esc(PROFILES[k].name)+'</button></th>').join('')+'</tr></thead><tbody>';
   rows.forEach(r=>{if(r.sec){h+='<tr class="cs"><td colspan="6">'+esc(r.sec)+'</td></tr>';return}
    const diff=new Set(r.raw).size>1;if(onlyDiff&&!diff&&!/Preview/.test(r.label))return;
@@ -5578,6 +5684,46 @@ function openCompare(){let o=$('profcmp');if(!o){o=document.createElement('div')
    o.addEventListener('click',e=>{const go=e.target.closest('[data-cgo]');if(go){gotoSetting(go.dataset.cgo,go.dataset.cdp);o.remove();return}const b=e.target.closest('[data-useprof]');if(b){applyProfile(b.dataset.useprof,true);o.remove()}})}
   $('cmpbody').innerHTML=buildCompare(false);fillTips($('cmpbody'))}
 $('profcmpgo').onclick=openCompare;
+
+// ---- Home, simple mode, suggestions, problem picker ----
+function setMode(m){document.body.dataset.mode=m;try{localStorage.setItem('mode',m)}catch(e){}const b=$('modebtn');if(b)b.textContent=m==='simple'?'All tools':'Simple view'}
+(function(){let m='simple';try{m=localStorage.getItem('mode')||'simple'}catch(e){}
+  const meta=document.querySelector('.hmeta');if(meta){const a=document.createElement('a');a.href='#';a.id='modebtn';a.style.cssText='font-size:12.5px;font-weight:800;padding:3px 9px;border:1.5px solid rgba(255,255,255,.7);border-radius:999px';a.onclick=e=>{e.preventDefault();setMode(document.body.dataset.mode==='simple'?'full':'simple')};meta.prepend(a)}
+  setMode(m)})();
+$('backhome').onclick=()=>showTab('home');
+$('hall').onclick=e=>{e.preventDefault();setMode('full')};
+function openGuide(id){showTab('monitor');loadPB().then(()=>{$('pbdet').open=true;const d=document.querySelector('[data-pb="'+id+'"]');if(d){d.open=true;d.scrollIntoView({behavior:'smooth'})}})}
+function openProblems(){$('probsheet').hidden=false}
+$('probclose').onclick=()=>{$('probsheet').hidden=true};$('probsheet').addEventListener('click',e=>{if(e.target===$('probsheet'))$('probsheet').hidden=true});
+$('probsheet').addEventListener('click',e=>{const b=e.target.closest('[data-prob]');if(!b)return;$('probsheet').hidden=true;
+  if(b.dataset.prob==='diag'){showTab('monitor');$('diaggo').click()}else openGuide(b.dataset.prob)});
+const GOALS={takeout:()=>showTab('guided'),combine:()=>showTab('merge'),apple:()=>showTab('photos'),problem:openProblems,icloud:()=>{showTab('monitor');setTimeout(()=>{const b=$('upgo');if(b)b.click()},150)},videos:()=>showTab('convert'),tidy:()=>showTab('clean'),lookalike:()=>showTab('similar')};
+document.querySelectorAll('.goal').forEach(b=>b.onclick=()=>{GOALS[b.dataset.goal]();window.scrollTo({top:0})});
+$('hsure').onclick=()=>{showTab('guided');if(!FOLDERS.length){suggestNow();showTab('home');return}$('gchk').click()};
+// Start buttons say what they will do
+function syncStart(){[['gst','gdry','Fix my photos'],['go','dry','Fix my photos'],['mgo','mgdry','Combine my folders'],['cgo','cdry','Tidy up'],['vgo','vdry','Convert my videos']].forEach(([b,c,w])=>{const B=$(b),C=$(c);if(!B||!C)return;B.innerHTML=C.checked?'&#128064; Show me what would change':'&#128640; '+w+' for real'})}
+document.addEventListener('change',e=>{if(e.target&&/dry$/.test(e.target.id||''))syncStart()});syncStart();
+// Suggestions: one clear next step
+async function suggestNow(){const box=$('suggest');if(!box)return;let st={};try{st=await (await fetch('/api/status')).json()}catch(e){}
+  const sm=st.summary||{},done=st.state==='done',kind=st.kind||sm.kind;let g;
+  if(!FOLDERS.length)g={e:'📂',t:'START HERE',h:'Choose your photos',p:'Drop your Google Photos download (a zip or a folder) onto the top bar, or tap the button.',b:'Choose my photos',a:()=>{showTab('guided');$('fzip').click()}};
+  else if(!dest())g={e:'📍',t:'NEXT STEP',h:'Where should the fixed photos go?',p:'Pick an empty folder. Your original files are never touched.',b:'Choose the folder',a:()=>{showTab('guided');$('fdbtn').click()}};
+  else if(st.state==='running'||st.state==='scanning')g={e:'⏳',t:'WORKING',h:'Shoebox is busy',p:st.message||'Hang tight. You can leave this open.',b:'See progress',a:()=>$('actbtn').click()};
+  else if(done&&sm.dry_run&&(kind==='guided'||kind==='fix'||kind==='merge'))g={e:'👀',t:'YOUR PREVIEW IS READY',h:'Happy with what you saw?',p:'Nothing has changed yet. Tick off the preview and run it for real. Your originals stay safe.',b:'Do it for real',a:()=>{showTab(kind==='merge'?'merge':'guided');const c=$(kind==='merge'?'mgdry':'gdry');c.checked=false;syncStart();const b=$(kind==='merge'?'mgo':'gst');b.scrollIntoView({behavior:'smooth',block:'center'});b.classList.add('pulse')}};
+  else if(done&&!sm.dry_run&&(kind==='guided'||kind==='fix'))g={e:'🎉',t:'ALL DONE',h:'Your photos are fixed!',p:'Next, you could move them into Apple Photos.',b:'Move to Apple Photos',a:()=>showTab('photos')};
+  else g={e:'🧭',t:'SUGGESTED',h:'Take a look first',p:'See what Shoebox would change. Preview only: nothing is touched.',b:'Show me what would change',a:()=>{showTab('guided');$('gdry').checked=true;syncStart();$('gst').click()}};
+  box.innerHTML='<div class="sg"><i>'+g.e+'</i><div style="flex:1;min-width:0"><div class="sgt">'+g.t+'</div><b>'+esc(g.h)+'</b><p>'+esc(g.p)+'</p><button type="button" class="p" id="sgbtn">'+esc(g.b)+'</button></div></div>'
+   +'<div class="sgmore"><button type="button" data-sgm="diag">🩺 Check my Photos library</button><button type="button" data-sgm="count">🧮 Count my photos</button><button type="button" data-sgm="live">📡 Watch Photos live</button></div>';
+  $('sgbtn').onclick=()=>{g.a();window.scrollTo({top:0})};
+  box.querySelectorAll('[data-sgm]').forEach(x=>x.onclick=()=>{const k=x.dataset.sgm;if(k==='diag'){showTab('monitor');$('diaggo').click()}else if(k==='count')runCounts();else{showTab('monitor');$('livego').scrollIntoView({behavior:'smooth'})}})}
+const _showTab=showTab;showTab=function(t){_showTab(t);if(t==='home')suggestNow();else window.scrollTo({top:0})};
+let _sf=saveFolders;saveFolders=function(){_sf();if(document.body.dataset.tab==='home')suggestNow()};
+if(document.body.dataset.tab==='home')suggestNow();
+
+// Monitor: the expert boxes sit behind one button in simple view
+(function(){const pane=$('pane-monitor');['synccard','lkcard','livecard','kbcard'].forEach(i=>{const e=$(i);if(e)e.classList.add('advc')});const m=$('mongo');if(m&&m.closest('.card'))m.closest('.card').classList.add('advc');
+ const b=document.createElement('button');b.type='button';b.id='monadv';b.className='sm';b.textContent='Show the expert tools';b.onclick=()=>{pane.classList.toggle('adv');b.textContent=pane.classList.contains('adv')?'Hide the expert tools':'Show the expert tools'};
+ const h=pane.querySelector('.subline')||pane.querySelector('h2.ph');if(h)h.after(b)})();
 </script></main></body></html>"""
 
 

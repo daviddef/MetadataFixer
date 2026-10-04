@@ -1,5 +1,5 @@
 const {chromium}=require('/opt/node22/lib/node_modules/playwright');
-(async()=>{const b=await chromium.launch({args:['--no-sandbox']});const pg=await (await b.newContext({viewport:{width:480,height:900}})).newPage();const errs=[],bad=[];
+(async()=>{const b=await chromium.launch({args:['--no-sandbox']});const pg=await (await b.newContext({viewport:{width:480,height:900}})).newPage();await pg.addInitScript(()=>{try{localStorage.setItem("mode","full")}catch(e){}});const errs=[],bad=[];
 pg.on('pageerror',e=>errs.push(e.message));pg.on('dialog',d=>d.dismiss());
 await pg.goto('http://127.0.0.1:'+process.argv[2]+'/',{waitUntil:'domcontentloaded'});await pg.waitForTimeout(600);
 if(await pg.$('#ackbox')){await pg.check('#ackbox');await pg.click('#ackgo')}

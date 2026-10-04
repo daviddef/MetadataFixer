@@ -1,7 +1,7 @@
 const {chromium}=require('/opt/node22/lib/node_modules/playwright');
 (async()=>{
  const b=await chromium.launch({args:['--no-sandbox']});
- const pg=await b.newPage();const errs=[];
+ const pg=await b.newPage();await pg.addInitScript(()=>{try{localStorage.setItem("mode","full")}catch(e){}});const errs=[];
  pg.on('pageerror',e=>errs.push('PAGEERR '+e.message));
  pg.on('console',m=>{if(m.type()==='error'&&!/ERR_|Failed to load/.test(m.text()))errs.push('CONSOLE '+m.text())});
  pg.on('dialog',d=>d.dismiss());

@@ -1,8 +1,9 @@
 const {chromium}=require('/opt/node22/lib/node_modules/playwright');
-(async()=>{const b=await chromium.launch({args:['--no-sandbox']});const pg=await (await b.newContext({viewport:{width:480,height:800}})).newPage();const errs=[],bad=[];
+(async()=>{const b=await chromium.launch({args:['--no-sandbox']});const pg=await (await b.newContext({viewport:{width:480,height:800}})).newPage();await pg.addInitScript(()=>{try{localStorage.setItem("mode","full")}catch(e){}});const errs=[],bad=[];
 pg.on('pageerror',e=>errs.push(e.message));pg.on('dialog',d=>d.dismiss());
 await pg.goto('http://127.0.0.1:'+process.argv[2]+'/',{waitUntil:'domcontentloaded'});await pg.waitForTimeout(600);
 if(await pg.$('#ackbox')){await pg.check('#ackbox');await pg.click('#ackgo')}
+await pg.click('.tab[data-tab="guided"]');await pg.waitForTimeout(300);
 await pg.evaluate(()=>{FOLDERS.length=0;saveFolders();document.getElementById('fdest').value='';saveDest()});
 const vis=id=>pg.evaluate(i=>{const e=document.getElementById(i);return !!(e&&e.offsetParent!==null)},id);
 if(!(await vis('fempty')))bad.push('empty hint hidden with no sources');

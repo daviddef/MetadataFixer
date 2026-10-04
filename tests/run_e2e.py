@@ -1340,12 +1340,25 @@ def t_counts_backlog_heartbeat():
     return "ok"
 
 
+def t_home_and_plain_words():
+    page = g.PAGE
+    assert 'id="pane-home"' in page and len(re.findall(r'class="goal gl\d"', page)) == 8
+    assert len(re.findall(r'data-prob="', page)) >= 11
+    ids = re.findall(r'data-prob="([a-z-]+)"', page)
+    pbs = {p["id"] for p in fx.load_playbooks()}
+    assert all(i in pbs or i == "diag" for i in ids), [i for i in ids if i not in pbs and i != "diag"]
+    tabs = re.findall(r'data-tab="(\w+)" role="tab"><b>[^<]*</b> ([^<]+)<', page)
+    labels = " ".join(n for _, n in tabs).lower()
+    assert "monitor" not in labels and "guided" not in labels and "convert" not in labels, labels
+    return "%d tabs" % len(tabs)
+
+
 ORDER = ["t_fix_copy", "t_fix_namedate", "t_fix_inplace", "t_fix_move", "t_fix_dryrun_changes_nothing", "t_fix_zip", "t_zip_resume", "t_zip_needs_dest", "t_zip_corrupt",
          "t_edited_policies", "t_cancel_mid_run", "t_unreadable_and_zero", "t_dest_not_writable", "t_exiftool_missing", "t_low_disk_zip", "t_assess_and_recommend",
          "t_assess_multi_and_photoslib", "t_guided_end_to_end", "t_guided_no_dest", "t_merge_variants", "t_merge_refuses_unsafe", "t_merge_move_in_place", "t_cleanup_all",
          "t_cleanup_refuses_broad", "t_consolidate", "t_convert", "t_convert_stop", "t_similar_apply_undo", "t_health_and_formats", "t_undo_copy_run", "t_photos_plan_and_run",
          "t_photos_applescript_injection_safe", "t_photos_errors", "t_monitor_rules", "t_monitor_job_paste", "t_compare_and_near", "t_diagnostics", "t_history_report",
-         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs", "t_audit_regressions", "t_dates_and_places", "t_resilient_copy", "t_rerun_over_http", "t_keeper_rules_and_matching", "t_bursts_and_compare_rules", "t_qa_hunt_regressions", "t_timezone_correct_dates", "t_preflight_report", "t_albums_and_live_arrival", "t_receipt", "t_context_dates_and_locations", "t_blur_and_screenshots", "t_motion_photo_extract", "t_offline_place_names", "t_issue_catalog", "t_audit_pending_playbooks", "t_live_watch_and_albums", "t_sync_meter", "t_counts_backlog_heartbeat"]
+         "t_updater_mock", "t_date_names_and_helpers", "t_dos_inputs", "t_audit_regressions", "t_dates_and_places", "t_resilient_copy", "t_rerun_over_http", "t_keeper_rules_and_matching", "t_bursts_and_compare_rules", "t_qa_hunt_regressions", "t_timezone_correct_dates", "t_preflight_report", "t_albums_and_live_arrival", "t_receipt", "t_context_dates_and_locations", "t_blur_and_screenshots", "t_motion_photo_extract", "t_offline_place_names", "t_issue_catalog", "t_audit_pending_playbooks", "t_live_watch_and_albums", "t_sync_meter", "t_counts_backlog_heartbeat", "t_home_and_plain_words"]
 if __name__ == "__main__":
     only = sys.argv[1:]
     for n in ORDER:

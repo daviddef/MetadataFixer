@@ -51,3 +51,6 @@ Email **thestocksoup@gmail.com** (best-effort, free project) or open an issue on
 
 ## License
 MIT, see [LICENSE](LICENSE). Third-party components: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+
+The app opens on a simple **Home** screen with eight goal cards and one suggested next step. See `UI_PRINCIPLES.md` for the design rules and how to test them with real people.
